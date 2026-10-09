@@ -1,0 +1,678 @@
+{
+  "$defs": {
+    "CategoricalInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "n_categories": {
+          "title": "N Categories",
+          "type": "integer"
+        },
+        "has_colors": {
+          "default": false,
+          "title": "Has Colors",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "n_categories"
+      ],
+      "title": "CategoricalInfo",
+      "type": "object"
+    },
+    "ChannelInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "window": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Window",
+          "type": "array"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color"
+        }
+      },
+      "required": [
+        "name",
+        "window"
+      ],
+      "title": "ChannelInfo",
+      "type": "object"
+    },
+    "ConverterInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "dbx_version": {
+          "title": "Dbx Version",
+          "type": "string"
+        },
+        "created": {
+          "title": "Created",
+          "type": "string"
+        },
+        "duration_s": {
+          "title": "Duration S",
+          "type": "number"
+        },
+        "peak_rss_gb": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Rss Gb"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dbx_version",
+        "created",
+        "duration_s"
+      ],
+      "title": "ConverterInfo",
+      "type": "object"
+    },
+    "ImageEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "source_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Name"
+        },
+        "transforms": {
+          "additionalProperties": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Transforms",
+          "type": "object"
+        },
+        "axes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Axes",
+          "type": "array"
+        },
+        "dtype": {
+          "title": "Dtype",
+          "type": "string"
+        },
+        "levels": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Levels",
+          "type": "array"
+        },
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/ChannelInfo"
+          },
+          "title": "Channels",
+          "type": "array"
+        },
+        "rgb": {
+          "default": false,
+          "title": "Rgb",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "axes",
+        "dtype",
+        "levels",
+        "channels"
+      ],
+      "title": "ImageEntry",
+      "type": "object"
+    },
+    "LabelsEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "source_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Name"
+        },
+        "transforms": {
+          "additionalProperties": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Transforms",
+          "type": "object"
+        },
+        "dtype": {
+          "const": "uint32",
+          "default": "uint32",
+          "title": "Dtype",
+          "type": "string"
+        },
+        "levels": {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Levels",
+          "type": "array"
+        },
+        "max_label": {
+          "title": "Max Label",
+          "type": "integer"
+        },
+        "table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table"
+        },
+        "lookup": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lookup"
+        }
+      },
+      "required": [
+        "path",
+        "levels",
+        "max_label"
+      ],
+      "title": "LabelsEntry",
+      "type": "object"
+    },
+    "PointsEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "source_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Name"
+        },
+        "transforms": {
+          "additionalProperties": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Transforms",
+          "type": "object"
+        },
+        "n": {
+          "title": "N",
+          "type": "integer"
+        },
+        "n_features": {
+          "title": "N Features",
+          "type": "integer"
+        },
+        "feature_key": {
+          "title": "Feature Key",
+          "type": "string"
+        },
+        "feature_key_inferred": {
+          "default": false,
+          "title": "Feature Key Inferred",
+          "type": "boolean"
+        },
+        "has_cell": {
+          "default": false,
+          "title": "Has Cell",
+          "type": "boolean"
+        },
+        "has_z": {
+          "default": false,
+          "title": "Has Z",
+          "type": "boolean"
+        },
+        "bbox": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Bbox",
+          "type": "array"
+        },
+        "table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table"
+        }
+      },
+      "required": [
+        "path",
+        "n",
+        "n_features",
+        "feature_key",
+        "bbox"
+      ],
+      "title": "PointsEntry",
+      "type": "object"
+    },
+    "ShapesEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "source_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Name"
+        },
+        "transforms": {
+          "additionalProperties": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Transforms",
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "polygons",
+            "circles"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "n": {
+          "title": "N",
+          "type": "integer"
+        },
+        "table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "n"
+      ],
+      "title": "ShapesEntry",
+      "type": "object"
+    },
+    "SourceInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "h5ad",
+            "anndata_zarr",
+            "spatialdata_zarr"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "size_bytes": {
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "mtime": {
+          "title": "Mtime",
+          "type": "number"
+        },
+        "fingerprint_version": {
+          "title": "Fingerprint Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "size_bytes",
+        "mtime",
+        "fingerprint_version"
+      ],
+      "title": "SourceInfo",
+      "type": "object"
+    },
+    "TableEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "source_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Name"
+        },
+        "n_obs": {
+          "title": "N Obs",
+          "type": "integer"
+        },
+        "n_vars": {
+          "title": "N Vars",
+          "type": "integer"
+        },
+        "nnz": {
+          "title": "Nnz",
+          "type": "integer"
+        },
+        "x_source": {
+          "default": "X",
+          "title": "X Source",
+          "type": "string"
+        },
+        "x_dtype": {
+          "const": "float32",
+          "default": "float32",
+          "title": "X Dtype",
+          "type": "string"
+        },
+        "embeddings": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Embeddings",
+          "type": "object"
+        },
+        "spatial_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Spatial Keys",
+          "type": "array"
+        },
+        "categorical": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CategoricalInfo"
+          },
+          "title": "Categorical",
+          "type": "object"
+        },
+        "numeric": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Numeric",
+          "type": "array"
+        },
+        "var_names_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Var Names Column"
+        },
+        "downsample": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Downsample",
+          "type": "array"
+        },
+        "region": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Region",
+          "type": "array"
+        },
+        "region_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region Key"
+        },
+        "instance_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instance Key"
+        }
+      },
+      "required": [
+        "path",
+        "n_obs",
+        "n_vars",
+        "nnz"
+      ],
+      "title": "TableEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "dbx-store",
+      "default": "dbx-store",
+      "title": "Contract",
+      "type": "string"
+    },
+    "contract_version": {
+      "default": "0.1.0",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "dataset_id": {
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceInfo"
+    },
+    "converter": {
+      "$ref": "#/$defs/ConverterInfo"
+    },
+    "coordinate_systems": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Coordinate Systems",
+      "type": "array"
+    },
+    "tables": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TableEntry"
+      },
+      "title": "Tables",
+      "type": "object"
+    },
+    "images": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ImageEntry"
+      },
+      "title": "Images",
+      "type": "object"
+    },
+    "labels": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LabelsEntry"
+      },
+      "title": "Labels",
+      "type": "object"
+    },
+    "shapes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ShapesEntry"
+      },
+      "title": "Shapes",
+      "type": "object"
+    },
+    "points": {
+      "additionalProperties": {
+        "$ref": "#/$defs/PointsEntry"
+      },
+      "title": "Points",
+      "type": "object"
+    }
+  },
+  "required": [
+    "dataset_id",
+    "source",
+    "converter"
+  ],
+  "title": "dbx store manifest (contract 0.1.0)",
+  "type": "object",
+  "$id": "https://dbx.local/contract/0.1.0/manifest.schema.json"
+}

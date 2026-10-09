@@ -14,18 +14,19 @@
   },
   "dependencies": {
     "@deck.gl/core": "~9.4.0",
-    "@deck.gl/layers": "~9.4.0",
     "@deck.gl/geo-layers": "~9.4.0",
+    "@deck.gl/layers": "~9.4.0",
     "@deck.gl/react": "~9.4.0",
     "@deck.gl/widgets": "~9.4.0",
-    "@luma.gl/core": "~9.4.0",
-    "@luma.gl/webgl": "~9.4.0",
-    "@luma.gl/engine": "~9.4.0",
-    "@luma.gl/constants": "~9.4.0",
-    "@luma.gl/shadertools": "~9.4.0",
     "@hms-dbmi/viv": "~0.23.0",
+    "@luma.gl/constants": "~9.4.0",
+    "@luma.gl/core": "~9.4.0",
+    "@luma.gl/engine": "~9.4.0",
+    "@luma.gl/shadertools": "~9.4.0",
+    "@luma.gl/webgl": "~9.4.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zarrita": "~0.5.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

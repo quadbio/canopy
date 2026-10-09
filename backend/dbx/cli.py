@@ -17,6 +17,8 @@ from dbx.logs import setup_logging
 app = typer.Typer(help="dbx data browser", no_args_is_help=True)
 synth_app = typer.Typer(help="Generate synthetic datasets and mocks", no_args_is_help=True)
 app.add_typer(synth_app, name="synth")
+contract_app = typer.Typer(help="Data contract tools", no_args_is_help=True)
+app.add_typer(contract_app, name="contract")
 
 ConfigOpt = Annotated[
     Path | None, typer.Option("--config", "-c", help="Path to config.toml", exists=True)
@@ -116,3 +118,46 @@ def synth_mock(
     _quiet_logging()
     fp = Fingerprint.model_validate_json(fingerprint.read_text())
     typer.echo(str(write_mock(fp, out, scale=scale, max_side=max_side, max_obs=max_obs)))
+
+
+@app.command()
+def validate(
+    store: Annotated[Path, typer.Argument(exists=True, help="dbx store folder (…/c0)")],
+    deep: Annotated[bool, typer.Option(help="Also read large arrays fully")] = False,
+) -> None:
+    """Check a dbx store against the data contract. Exit code 1 if invalid."""
+    from dbx.contract import validate_store
+
+    _quiet_logging()
+    rep = validate_store(store, deep=deep)
+    for e in rep.errors:
+        typer.echo(f"ERROR   {e}")
+    for w in rep.warnings:
+        typer.echo(f"WARNING {w}")
+    typer.echo("valid" if rep.ok else f"invalid ({len(rep.errors)} errors)")
+    raise typer.Exit(0 if rep.ok else 1)
+
+
+@contract_app.command("schema")
+def contract_schema(
+    out: Annotated[Path | None, typer.Option(help="Write to file instead of stdout")] = None,
+) -> None:
+    """Print (or write) the manifest JSON schema."""
+    from dbx.contract.models import manifest_json_schema
+
+    text = json.dumps(manifest_json_schema(), indent=2) + "\n"
+    if out is None:
+        typer.echo(text, nl=False)
+    else:
+        out.write_text(text)
+
+
+@contract_app.command("example")
+def contract_example(
+    out: Annotated[Path, typer.Argument(help="Output store folder, e.g. .cache/example/c0")],
+) -> None:
+    """Write the small synthetic reference store that shows every contract element."""
+    from dbx.contract.example import write_example_store
+
+    _quiet_logging()
+    typer.echo(str(write_example_store(out)))

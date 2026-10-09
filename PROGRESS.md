@@ -7,7 +7,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 
 - [x] S0 Foundation + compatibility checks
 - [x] S1 Inspector + synthetic generator
-- [ ] S2 Contract v0 (needs user approval before S5/S6)
+- [ ] S2 Contract v0 (needs user approval before S5/S6) — drafted, AWAITING APPROVAL
 - [ ] S3 Crawler + catalog API
 - [ ] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo
 - [ ] S5 Genes + AnnData converter + jobs + memory guard
@@ -43,3 +43,13 @@ Resume rule: read this file, then continue with the first unchecked step.
     to `.cache/examples/` by the tests.
   - Disk note: this Mac has ~21 GB free; keep bench fixtures ≤ ~5 GB total.
   - Next: S2 contract v0 → needs user approval.
+- 2026-10-09 S2 drafted (awaiting user approval).
+  - contract/SPEC.md (v0.1), contract/schema/manifest.schema.json (generated:
+    `pixi run -e dev contract-schema`), contract/CHANGELOG.md, decision record 0003.
+  - backend/dbx/contract: models (manifest), validate (`dbx validate STORE [--deep]`),
+    write (array/pyramid/Morton helpers for the converter), example (`dbx contract example OUT`).
+  - JS check: frontend/scripts/read-store.mjs (Viv + zarrita read the reference store).
+    Finding: zarrita 0.5.4 cannot read zarr v3 string arrays -> names stored as attributes.
+  - frontend: added zarrita ~0.5.4 as a direct dependency (same version as Viv's).
+  - 43 backend tests.
+  - Next after approval: S3 crawler + catalog (S3/S4 do not depend on the contract; S5/S6 do).
