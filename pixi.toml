@@ -44,6 +44,11 @@ test-py = "pytest -q tests/backend"
 check-py = { depends-on = ["lint-py", "types-py", "test-py"] }
 fmt = "ruff format backend tests && ruff check --fix backend tests"
 install-hooks = "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit"
+# Benchmark fixtures (~0.5 GB each, ~1 min each) in .cache/bench; see bench/README.md
+synth-bench = """
+dbx synth anndata .cache/bench/synth_1m_csr.h5ad --n-obs 1000000 --n-vars 2000 --encoding csr &&
+dbx synth anndata .cache/bench/synth_1m_csc.h5ad --n-obs 1000000 --n-vars 2000 --encoding csc
+"""
 
 # ---------------------------------------------------------------- frontend toolchain
 [feature.frontend.dependencies]

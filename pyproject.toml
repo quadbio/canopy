@@ -32,6 +32,11 @@ python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# dask ships without type hints for dask.array constructors
+module = ["dbx.synth.spatial_gen"]
+disallow_untyped_calls = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests/backend"]
 
