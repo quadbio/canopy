@@ -1,0 +1,22 @@
+# dbx configuration. Relative paths are resolved against this file's folder.
+
+cache_dir = "cache"          # converted stores (rebuildable), never inside a data root
+
+[[data_roots]]
+name = "examples"
+path = "../example_datasets"
+
+[server]
+host = "127.0.0.1"
+port = 8765
+
+[logging]
+dir = "logs"
+level = "info"
+memory_sample_interval = 30
+privacy = "standard"         # strict | standard | debug (see docs)
+
+[memory]
+budget_gb = 8                # host: ~800
+cache_gb = 4                 # host: ~200-300
+small_file_gb = 2            # preview loads files below this fully into memory

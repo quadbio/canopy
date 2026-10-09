@@ -1,0 +1,65 @@
+[workspace]
+name = "dbx"
+description = "Lab single-cell and spatial data browser (backend + frontend)"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+# ---------------------------------------------------------------- runtime (default)
+# Version policy: lower bounds only; upper bounds/pins only with a reason comment.
+[dependencies]
+python = ">=3.12"
+fastapi = ">=0.115"
+uvicorn = ">=0.30"
+pydantic = ">=2.7"
+anndata = ">=0.11"
+h5py = ">=3.10"
+zarr = ">=3.0"
+numpy = ">=1.26"
+scipy = ">=1.13"
+pandas = ">=2.2"
+pyarrow = ">=16"
+spatialdata = ">=0.4"
+structlog = ">=24"
+psutil = ">=5.9"
+typer = ">=0.12"
+
+[pypi-dependencies]
+dbx = { path = ".", editable = true }
+
+[tasks]
+serve = "dbx serve"
+
+# ---------------------------------------------------------------- dev tools
+[feature.dev.dependencies]
+pytest = ">=8"
+pytest-cov = ">=5"
+httpx2 = ">=2"  # starlette TestClient backend (httpx is deprecated there)
+ruff = ">=0.6"
+mypy = ">=1.11"
+
+[feature.dev.tasks]
+lint-py = "ruff check backend tests && ruff format --check backend tests"
+types-py = "mypy backend/dbx"
+test-py = "pytest -q tests/backend"
+check-py = { depends-on = ["lint-py", "types-py", "test-py"] }
+fmt = "ruff format backend tests && ruff check --fix backend tests"
+install-hooks = "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit"
+
+# ---------------------------------------------------------------- frontend toolchain
+[feature.frontend.dependencies]
+nodejs = ">=22"
+pnpm = ">=9"
+
+[feature.frontend.tasks]
+fe-install = { cmd = "pnpm install --frozen-lockfile", cwd = "frontend" }
+fe-dev = { cmd = "pnpm dev", cwd = "frontend" }
+build-frontend = { cmd = "pnpm build", cwd = "frontend" }
+check-fe = { cmd = "pnpm check", cwd = "frontend" }
+
+[feature.dev.tasks.check]
+depends-on = ["check-py", "check-fe"]
+
+[environments]
+default = { solve-group = "main" }
+dev = { features = ["dev", "frontend"], solve-group = "main" }
+frontend = { features = ["frontend"], no-default-feature = true }

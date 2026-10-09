@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dbx"
+version = "0.0.1"
+description = "Lab single-cell and spatial data browser"
+requires-python = ">=3.12"
+# Runtime dependencies are managed by pixi (pixi.toml); listed there with reasons for any pin.
+dependencies = []
+
+[project.scripts]
+dbx = "dbx.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/dbx"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "S", "N"]
+ignore = ["S101"]  # asserts are fine in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests/backend"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dbx"]

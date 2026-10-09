@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: run the fast checks. Install with `pixi run install-hooks`.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+exec pixi run -e dev check
