@@ -105,16 +105,19 @@ def _store_stamps(path: Path, depth: int = 4) -> list[int]:
     return stamps
 
 
-def dataset_id(path: Path) -> str:
-    """Stable id of a dataset version: real path plus size and mtime (file), or the newest
-    modification time of the store's groups and metadata (zarr store)."""
-    real = os.path.realpath(path)
+def version_stamp(path: Path) -> str:
+    """What changes when a dataset changes: size and mtime (file), or the newest modification
+    time of the store's groups and metadata (zarr store)."""
     if path.is_file():
         st = path.stat()
-        version = f"{st.st_size}|{st.st_mtime_ns}"
-    else:
-        version = str(max(_store_stamps(path)))
-    return hashlib.sha256(f"{real}|{version}".encode()).hexdigest()[:16]
+        return f"{st.st_size}|{st.st_mtime_ns}"
+    return str(max(_store_stamps(path)))
+
+
+def dataset_id(path: Path, stamp: str | None = None) -> str:
+    """Stable id of a dataset version: real path plus its version stamp."""
+    real = os.path.realpath(path)
+    return hashlib.sha256(f"{real}|{stamp or version_stamp(path)}".encode()).hexdigest()[:16]
 
 
 def open_h5(path: Path) -> h5py.File:

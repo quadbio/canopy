@@ -11,15 +11,25 @@ import typer
 import uvicorn
 
 from dbx.app import create_app
+from dbx.build import build_id, build_info
 from dbx.config import Config, ConfigError, LoggingConfig, load_config
 from dbx.environment import environment_snapshot
 from dbx.logs import default_log_dir, get_logger, setup_logging
+from dbx.privacy import installation_salt
 
-app = typer.Typer(help="dbx data browser", no_args_is_help=True)
-synth_app = typer.Typer(help="Generate synthetic datasets and mocks", no_args_is_help=True)
+
+def _typer(help: str) -> typer.Typer:
+    # Tracebacks on the terminal never show local variables (they can hold data values).
+    return typer.Typer(help=help, no_args_is_help=True, pretty_exceptions_show_locals=False)
+
+
+app = _typer("dbx data browser")
+synth_app = _typer("Generate synthetic datasets and mocks")
 app.add_typer(synth_app, name="synth")
-contract_app = typer.Typer(help="Data contract tools", no_args_is_help=True)
+contract_app = _typer("Data contract tools")
 app.add_typer(contract_app, name="contract")
+catalog_app = _typer("Index the data roots")
+app.add_typer(catalog_app, name="catalog")
 
 ConfigOpt = Annotated[
     Path | None,
@@ -30,6 +40,22 @@ ConfigOpt = Annotated[
 class Level(StrEnum):
     standard = "standard"
     strict = "strict"
+
+
+def _version(value: bool) -> None:
+    if value:
+        typer.echo(f"dbx {build_id()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool,
+        typer.Option("--version", callback=_version, is_eager=True, help="Show version and build"),
+    ] = False,
+) -> None:
+    """dbx data browser."""
 
 
 def _load(config: Path | None) -> Config:
@@ -44,12 +70,13 @@ def _load(config: Path | None) -> Config:
 def serve(config: ConfigOpt = None) -> None:
     """Start the web server."""
     cfg = _load(config)
-    log_dir = setup_logging(cfg.logging)
+    log_dir = setup_logging(cfg.logging, role="server", salt=_salt(cfg))
     get_logger("dbx.config").info(
         "config_loaded",
         config_file=str(config) if config else None,
         log_dir=str(log_dir) if log_dir else None,
         config=cfg.model_dump(mode="json"),
+        build=build_info(),
     )
     # Requests are logged by our middleware, so uvicorn's access log is off.
     uvicorn.run(
@@ -72,13 +99,11 @@ def _cli_logging(config: Path | None) -> Config | None:
     directory) without echoing JSON events onto the terminal."""
     cfg = _load(config) if config else None
     log_cfg = cfg.logging if cfg else LoggingConfig(dir=default_log_dir())
-    setup_logging(log_cfg, to_console=False)
+    setup_logging(log_cfg, role="cli", salt=_salt(cfg), to_console=False)
     return cfg
 
 
 def _salt(cfg: Config | None) -> str:
-    from dbx.inspect.redact import installation_salt
-
     return installation_salt(cfg.cache_dir if cfg else default_log_dir().parent)
 
 
@@ -210,3 +235,18 @@ def contract_example(
     except FileExistsError as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from e
+
+
+@catalog_app.command("scan")
+def catalog_scan(
+    full: Annotated[bool, typer.Option(help="Inspect every dataset again")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Index the configured data roots once (what the server does in the background)."""
+    from dbx.catalog import CatalogDB, scan
+    from dbx.catalog.db import DB_FILE
+
+    cfg = _cli_logging(config) or _load(None)
+    db = CatalogDB(cfg.cache_dir / DB_FILE)
+    counts = scan(db, cfg.data_roots, cfg.catalog, full=full, trigger="cli")
+    typer.echo(json.dumps(counts.as_dict(), indent=2))

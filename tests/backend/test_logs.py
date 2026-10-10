@@ -1,30 +1,167 @@
 from __future__ import annotations
 
-import json
+import logging
+import os
+import re
+import time
+import warnings
+from pathlib import Path
 
 import pytest
+from conftest import log_events
 
-from dbx.config import Config
-from dbx.logs import LOG_FILE, memory_snapshot, timed
+from dbx.build import build_id
+from dbx.config import Config, LoggingConfig
+from dbx.logs import (
+    current_log_file,
+    get_logger,
+    log_file_name,
+    memory_snapshot,
+    prune_logs,
+    setup_logging,
+    timed,
+)
+from dbx.privacy import redact_text, token
+
+SECRET_NAME = "patient_0042_tumour"
+SECRET_DIR = "/home/alice/secret_project/cohort7"
 
 
 def test_timed_logs_stage_and_extra_fields(cfg: Config) -> None:
     with timed("read_x", dataset="d1") as extra:
         extra["bytes"] = 123
-    ev = json.loads((cfg.logging.dir / LOG_FILE).read_text().splitlines()[-1])
+    ev = log_events()[-1]
     assert ev["event"] == "stage"
     assert ev["stage"] == "read_x"
     assert ev["dataset"] == "d1"
     assert ev["bytes"] == 123
     assert ev["ms"] >= 0
+    assert ev["rss_peak_mb"] >= ev["rss_mb"] - 1 and ev["rss_peak_process_mb"] > 0
+
+
+def test_timed_nests_and_reports_peak_memory(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    rss = [100.0]
+    monkeypatch.setattr("dbx.logs.rss_mb", lambda: rss[0])
+    with timed("convert"):
+        with timed("x_csc"):
+            rss[0] = 500.0  # a short spike, gone before the stage ends
+            time.sleep(0.2)
+            rss[0] = 120.0
+        with timed("write"):
+            pass
+    stages = {e["stage"]: e for e in log_events() if e["event"] == "stage"}
+    assert set(stages) >= {"convert", "convert/x_csc", "convert/write"}
+    x = stages["convert/x_csc"]
+    assert (x["rss_peak_mb"], x["rss_mb"], x["rss_delta_mb"]) == (500.0, 120.0, 20.0)
+    assert stages["convert"]["rss_peak_mb"] == 500.0
+    assert stages["convert/write"]["rss_peak_mb"] == 120.0
+    with timed("after"):
+        pass
+    assert log_events()[-1]["stage"] == "after"  # the path was reset
 
 
 def test_timed_logs_failure_and_reraises(cfg: Config) -> None:
-    with pytest.raises(ValueError), timed("boom"):
+    with pytest.raises(ValueError), timed("outer"), timed("boom"):
         raise ValueError("x")
-    ev = json.loads((cfg.logging.dir / LOG_FILE).read_text().splitlines()[-1])
-    assert ev["event"] == "stage_failed"
-    assert "ValueError" in ev["exception"]
+    ev = next(e for e in log_events() if e["event"] == "stage_failed")
+    assert ev["stage"] == "outer/boom"
+    assert ev["exc_type"] == "ValueError"
+    assert any("test_logs.py" in f for f in ev["exc_frames"])
+
+
+def test_every_line_has_pid_role_build(cfg: Config) -> None:
+    get_logger("x").info("hello")
+    f = current_log_file()
+    assert f is not None and f.name == log_file_name("test") == f"dbx-test-{os.getpid()}.jsonl"
+    for ev in log_events():
+        assert ev["pid"] == os.getpid() and ev["role"] == "test" and ev["build"] == build_id()
+
+
+def test_build_id_has_commit() -> None:
+    assert re.fullmatch(r"\d+\.\d+\.\d+.*\+g[0-9a-f]{10}", build_id()), build_id()
+
+
+def _fail_everywhere() -> None:
+    """Secret names through every logging path: fields, exceptions, chains, warnings,
+    third-party log lines."""
+    log = get_logger("dbx.test")
+    log.info("dataset_opened", path=f"{SECRET_DIR}/{SECRET_NAME}.h5ad", column=SECRET_NAME)
+    log.info("nested", config={"data_roots": [{"name": SECRET_NAME, "path": SECRET_DIR}]})
+    try:
+        try:
+            raise KeyError(SECRET_NAME)
+        except KeyError as e:
+            raise ValueError(f"cannot convert '{SECRET_NAME}' in {SECRET_DIR}/x.h5ad") from e
+    except ValueError:
+        log.exception("convert_failed")
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        # pytest replaces warnings.showwarning for each test; hook logging in again.
+        logging.captureWarnings(False)
+        logging.captureWarnings(True)
+        warnings.warn(f"column '{SECRET_NAME}' has mixed types", UserWarning, stacklevel=1)
+    logging.getLogger("thirdparty").error("could not read %s", f"{SECRET_DIR}/{SECRET_NAME}")
+
+
+def test_strict_privacy_leaves_no_names(tmp_path: Path) -> None:
+    setup_logging(
+        LoggingConfig(dir=tmp_path, privacy="strict"), role="test", salt="s", to_console=False
+    )
+    _fail_everywhere()
+    text = (tmp_path / log_file_name("test")).read_text()
+    for secret in (SECRET_NAME, "alice", "secret_project", "cohort7"):
+        assert secret not in text
+    events = log_events()
+    failed = next(e for e in events if e["event"] == "convert_failed")
+    assert failed["exc_type"] == "ValueError" and "exc_message" not in failed
+    assert failed["exc_chain"] == [{"exc_type": "KeyError"}]
+    assert failed["exc_frames"]
+    opened = next(e for e in events if e["event"] == "dataset_opened")
+    assert opened["column"] == token(SECRET_NAME, "s")
+    warning = next(e for e in events if e["event"] == "python_warning")
+    assert warning["category"] == "UserWarning" and "message" not in warning
+
+
+def test_standard_privacy_tokenises_quoted_text_and_paths(tmp_path: Path) -> None:
+    setup_logging(LoggingConfig(dir=tmp_path), role="test", salt="s", to_console=False)
+    _fail_everywhere()
+    events = log_events()
+    failed = next(e for e in events if e["event"] == "convert_failed")
+    assert failed["exc_message"].startswith("cannot convert '" + token(SECRET_NAME, "s"))
+    assert "alice" not in failed["exc_message"]
+    warning = next(e for e in events if e["event"] == "python_warning")
+    assert SECRET_NAME not in warning["message"] and "mixed types" in warning["message"]
+    third = next(e for e in events if e.get("logger") == "thirdparty")
+    assert "alice" not in third["event"]
+    # names in name fields are kept at standard
+    assert next(e for e in events if e["event"] == "dataset_opened")["column"] == SECRET_NAME
+
+
+def test_debug_privacy_keeps_everything(tmp_path: Path) -> None:
+    setup_logging(
+        LoggingConfig(dir=tmp_path, privacy="debug"), role="test", salt="s", to_console=False
+    )
+    _fail_everywhere()
+    failed = next(e for e in log_events() if e["event"] == "convert_failed")
+    assert SECRET_NAME in failed["exc_message"] and "Traceback" in failed["exception"]
+
+
+def test_redact_text_limits_length() -> None:
+    assert len(redact_text("x" * 1000, "standard", "s") or "") <= 301
+    assert redact_text("anything", "strict", "s") is None
+
+
+def test_prune_removes_only_old_log_files(tmp_path: Path) -> None:
+    old = tmp_path / "dbx-server-1.jsonl"
+    new = tmp_path / "dbx-worker-2.jsonl.1"
+    other = tmp_path / "notes.txt"
+    for f in (old, new, other):
+        f.write_text("x")
+    past = time.time() - 40 * 86400
+    os.utime(old, (past, past))
+    os.utime(other, (past, past))
+    assert prune_logs(tmp_path, 30) == 1
+    assert not old.exists() and new.exists() and other.exists()
 
 
 def test_memory_snapshot_fields(cfg: Config) -> None:

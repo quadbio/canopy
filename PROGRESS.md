@@ -9,7 +9,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] S1 Inspector + synthetic generator
 - [x] S2 Contract v0 — APPROVED 2026-10-10 (decisions in contract/SPEC.md §11)
 - [x] Contract v0.2 APPROVED (option A) and implemented in the contract code (2026-10-10)
-- [ ] S3 Crawler + catalog API
+- [x] S3 Crawler + catalog API (+ review batch 3: logging for several processes)
 - [ ] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo
 - [ ] S5 Genes + AnnData converter + jobs + memory guard
 - [ ] S6 Spatial ingest + spatial view + section grid → demo
@@ -84,3 +84,23 @@ Resume rule: read this file, then continue with the first unchecked step.
   Still open from review S8: JS check against `dbx serve` (needs S3/S4 store serving),
   Playwright + check-all (S4), examples pytest marker. Batch 3 (logging for workers) before S5.
   - Next: S3 crawler + catalog (batch 3 alongside S3/S4).
+- 2026-10-10 S3 DONE with review batch 3 (ADR 0005).
+  - `dbx.catalog`: scandir walk (h5ad + AnnData/SpatialData zarr, never inside stores, hidden and
+    `catalog.ignore` skipped, symlinks leaving a root skipped, loop-safe, max_depth), SQLite index
+    in `<cache>/catalog.sqlite`, incremental rescans by version stamp, threaded inspection
+    (`inspect_workers`), states inspected/unsupported/failed with reason codes, unavailable roots
+    keep entries. Server: scan at start-up, every `rescan_minutes`, `POST /api/catalog/refresh`.
+    API: roots, tree, search, datasets/{id} (fingerprint with root-relative path), status.
+    `Catalog.resolve()` re-checks the root at open time (for S4 loaders). CLI `dbx catalog scan`.
+  - Batch 3: `dbx.privacy` (salt, tokens, free-text redaction); per-process log files
+    `dbx-<role>-<pid>.jsonl` with pid/role/build on every line, retention pruning; exceptions as
+    type + code locations + redacted message; warnings captured; strict tokenises name fields;
+    nested `timed()` with sampled peak RSS; request failures -> 500 JSON with request id, route
+    template logged, bounded request ids; `dbx --version`, `x-dbx-build`; env adds HDF5 version,
+    locking, available memory, filesystem type per root/cache.
+  - `pixi run -e dev test-examples` (DBX_REQUIRE_EXAMPLES=1). 124 backend tests.
+  - Measured: examples (4 datasets) indexed in 130 ms; 10k-file tree (300 datasets) in tests.
+    Live strict-mode server log checked: no names or paths.
+  - Next: S4 vertical slice. First task: adopt reviewer B's S4 kickoff checklist (SUMMARY 2.4
+    note); also S6/S7 review items (SPA fallback, gzip, v3-only opens), Playwright + check-all,
+    JS read check against `dbx serve`.

@@ -14,7 +14,14 @@ port = 8765
 dir = "logs"
 level = "info"
 memory_sample_interval = 30
-privacy = "standard"         # strict | standard | debug (see docs)
+privacy = "standard"         # strict | standard | debug (see README: Logs and privacy)
+retention_days = 30          # log files of any process older than this are deleted at start-up
+
+[catalog]
+ignore = []                  # glob patterns on names or root-relative paths, e.g. ["tmp_*", "*/scratch/*"]
+rescan_minutes = 10          # automatic rescans; 0 = only at start-up and on "refresh"
+inspect_workers = 4          # datasets inspected in parallel
+measure_store_size = false   # count files of zarr stores for their size (slow on network storage)
 
 [memory]
 budget_gb = 8                # host: ~800

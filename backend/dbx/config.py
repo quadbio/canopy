@@ -40,9 +40,24 @@ class LoggingConfig(_Strict):
     level: Literal["debug", "info", "warning", "error"] = "info"
     # Seconds between memory samples written to the log; 0 disables sampling.
     memory_sample_interval: float = 30.0
+    # Per process file: rotated at max_bytes, keeping backup_count old files.
     max_bytes: int = 50 * 1024 * 1024
     backup_count: int = 10
+    # Log files of any process untouched for this many days are deleted at start-up; 0 keeps all.
+    retention_days: float = 30.0
     privacy: PrivacyLevel = "standard"
+
+
+class CatalogConfig(_Strict):
+    # Glob patterns matched against names and root-relative paths; matches are not indexed.
+    ignore: list[str] = Field(default_factory=list)
+    # Minutes between automatic rescans in the server; 0 scans only at start-up and on demand.
+    rescan_minutes: float = 10.0
+    # Datasets inspected in parallel during a scan.
+    inspect_workers: int = Field(default=4, ge=1, le=64)
+    # Count the files of zarr stores for their size (slow on network storage).
+    measure_store_size: bool = False
+    max_depth: int = Field(default=32, ge=1)
 
 
 class MemoryConfig(_Strict):
@@ -65,6 +80,7 @@ class Config(_Strict):
     server: ServerConfig = Field(default_factory=ServerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    catalog: CatalogConfig = Field(default_factory=CatalogConfig)
 
     @model_validator(mode="after")
     def _unique_root_names(self) -> Config:

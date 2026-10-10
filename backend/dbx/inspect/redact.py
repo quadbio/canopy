@@ -11,59 +11,13 @@ into a bundle). Without it, tokens cannot be reversed by hashing a list of likel
 
 from __future__ import annotations
 
-import hashlib
-import os
-import secrets
-from pathlib import Path
 from typing import Any
 
 from dbx.config import PRIVACY_LEVELS
 from dbx.inspect.models import Fingerprint
+from dbx.privacy import KEEP, SALT_FILE, installation_salt, token
 
-SALT_FILE = ".dbx_salt"
-
-# Names defined by the file formats or near-universal conventions: kept in strict mode.
-KEEP = frozenset(
-    {
-        "global",
-        "x",
-        "y",
-        "z",
-        "geometry",
-        "radius",
-        "X_umap",
-        "X_pca",
-        "X_tsne",
-        "spatial",
-        "X_spatial",
-        "spatialdata_attrs",
-        "_index",
-    }
-)
-
-
-def token(name: str, salt: str) -> str:
-    if name in KEEP:
-        return name
-    return "h_" + hashlib.sha256(f"{salt}|{name}".encode()).hexdigest()[:10]
-
-
-def installation_salt(folder: Path) -> str:
-    """Read the installation's secret salt from `folder`, creating it (mode 600) on first use."""
-    path = folder / SALT_FILE
-    try:
-        return path.read_text().strip()
-    except FileNotFoundError:
-        pass
-    folder.mkdir(parents=True, exist_ok=True)
-    value = secrets.token_hex(32)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:  # created concurrently by another process
-        return path.read_text().strip()
-    with os.fdopen(fd, "w") as f:
-        f.write(value + "\n")
-    return value
+__all__ = ["KEEP", "SALT_FILE", "installation_salt", "redact", "token"]
 
 
 def _rename_keys(d: dict[str, Any], salt: str) -> dict[str, Any]:

@@ -45,6 +45,8 @@ mypy = ">=1.11"
 lint-py = "ruff check backend tests bench && ruff format --check backend tests bench"
 types-py = "mypy backend/dbx"
 test-py = "pytest -q tests/backend"
+# Same tests, but missing example datasets fail instead of being skipped.
+test-examples = { cmd = "pytest -q tests/backend", env = { DBX_REQUIRE_EXAMPLES = "1" } }
 check-py = { depends-on = ["lint-py", "types-py", "test-py"] }
 fmt = "ruff format backend tests bench && ruff check --fix backend tests bench"
 install-hooks = "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit"

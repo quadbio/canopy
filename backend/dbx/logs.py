@@ -1,18 +1,29 @@
-"""Structured logging: JSON lines to rotating files, plus timing and memory helpers.
+"""Structured logging: JSON lines to one rotating file per process, plus timing and memory
+helpers.
 
-Every log event is one JSON object per line. Events carry the request or job id bound in
-the current context, so a request's stages can be reassembled from the log.
+Every log event is one JSON object per line and carries `pid`, `role` (server, cli, worker) and
+`build`, plus the request or job id bound in the current context, so a request's or job's stages
+can be reassembled from the files of several processes.
+
+Privacy (config `logging.privacy`, see `dbx.privacy`): names are logged in dedicated fields
+(`NAME_FIELDS`), which `strict` replaces by salted tokens. Exceptions are logged as type, code
+locations and a message redacted to the level; Python warnings are captured the same way.
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import logging.handlers
 import os
+import re
+import resource
+import secrets
 import sys
 import threading
 import time
-from collections.abc import Iterator
+import traceback
+from collections.abc import Iterator, MutableMapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -20,7 +31,9 @@ from typing import Any
 import psutil
 import structlog
 
+from dbx.build import build_id
 from dbx.config import LoggingConfig
+from dbx.privacy import code_location, redact_text, token
 
 _LEVELS = {
     "debug": logging.DEBUG,
@@ -29,13 +42,48 @@ _LEVELS = {
     "error": logging.ERROR,
 }
 
-LOG_FILE = "dbx.jsonl"
+LOG_PREFIX = "dbx-"
+# Fields whose values are user-chosen names (paths, files, roots, elements, columns, genes):
+# tokenised under `strict`, nested values included.
+NAME_FIELDS = frozenset(
+    {
+        "path",
+        "paths",
+        "name",
+        "root",
+        "folder",
+        "file",
+        "element",
+        "column",
+        "gene",
+        "config_file",
+        "log_dir",
+        "cache_dir",
+        "dir",
+        "data_roots",
+        "target",
+    }
+)
+_MAX_FRAMES = 30
+_MAX_CHAIN = 3
+_WARNING = re.compile(r"^(?P<file>.*?):(?P<line>\d+): (?P<category>\w+): (?P<message>.*)", re.S)
+
+_log_file: Path | None = None
 
 
 def default_log_dir() -> Path:
     """Per-user fallback log folder (never the current directory)."""
     base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
     return Path(base) / "dbx" / "logs"
+
+
+def current_log_file() -> Path | None:
+    """The JSON-lines file this process writes to (None when file logging is off)."""
+    return _log_file
+
+
+def log_file_name(role: str, pid: int | None = None) -> str:
+    return f"{LOG_PREFIX}{role}-{pid if pid is not None else os.getpid()}.jsonl"
 
 
 def _writable_dir(*candidates: Path) -> Path | None:
@@ -49,31 +97,147 @@ def _writable_dir(*candidates: Path) -> Path | None:
     return None
 
 
-def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> Path | None:
-    """Configure structlog to write JSON lines to a rotating file (and readable console).
+def prune_logs(log_dir: Path, retention_days: float) -> int:
+    """Delete dbx log files (all processes) not modified for `retention_days`; returns count."""
+    if retention_days <= 0:
+        return 0
+    cutoff = time.time() - retention_days * 86400
+    removed = 0
+    for f in log_dir.glob(f"{LOG_PREFIX}*.jsonl*"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+# ---------------------------------------------------------------- privacy processors
+
+
+def _tokenise(value: Any, salt: str) -> Any:
+    if isinstance(value, str):
+        return token(value, salt)
+    if isinstance(value, list | tuple):
+        return [_tokenise(v, salt) for v in value]
+    if isinstance(value, dict):
+        return {k: _tokenise(v, salt) for k, v in value.items()}
+    return value
+
+
+def _names(value: Any, salt: str) -> Any:
+    if isinstance(value, dict):
+        return {
+            k: _tokenise(v, salt) if k in NAME_FIELDS else _names(v, salt) for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_names(v, salt) for v in value]
+    return value
+
+
+def _exception_fields(exc: BaseException, privacy: str, salt: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"exc_type": type(exc).__qualname__}
+    msg = redact_text(str(exc), privacy, salt)
+    if msg:
+        out["exc_message"] = msg
+    frames = traceback.extract_tb(exc.__traceback__)[-_MAX_FRAMES:]
+    out["exc_frames"] = [f"{code_location(f.filename)}:{f.lineno}:{f.name}" for f in frames]
+    chain: list[dict[str, Any]] = []
+    cur = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
+    while cur is not None and len(chain) < _MAX_CHAIN:
+        link: dict[str, Any] = {"exc_type": type(cur).__qualname__}
+        m = redact_text(str(cur), privacy, salt)
+        if m:
+            link["exc_message"] = m
+        chain.append(link)
+        cur = cur.__cause__ or (None if cur.__suppress_context__ else cur.__context__)
+    if chain:
+        out["exc_chain"] = chain
+    if privacy == "debug":
+        out["exception"] = "".join(traceback.format_exception(exc))
+    return out
+
+
+def _privacy_processor(privacy: str, salt: str) -> Any:
+    def process(_: Any, __: str, ed: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+        exc_info = ed.pop("exc_info", None)
+        if exc_info:
+            if exc_info is True:
+                exc_info = sys.exc_info()
+            exc = exc_info if isinstance(exc_info, BaseException) else exc_info[1]
+            if exc is not None:
+                ed.update(_exception_fields(exc, privacy, salt))
+        if ed.get("logger") == "py.warnings":
+            m = _WARNING.match(str(ed.get("event", "")))
+            ed["event"] = "python_warning"
+            if m:
+                ed["category"] = m["category"]
+                ed["location"] = f"{code_location(m['file'])}:{m['line']}"
+                msg = redact_text(m["message"].split("\n")[0], privacy, salt)
+                if msg:
+                    ed["message"] = msg
+        elif ed.get("_from_structlog") is False and privacy != "debug":
+            # Third-party log lines: free text, redacted like messages. uvicorn's come from fixed
+            # templates (pid, host, port), so strict treats them like standard.
+            level = "standard" if str(ed.get("logger", "")).startswith("uvicorn") else privacy
+            ed["event"] = redact_text(str(ed.get("event", "")), level, salt) or "<redacted>"
+        if privacy == "strict":
+            for k in list(ed):
+                if k in NAME_FIELDS:
+                    ed[k] = _tokenise(ed[k], salt)
+                elif isinstance(ed[k], dict | list):
+                    ed[k] = _names(ed[k], salt)
+        return ed
+
+    return process
+
+
+def setup_logging(
+    cfg: LoggingConfig, *, role: str = "cli", salt: str = "", to_console: bool = True
+) -> Path | None:
+    """Configure structlog to write JSON lines to this process's rotating file (and a readable
+    console). `salt` is the installation secret used for strict-mode tokens (a random one is
+    used when empty, so tokens are then not comparable across processes).
 
     Returns the log folder actually used: the configured one, else the per-user fallback, else
     None (file logging off) when neither is writable, e.g. on a read-only share.
     """
+    global _log_file
     log_dir = _writable_dir(cfg.dir, default_log_dir())
     level = _LEVELS[cfg.level]
+    salt = salt or secrets.token_hex(16)
+    static = {"pid": os.getpid(), "role": role, "build": build_id()}
+
+    def add_static(_: Any, __: str, ed: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+        for k, v in static.items():
+            ed.setdefault(k, v)
+        return ed
 
     shared: list[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
+        add_static,
+        _privacy_processor(cfg.privacy, salt),
     ]
     handlers: list[logging.Handler] = []
+    _log_file = None
+    pruned = 0
     if log_dir is not None:
+        pruned = prune_logs(log_dir, cfg.retention_days)
+        _log_file = log_dir / log_file_name(role)
         file_handler = logging.handlers.RotatingFileHandler(
-            log_dir / LOG_FILE, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count
+            _log_file, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count
         )
         file_handler.setFormatter(
             structlog.stdlib.ProcessorFormatter(
-                processor=structlog.processors.JSONRenderer(), foreign_pre_chain=shared
+                processors=[
+                    structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                    structlog.processors.JSONRenderer(),
+                ],
+                foreign_pre_chain=shared,
             )
         )
         handlers.append(file_handler)
@@ -81,12 +245,18 @@ def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> Path | None
         console = logging.StreamHandler(sys.stderr)
         console.setFormatter(
             structlog.stdlib.ProcessorFormatter(
-                processor=structlog.dev.ConsoleRenderer(colors=False), foreign_pre_chain=shared
+                processors=[
+                    structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                    structlog.dev.ConsoleRenderer(colors=False),
+                ],
+                foreign_pre_chain=shared,
             )
         )
         handlers.append(console)
 
     root = logging.getLogger()
+    for h in root.handlers:
+        h.close()
     root.handlers = handlers
     root.setLevel(level)
     # uvicorn's own loggers go through the same handlers.
@@ -94,13 +264,16 @@ def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> Path | None
         lg = logging.getLogger(name)
         lg.handlers = []
         lg.propagate = True
+    logging.captureWarnings(True)
 
     structlog.configure(
         processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.make_filtering_bound_logger(level),
-        cache_logger_on_first_use=True,
+        cache_logger_on_first_use=False,
     )
+    if pruned:
+        get_logger("dbx.logs").info("logs_pruned", n_files=pruned)
     return log_dir
 
 
@@ -108,32 +281,99 @@ def get_logger(name: str | None = None) -> Any:
     return structlog.get_logger(name)
 
 
+_PROC: dict[int, psutil.Process] = {}
+
+
 def rss_mb() -> float:
-    return float(psutil.Process(os.getpid()).memory_info().rss) / 2**20
+    pid = os.getpid()  # a forked child must not measure its parent
+    proc = _PROC.get(pid) or _PROC.setdefault(pid, psutil.Process(pid))
+    return float(proc.memory_info().rss) / 2**20
+
+
+def peak_rss_process_mb() -> float:
+    """Highest RSS of this process since it started (ru_maxrss: bytes on macOS, KiB on Linux)."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return float(peak) / (2**20 if sys.platform == "darwin" else 2**10)
+
+
+class _PeakTracker:
+    """One daemon thread sampling RSS while any `timed` stage is open, so each stage can report
+    its own peak (RSS is per process: concurrent stages see each other's memory)."""
+
+    INTERVAL = 0.05
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open: dict[int, list[float]] = {}
+        self._thread: threading.Thread | None = None
+
+    def open(self) -> list[float]:
+        holder = [rss_mb()]
+        with self._lock:
+            self._open[id(holder)] = holder
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name="rss-peak", daemon=True)
+                self._thread.start()
+        return holder
+
+    def close(self, holder: list[float]) -> float:
+        with self._lock:
+            self._open.pop(id(holder), None)
+        return max(holder[0], rss_mb())
+
+    def _run(self) -> None:
+        while True:
+            time.sleep(self.INTERVAL)
+            with self._lock:
+                if not self._open:
+                    continue
+                r = rss_mb()
+                for h in self._open.values():
+                    if r > h[0]:
+                        h[0] = r
+
+
+_PEAK = _PeakTracker()
+_STAGES: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("dbx_stages", default=())
 
 
 @contextmanager
 def timed(stage: str, **fields: Any) -> Iterator[dict[str, Any]]:
-    """Log the duration and memory change of a block as a `stage` event.
+    """Log the duration and memory of a block as a `stage` event.
 
-    Yields a dict the block can add fields to (e.g. bytes read); they are logged on exit.
-    Failures are logged with the exception and re-raised.
+    Stages nest: inside `timed("convert")`, `timed("x_csc")` is logged as `convert/x_csc`.
+    Logged: `ms`, `rss_mb` (at exit), `rss_delta_mb`, `rss_peak_mb` (sampled every 50 ms while
+    the stage is open) and `rss_peak_process_mb`. Yields a dict the block can add fields to
+    (e.g. bytes read); they are logged on exit. Failures are logged and re-raised.
     """
     log = get_logger("dbx.timing")
+    path = (*_STAGES.get(), stage)
+    reset = _STAGES.set(path)
+    name = "/".join(path)
     extra: dict[str, Any] = {}
     t0 = time.perf_counter()
     m0 = rss_mb()
+    holder = _PEAK.open()
     try:
         yield extra
     except Exception:
-        log.exception("stage_failed", stage=stage, ms=_ms(t0), **fields, **extra)
+        peak = _PEAK.close(holder)
+        log.exception(
+            "stage_failed", stage=name, ms=_ms(t0), rss_peak_mb=round(peak, 1), **fields, **extra
+        )
         raise
+    finally:
+        _STAGES.reset(reset)
+    peak = _PEAK.close(holder)
+    m1 = rss_mb()
     log.info(
         "stage",
-        stage=stage,
+        stage=name,
         ms=_ms(t0),
-        rss_mb=round(rss_mb(), 1),
-        rss_delta_mb=round(rss_mb() - m0, 1),
+        rss_mb=round(m1, 1),
+        rss_delta_mb=round(m1 - m0, 1),
+        rss_peak_mb=round(peak, 1),
+        rss_peak_process_mb=round(peak_rss_process_mb(), 1),
         **fields,
         **extra,
     )

@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from dbx.build import build_id
 from dbx.cli import app
+from dbx.logs import log_file_name
 from dbx.synth import write_anndata
 from dbx.synth.spec import AnnDataSpec, ColumnSpec
 
@@ -44,7 +46,7 @@ def test_inspect_from_read_only_folder(
     assert r.exit_code == 0, r.output
     assert json.loads(r.stdout)["anndata"]["n_obs"] == 20
     assert not (ro / "logs").exists()
-    assert (home / "logs" / "dbx.jsonl").is_file()
+    assert (home / "logs" / log_file_name("cli")).is_file()
 
 
 def test_inspect_strict(home: Path, h5ad: Path) -> None:
@@ -72,7 +74,7 @@ def test_config_from_environment(home: Path, h5ad: Path, tmp_path: Path) -> None
     )
     r = runner.invoke(app, ["inspect", str(h5ad)], env={"DBX_CONFIG": str(conf)})
     assert r.exit_code == 0, r.output
-    assert (tmp_path / "mylogs" / "dbx.jsonl").is_file()
+    assert (tmp_path / "mylogs" / log_file_name("cli")).is_file()
 
 
 def test_bad_config_is_reported(home: Path, h5ad: Path, tmp_path: Path) -> None:
@@ -90,3 +92,20 @@ def test_contract_example_refuses_foreign_folder(home: Path, tmp_path: Path) -> 
     r = runner.invoke(app, ["contract", "example", str(victim)])
     assert r.exit_code == 1 and (victim / "keep.txt").exists()
     assert os.listdir(victim) == ["keep.txt"]
+
+
+def test_version_shows_build(home: Path) -> None:
+    r = runner.invoke(app, ["--version"])
+    assert r.exit_code == 0 and r.stdout.strip() == f"dbx {build_id()}"
+
+
+def test_catalog_scan(home: Path, h5ad: Path, tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    (data / "sub").mkdir(parents=True)
+    h5ad.rename(data / "sub" / h5ad.name)
+    conf = tmp_path / "config.toml"
+    conf.write_text('cache_dir = "cache"\n[[data_roots]]\nname = "d"\npath = "data"\n')
+    r = runner.invoke(app, ["catalog", "scan", "--config", str(conf)])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["new"] == 1
+    assert (tmp_path / "cache" / "catalog.sqlite").is_file()
