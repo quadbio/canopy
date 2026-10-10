@@ -60,3 +60,5 @@ Resume rule: read this file, then continue with the first unchecked step.
   holes dropped. Validator + example + 2 tests updated (45 backend tests).
   - Next: cold code review by 2 subagents (only reports/09 + reports/10 as context) →
     reviews/code_review_S0-S2.md; then adapt; then S3.
+- 2026-10-10 Cold review results in ../reviews/code_review_S0-S2/SUMMARY.md (finding IDs C*, I*,
+  P*, S*). Fix batches 1–4 planned; contract v0.2 awaits user sign-off.
