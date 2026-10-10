@@ -85,6 +85,7 @@ def write_example_store(
     var = pd.DataFrame(index=pd.Index([f"Gene{i}" for i in range(n_genes)]))
     table = ad.AnnData(obs=obs, var=var)
     table.obsm["X_umap"] = rng.normal(size=(n_cells, 2)).astype(np.float32)
+    table.obsm["X_pca"] = rng.normal(size=(n_cells, 10)).astype(np.float32)
     table.obsm["spatial"] = centers
     table.uns["cluster_colors"] = [
         "#1b9e77",
@@ -175,6 +176,8 @@ def write_example_store(
     array(pg, "xy", np.stack([px, py], 1)[order].astype(np.float32))
     array(pg, "feature", feat[order].astype(np.int32))
     array(pg, "cell", owner[order].astype(np.int32))
+    pz = rng.integers(0, 7, n_points).astype(np.float32)  # 7 z-planes, as in MERSCOPE
+    array(pg, "z", pz[order])
     pg.attrs["dbx"] = {"features": [f"Gene{i}" for i in range(n_feat)]}
     counts = np.bincount(feat, minlength=n_feat)
     array(pg, "offsets", np.concatenate([[0], np.cumsum(counts)]).astype(np.int64))
@@ -206,7 +209,7 @@ def write_example_store(
                 n_obs=n_cells,
                 n_vars=n_genes,
                 nnz=int(x.nnz),
-                embeddings={"X_umap": 2},
+                embeddings={"X_umap": 2, "X_pca": 10},
                 spatial_keys=["spatial"],
                 categorical={
                     "cluster": CategoricalInfo(n_categories=k, has_colors=True),
@@ -254,6 +257,9 @@ def write_example_store(
                 n_features=n_feat,
                 feature_key="gene",
                 has_cell=True,
+                has_z=True,
+                z_range=(float(pz.min()), float(pz.max())),
+                z_planes=sorted(float(v) for v in np.unique(pz)),
                 bbox=pbox,
                 table="cells",
                 transforms={"global": IDENTITY},

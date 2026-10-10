@@ -122,6 +122,16 @@ def test_points_must_be_sorted(cfg: Config, store: Path) -> None:
     assert "not sorted by feature" in _errors(store)
 
 
+def test_z_outside_planes(cfg: Config, store: Path) -> None:
+    _edit_manifest(store, lambda m: m["points"]["transcripts"].update(z_planes=[0.0, 1.0]))
+    assert "z values not in z_planes" in _errors(store)
+
+
+def test_z_range_requires_has_z(cfg: Config, store: Path) -> None:
+    _edit_manifest(store, lambda m: m["points"]["transcripts"].update(has_z=False))
+    assert "without has_z" in _errors(store)
+
+
 def test_labels_lookup_length(cfg: Config, store: Path) -> None:
     _edit_manifest(store, lambda m: m["labels"]["cells"].update(max_label=999))
     assert "lookup must be int32 of length max_label + 1" in _errors(store)

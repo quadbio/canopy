@@ -127,6 +127,8 @@ class PointsEntry(_Spatial):
     feature_key_inferred: bool = False
     has_cell: bool = False
     has_z: bool = False
+    z_range: tuple[float, float] | None = None
+    z_planes: list[float] | None = None
     bbox: tuple[float, float, float, float]
     table: str | None = None
 

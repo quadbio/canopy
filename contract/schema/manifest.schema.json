@@ -323,6 +323,43 @@
           "title": "Has Z",
           "type": "boolean"
         },
+        "z_range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Z Range"
+        },
+        "z_planes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Z Planes"
+        },
         "bbox": {
           "maxItems": 4,
           "minItems": 4,

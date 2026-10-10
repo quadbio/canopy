@@ -1,11 +1,11 @@
-# dbx data contract, version 0.1 (draft for approval)
+# dbx data contract, version 0.1 (approved 2026-10-10)
 
 The data contract defines **dbx stores**: the converted form of a dataset that the dbx server and
 browser read at full speed. It also states what the **direct preview** may read from original
 files. The machine-readable part is `schema/manifest.schema.json` (generated from
 `backend/dbx/contract/models.py`); `dbx validate <store>` checks a store against both.
 
-Status: **v0.1 draft**. Changes after approval follow §9.
+Status: **v0.1 approved** (2026-10-10, with the review decisions in §11). Changes follow §9.
 
 ---
 
@@ -99,19 +99,23 @@ A gene query reads `indptr[j:j+2]`, then one contiguous range of `data`/`indices
 
 - X values are copied as float32. Integer counts above 2²⁴ (16,777,216) cannot be represented
   exactly and produce a converter warning.
-- Which matrix becomes X: the source X by default. A source layer (e.g. `counts`, `lognorm`)
-  can be chosen at conversion time; the manifest records `x_source` (`"X"` or
-  `"layers/<name>"`). Other layers are not copied in v0.
+- Which matrix becomes X: **the source X, always by default**. Optionally the person converting
+  may name a source layer instead (e.g. `counts`); this choice is never required. The manifest
+  records `x_source` (`"X"` or `"layers/<name>"`). Exactly one matrix is copied; other layers are
+  not copied.
 - `raw` is not copied in v0. If the source X is missing but `raw/X` exists, `raw/X` becomes X and
   `x_source` is `"raw/X"`.
-- `obsp`, `varm` and `varp` are not copied (not needed for viewing).
+- `obsp` (neighbour graphs), `varm` and `varp` are not copied (not needed for viewing).
 
 ### 4.3 obs, var, obsm, uns
 
 - `obs` and `var`: copied with anndata's encodings (categoricals, nullable types, strings).
-- `obsm`: copied for **embeddings** (2-D or 3-D float arrays, stored float32) and **spatial
-  coordinates** (`spatial` or keys starting with `spatial`). Other obsm entries (e.g. `X_pca`
-  with 50 dimensions) are not copied in v0.
+- `obsm`: **every numeric 2-D array with at least 2 columns is copied** as float32 (UMAP, t-SNE,
+  PCA, diffusion maps, … and spatial coordinates; `spatial` or keys starting with `spatial` are
+  listed as `spatial_keys`). Chunks: all columns, 65,536 rows. Entries that are data frames or
+  have one column are skipped with a converter warning. The browser lets the user switch between
+  embeddings and, for an embedding with more than two dimensions, choose which two dimensions
+  are plotted (default: the first two).
 - `uns`: only `<column>_colors` entries are copied, validated as CSS colour strings
   (`#rrggbb`, `#rrggbbaa` or a named colour converted to hex). A colour list whose length does not
   match its column's categories is dropped with a warning.
@@ -131,7 +135,7 @@ stays visible.
 
 ### 4.6 Manifest fields per table
 
-`path`, `n_obs`, `n_vars`, `x_source`, `x_dtype`, `embeddings` (key → dims), `spatial_keys`,
+`path`, `n_obs`, `n_vars`, `x_source`, `x_dtype`, `embeddings` (key → number of dimensions), `spatial_keys`,
 `categorical` (column → number of categories, has colours), `numeric` (column names),
 `var_names_column` (column holding display gene names if not the index, e.g. `gene_symbols`),
 `downsample` (sizes), `region` / `region_key` / `instance_key` (SpatialData tables: which element
@@ -194,7 +198,8 @@ The browser renders these as binary deck.gl attributes directly.
 
 | Array | dtype | Shape | Meaning |
 |---|---|---|---|
-| `xy` | float32 | (N, 2) | intrinsic coordinates (`z` in `z` float32 (N,) when present) |
+| `xy` | float32 | (N, 2) | intrinsic coordinates |
+| `z` | float32 | (N,) | z coordinate or z-plane index, only when the source has one |
 | `feature` | int32 | (N,) | index into `features` |
 | `cell` | int32 | (N,) | table row of the assigned cell, −1 if none (only when the source has an instance column) |
 | *(attribute)* `dbx.features` | list of strings | F | feature names (genes), in the points group's `zarr.json` attributes |
@@ -209,7 +214,12 @@ The browser renders these as binary deck.gl attributes directly.
   `feature_key_inferred: true`; if that is ambiguous, conversion asks (job fails with the
   candidates listed).
 - Chunks: 1,048,576 rows; codec zstd. Manifest fields: `path`, `n`, `n_features`,
-  `feature_key`, `feature_key_inferred`, `has_cell`, `has_z`, `bbox`, `table`, `transforms`.
+  `feature_key`, `feature_key_inferred`, `has_cell`, `has_z`, `z_range` (min, max),
+  `z_planes` (sorted distinct z values when there are at most 256, e.g. MERSCOPE z-stacks;
+  otherwise null), `bbox`, `table`, `transforms`.
+- **Display is 2-D.** `z` is never used for placement; it drives a **z filter** in the browser:
+  the user picks one or more z-planes (when `z_planes` is set) or a z range, and only points
+  inside it are drawn (GPU filter on the loaded points; no re-read from the server).
 
 ## 9. Versions and compatibility
 
@@ -233,12 +243,13 @@ What the server may read straight from an original file, without conversion:
 
 The catalog shows which of these apply to each file (from the fingerprint warnings).
 
-## 11. Open points for review
+## 11. Review decisions (2026-10-10)
 
-1. **What becomes X** when a file has both a normalised X and a `counts` layer: default is the
-   source X (usually log-normalised). Alternative: let the user pick per file in the catalog.
-2. **Not copied in v0:** other layers, `raw`, PCA and other high-dimensional `obsm`, graphs.
-   Copying them later is a minor version.
-3. **3-D / z-stacks** (`c, z, y, x` images, points with `z` displayed per plane): reserved for a
-   later minor version; v0 stores `z` for points but shows 2-D.
-4. **Polygon holes** are dropped in v0 (rare for cell boundaries).
+1. **X** is the source X by default. Choosing a layer instead is an optional converter setting,
+   never mandatory (§4.2).
+2. **One matrix only**: other layers, `raw` and neighbour graphs (`obsp`) are not copied. **All
+   embeddings are copied**; the browser switches between them and lets the user choose two
+   dimensions for embeddings with more than two (§4.3).
+3. **Spatial display is 2-D.** Point `z` is kept and powers a z-plane / z-range filter (§8).
+   3-D images (`c, z, y, x`) remain reserved for a later version.
+4. **Polygon holes** are dropped (confirmed).

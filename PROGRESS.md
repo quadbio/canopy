@@ -7,7 +7,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 
 - [x] S0 Foundation + compatibility checks
 - [x] S1 Inspector + synthetic generator
-- [ ] S2 Contract v0 (needs user approval before S5/S6) — drafted, AWAITING APPROVAL
+- [x] S2 Contract v0 — APPROVED 2026-10-10 (decisions in contract/SPEC.md §11)
 - [ ] S3 Crawler + catalog API
 - [ ] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo
 - [ ] S5 Genes + AnnData converter + jobs + memory guard
@@ -53,3 +53,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   - frontend: added zarrita ~0.5.4 as a direct dependency (same version as Viv's).
   - 43 backend tests.
   - Next after approval: S3 crawler + catalog (S3/S4 do not depend on the contract; S5/S6 do).
+- 2026-10-10 S2 APPROVED by user, with decisions (SPEC §11):
+  X = source X by default (layer choice optional, never mandatory); one matrix only (no raw,
+  other layers, graphs); ALL obsm embeddings copied, browser picks embedding + 2 dims;
+  spatial display 2-D, points keep z → z-plane / z-range filter (manifest z_range, z_planes);
+  holes dropped. Validator + example + 2 tests updated (45 backend tests).
+  - Next: cold code review by 2 subagents (only reports/09 + reports/10 as context) →
+    reviews/code_review_S0-S2.md; then adapt; then S3.

@@ -362,8 +362,22 @@ def _points(
         cell = _arr(root, f"{p}/cell")
         if cell.shape != (pt.n,) or _dtype(cell) != "int32":
             rep.error(w, "cell must be int32 of length n")
-    if pt.has_z and _arr(root, f"{p}/z").shape != (pt.n,):
-        rep.error(w, "z must have length n")
+    if pt.has_z:
+        z = _arr(root, f"{p}/z")
+        if z.shape != (pt.n,) or _dtype(z) != "float32":
+            rep.error(w, "z must be float32 of length n")
+        if pt.z_range is None:
+            rep.error(w, "has_z requires z_range")
+        elif deep and pt.n:
+            zv = np.asarray(z[:])
+            if zv.min() < pt.z_range[0] or zv.max() > pt.z_range[1]:
+                rep.error(w, "z values outside z_range")
+            if pt.z_planes is not None and not np.isin(zv, pt.z_planes).all():
+                rep.error(w, "z values not in z_planes")
+    elif pt.z_range is not None or pt.z_planes is not None:
+        rep.error(w, "z_range/z_planes set without has_z")
+    if pt.z_planes is not None and len(pt.z_planes) > 256:
+        rep.error(w, "z_planes lists more than 256 values")
     if pt.table is not None and pt.table not in m.tables:
         rep.error(w, f"unknown table {pt.table!r}")
     if deep and pt.n:
