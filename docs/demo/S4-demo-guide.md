@@ -69,8 +69,8 @@ with `DBX_DEMO_PORT=8766 pixi run -e dev demo` and open `http://127.0.0.1:8766`.
 | 9 | Move **Point size** and **Opacity** | The points change as you drag. |
 | 10 | Click **dissociated.h5ad**, **Open** | A second view; both share the canvas side by side and each fits its own data. |
 | 11 | Click **202302171205_region_1…**; under **Table** choose `table_cells` (or the other table); **Open** | A third view from the SpatialData table's UMAP, coloured by its cluster column (e.g. `leiden_1.0`). |
-| 12 | Open **region_3** too, then click each view's title | Four views in a 2 × 2 grid; the right panel follows the selected view. |
-| 13 | Close a view with **×** | The grid rearranges and the remaining views refit. |
+| 12 | Open **region_3** too, then click each view's title | Four views in a 2 × 2 grid; legends start folded in small views (click the legend title to unfold); the right panel follows the selected view. |
+| 13 | Zoom into one view, then close another with **×** | The grid rearranges; the view you zoomed keeps its place, untouched views refit. **⤢** (next to ×) fits a view to its data again. |
 | 14 | Reload the page (Cmd+R) | The same views come back, with your settings. |
 | 15 | Click **Theme** (auto → light → dark) | The whole app switches between light and dark. |
 | 16 | Click **Refresh** (top right) | "Scanning…" briefly, then a new "Indexed" time. |
@@ -130,7 +130,7 @@ Tips:
 | Page is blank or old | Hard reload: Cmd+Shift+R |
 | "Port … already in use" | Stop the other server, or use `DBX_DEMO_PORT=8766` |
 | A view stays on the spinner | Note the time and dataset, close the view, report it |
-| You want a clean start | Close all views (×); or in Chrome: Settings → Privacy → Site data → delete for 127.0.0.1 |
+| You want a clean start | **Close all** in the header |
 | The terminal shows an error and the server stopped | Copy the last ~20 lines of the terminal into the report |
 
 When you're done, stop the server with **Ctrl+C**.

@@ -13,17 +13,19 @@ locations and a message redacted to the level; Python warnings are captured the 
 from __future__ import annotations
 
 import contextvars
+import faulthandler
 import logging
 import logging.handlers
 import os
 import re
 import resource
 import secrets
+import signal
 import sys
 import threading
 import time
 import traceback
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -62,6 +64,7 @@ NAME_FIELDS = frozenset(
         "dir",
         "data_roots",
         "target",
+        "ignore",
     }
 )
 _MAX_FRAMES = 30
@@ -69,6 +72,43 @@ _MAX_CHAIN = 3
 _WARNING = re.compile(r"^(?P<file>.*?):(?P<line>\d+): (?P<category>\w+): (?P<message>.*)", re.S)
 
 _log_file: Path | None = None
+_rollover_hook: Callable[[], None] | None = None
+_stack_file: Any = None
+
+
+class _RotatingFile(logging.handlers.RotatingFileHandler):
+    """Rotating file that calls the rollover hook after each rotation (the server logs its
+    environment again, so every file is self-contained)."""
+
+    _in_hook = False
+
+    def doRollover(self) -> None:  # noqa: N802 - logging API
+        super().doRollover()
+        if _rollover_hook is not None and not _RotatingFile._in_hook:
+            _RotatingFile._in_hook = True
+            try:
+                _rollover_hook()
+            finally:
+                _RotatingFile._in_hook = False
+
+
+def set_rollover_hook(hook: Callable[[], None] | None) -> None:
+    global _rollover_hook
+    _rollover_hook = hook
+
+
+def install_stack_dumps(log_dir: Path | None) -> Path | None:
+    """`kill -USR1 <pid>` writes the stack of every thread to `stacks-<pid>.txt` in the log
+    folder (code locations only, no data), and a hard crash writes its stack there too. This is
+    how a hung server on the host is diagnosed from files alone."""
+    global _stack_file
+    if log_dir is None or not hasattr(signal, "SIGUSR1"):
+        return None
+    path = log_dir / f"stacks-{os.getpid()}.txt"
+    _stack_file = path.open("a")  # kept open: faulthandler writes to the descriptor
+    faulthandler.enable(file=_stack_file, all_threads=True)
+    faulthandler.register(signal.SIGUSR1, file=_stack_file, all_threads=True, chain=False)
+    return path
 
 
 def default_log_dir() -> Path:
@@ -138,7 +178,9 @@ def _names(value: Any, salt: str) -> Any:
 
 def _exception_fields(exc: BaseException, privacy: str, salt: str) -> dict[str, Any]:
     out: dict[str, Any] = {"exc_type": type(exc).__qualname__}
-    msg = redact_text(str(exc), privacy, salt)
+    # str(KeyError('x')) is "'x'" (quoted), which would be tokenised whole: use the key itself.
+    text = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
+    msg = redact_text(text, privacy, salt)
     if msg:
         out["exc_message"] = msg
     frames = traceback.extract_tb(exc.__traceback__)[-_MAX_FRAMES:]
@@ -228,7 +270,7 @@ def setup_logging(
     if log_dir is not None:
         pruned = prune_logs(log_dir, cfg.retention_days)
         _log_file = log_dir / log_file_name(role)
-        file_handler = logging.handlers.RotatingFileHandler(
+        file_handler = _RotatingFile(
             _log_file, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count
         )
         file_handler.setFormatter(

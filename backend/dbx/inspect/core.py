@@ -120,14 +120,23 @@ def dataset_id(path: Path, stamp: str | None = None) -> str:
     return hashlib.sha256(f"{real}|{stamp or version_stamp(path)}".encode()).hexdigest()[:16]
 
 
+# HDF5's own wording for lock failures ("sblock" in other messages must not match).
+_LOCK_ERRORS = ("unable to lock file", "file locking", "lock failed")
+
+
 def open_h5(path: Path) -> h5py.File:
     """Open an HDF5 file read-only without HDF5 file locking (locks commonly fail on network
-    shares and are not needed for reading). Lock failures get a recognisable message."""
+    shares and are not needed for reading). Lock failures and truncated files (half-copied,
+    still being written, disk full) get recognisable messages: `hdf5_lock: …`,
+    `hdf5_truncated: …`."""
     try:
         return h5py.File(path, "r", locking=False)
     except OSError as e:
-        if "lock" in str(e).lower():
-            raise OSError(f"hdf5_lock: cannot open {path.name} because of a file lock") from e
+        msg = str(e).lower()
+        if "truncated file" in msg:
+            raise OSError("hdf5_truncated: the file is shorter than its header says") from e
+        if any(m in msg for m in _LOCK_ERRORS):
+            raise OSError("hdf5_lock: the file cannot be opened because of a file lock") from e
         raise
 
 
@@ -160,6 +169,8 @@ def inspect_path(path: Path, *, measure_size: bool = True) -> Fingerprint:
         )
         if kind == "h5ad":
             with open_h5(path) as f:
+                if "obs" not in f or "var" not in f:
+                    raise ValueError("not_anndata")  # an HDF5 file, but not AnnData
                 fp.anndata = anndata_info(Node(f))
         elif kind == "anndata_zarr":
             fp.anndata = anndata_info(Node(zarr.open_group(path, mode="r")))

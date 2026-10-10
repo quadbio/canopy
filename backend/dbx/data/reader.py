@@ -32,6 +32,15 @@ _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")
 ObsKind = Literal["categorical", "numeric", "boolean", "string", "other"]
 
 
+class UnknownElementError(LookupError):
+    """The request names a table, column or embedding the dataset does not have. Raised only by
+    dbx's own membership checks, so a KeyError from inside a library is never mistaken for it."""
+
+
+class InvalidDimsError(ValueError):
+    """The requested embedding columns are not distinct columns of that embedding."""
+
+
 class SourceClosedError(Exception):
     """The source was evicted from the cache while a request was using it; open it again."""
 
@@ -84,13 +93,17 @@ def to_obs_values(raw: Any) -> ObsValues:
         return _categorical(raw)
     if isinstance(raw, pd.api.extensions.ExtensionArray):
         if pd.api.types.is_bool_dtype(raw.dtype):
-            return ObsValues("boolean", np.asarray(raw.fillna(False), dtype=np.uint8))
+            # int8 codes like categories: 0 false, 1 true, -1 missing
+            mask = np.asarray(raw.isna())
+            codes = np.asarray(raw.fillna(False), dtype=np.int8)
+            codes[mask] = -1
+            return ObsValues("boolean", codes, ["false", "true"])
         if pd.api.types.is_numeric_dtype(raw.dtype):
             return ObsValues("numeric", raw.to_numpy(dtype=np.float32, na_value=np.nan))
         raw = np.asarray(raw, dtype=object)
     arr = np.asarray(raw)
     if arr.dtype.kind == "b":
-        return ObsValues("boolean", arr.astype(np.uint8))
+        return ObsValues("boolean", arr.astype(np.int8), ["false", "true"])
     if arr.dtype.kind in "iuf":
         return ObsValues("numeric", arr.astype("<f4"))
     if arr.dtype.kind in "OSUT":
@@ -178,9 +191,9 @@ class Source:
 def _check_dims(info: AnnDataInfo, key: str, dims: list[int]) -> None:
     n = embedding_dims(info).get(key)
     if n is None:
-        raise KeyError(key)
+        raise UnknownElementError("embedding")
     if not dims or len(set(dims)) != len(dims) or any(d < 0 or d >= n for d in dims):
-        raise ValueError("invalid dims")
+        raise InvalidDimsError("invalid dims")
 
 
 class LazySource(Source):
@@ -194,7 +207,7 @@ class LazySource(Source):
 
     def _column_group(self, name: str) -> Any:
         if name not in {c.name for c in self.info.obs.columns}:
-            raise KeyError(name)
+            raise UnknownElementError("column")
         return self.group["obs"][name]
 
     def obs(self, name: str) -> ObsValues:
@@ -210,14 +223,21 @@ class LazySource(Source):
                 block = np.asarray(node[:, cols])
                 return np.asarray(block[:, [cols.index(d) for d in dims]])
             frame: Any = read_elem(node)  # a data frame
-            return np.asarray(frame.to_numpy()[:, dims])
+            cols = frame.iloc[:, dims]
+            try:
+                return np.asarray(cols.apply(pd.to_numeric, errors="raise").to_numpy())
+            except (TypeError, ValueError) as e:
+                raise NeedsConversionError("non_numeric_embedding") from e
 
         return np.ascontiguousarray(self._read(read), dtype="<f4")
 
     def column_meta(self, name: str) -> ColumnMeta:
         col = next(c for c in self.info.obs.columns if c.name == name)
         meta = ColumnMeta(name=name, kind=col.kind, dtype=col.dtype, ordered=col.ordered)
+        if col.kind == "boolean":
+            meta.categories, meta.n_categories = ["false", "true"], 2
         if col.kind != "categorical":
+            # Plain string columns: labels come from /obs/labels (they need a full read).
             return meta
         meta.n_categories = col.n_categories
         if (col.n_categories or 0) > MAX_CATEGORIES:
@@ -263,7 +283,7 @@ class MemorySource(Source):
 
     def obs(self, name: str) -> ObsValues:
         if name not in self.adata.obs.columns:
-            raise KeyError(name)
+            raise UnknownElementError("column")
         return to_obs_values(self.adata.obs[name])
 
     def obsm(self, key: str, dims: list[int]) -> np.ndarray:
@@ -275,6 +295,8 @@ class MemorySource(Source):
     def column_meta(self, name: str) -> ColumnMeta:
         col = next(c for c in self.info.obs.columns if c.name == name)
         meta = ColumnMeta(name=name, kind=col.kind, dtype=col.dtype, ordered=col.ordered)
+        if col.kind == "boolean":
+            meta.categories, meta.n_categories = ["false", "true"], 2
         s = self.adata.obs.get(name)
         if col.kind == "categorical" and s is not None and hasattr(s, "cat"):
             meta.n_categories = len(s.cat.categories)

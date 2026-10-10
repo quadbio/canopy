@@ -14,7 +14,7 @@ from dbx.app import create_app
 from dbx.build import build_id, build_info
 from dbx.config import Config, ConfigError, LoggingConfig, load_config
 from dbx.environment import environment_snapshot
-from dbx.logs import default_log_dir, get_logger, setup_logging
+from dbx.logs import default_log_dir, get_logger, install_stack_dumps, setup_logging
 from dbx.privacy import installation_salt
 
 
@@ -71,10 +71,12 @@ def serve(config: ConfigOpt = None) -> None:
     """Start the web server."""
     cfg = _load(config)
     log_dir = setup_logging(cfg.logging, role="server", salt=_salt(cfg))
+    stacks = install_stack_dumps(log_dir)
     get_logger("dbx.config").info(
         "config_loaded",
         config_file=str(config) if config else None,
         log_dir=str(log_dir) if log_dir else None,
+        stack_dump_file=stacks.name if stacks else None,
         config=cfg.model_dump(mode="json"),
         build=build_info(),
     )

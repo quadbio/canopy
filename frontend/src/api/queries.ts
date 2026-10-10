@@ -31,30 +31,53 @@ export const useCatalogStatus = () =>
     refetchInterval: (q) => (q.state.data?.scanning ? 1000 : 15_000),
   });
 
-export const useMeta = (id: string, table: string | null) =>
-  useQuery({
-    queryKey: ['meta', id, table],
-    queryFn: () => timeAsync('dataset_meta', () => datasets.meta(id, table)),
-    staleTime: 10 * MINUTE,
-    retry: false,
-  });
+/** Query options for a dataset's metadata (shared by `useMeta` and the file browser's Open). */
+export const metaQuery = (id: string, table: string | null) => ({
+  queryKey: ['meta', id, table],
+  queryFn: () => timeAsync('dataset_meta', () => datasets.meta(id, table)),
+  staleTime: 10 * MINUTE,
+  retry: false,
+});
 
-export const useObs = (id: string, table: string | null, column: string | null) =>
+export const useMeta = (id: string, table: string | null) => useQuery(metaQuery(id, table));
+
+// Arrays (10–40 MB each at 10 M cells) are dropped 30 s after no view uses them, and keyed by the
+// dataset version, so a rewritten file is never answered from an old copy.
+const ARRAY_GC_MS = 30_000;
+
+export const useObs = (id: string, table: string | null, column: string | null, version: string | undefined) =>
   useQuery({
-    queryKey: ['obs', id, table, column],
+    queryKey: ['obs', id, version, table, column],
     queryFn: ({ signal }) =>
       timeAsync('obs_loaded', () => datasets.obs(id, table, column!, signal), (a) => ({ n: a.data.length })),
-    enabled: !!column,
-    staleTime: 10 * MINUTE,
+    enabled: !!column && !!version,
+    staleTime: Infinity,
+    gcTime: ARRAY_GC_MS,
     retry: false,
   });
 
-export const useEmbedding = (id: string, table: string | null, key: string | null, dims: number[]) =>
+export const useObsLabels = (id: string, table: string | null, column: string | null, version: string | undefined) =>
   useQuery({
-    queryKey: ['obsm', id, table, key, dims.join(',')],
+    queryKey: ['obs-labels', id, version, table, column],
+    queryFn: () => datasets.labels(id, table, column!),
+    enabled: !!column && !!version,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+export const useEmbedding = (
+  id: string,
+  table: string | null,
+  key: string | null,
+  dims: number[],
+  version: string | undefined,
+) =>
+  useQuery({
+    queryKey: ['obsm', id, version, table, key, dims.join(',')],
     queryFn: ({ signal }) =>
       timeAsync('embedding_loaded', () => datasets.obsm(id, table, key!, dims, signal), (a) => ({ n: a.shape[0] })),
-    enabled: !!key,
-    staleTime: 10 * MINUTE,
+    enabled: !!key && !!version,
+    staleTime: Infinity,
+    gcTime: ARRAY_GC_MS,
     retry: false,
   });

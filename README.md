@@ -62,12 +62,20 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 - `GET /api/datasets/{id}/meta?table=`: cells, genes, obs columns (kind, categories, colours
   from `uns[<col>_colors]`), embeddings. `table` picks a SpatialData table.
 - `GET /api/datasets/{id}/obs?column=` and `/obsm?key=&dims=0,1`: binary little-endian arrays
-  (`x-dbx-dtype`, `x-dbx-shape`, `x-dbx-kind` headers; ETag; gzip). Category codes are int8/16/32
-  with -1 for missing; numbers float32 (NaN for missing).
+  (`x-dbx-dtype`, `x-dbx-shape`, `x-dbx-kind` headers; weak ETag, 304 before any read). Category
+  and boolean codes are int8/16/32 with -1 for missing; numbers float32 (NaN for missing; integers
+  above 2^24 lose precision, so ID-like columns should be strings). Floats are not gzipped (they
+  barely compress); JSON and codes are. `GET …/obs/labels?column=` gives the labels behind the
+  codes, also for plain string columns.
+- Every error reply is `{"detail": {"code", "message"}, "request_id"}`; the code is also logged.
+- The server answers only the host names in `server.allowed_hosts` (DNS-rebinding guard; add the
+  server's name and address when serving to other machines), and POST requests only as JSON.
 - Files are read element by element, never loaded whole; files in the anndata < 0.8 layout are
   loaded fully when their estimated memory size is below `memory.small_file_gb`, else 409
   `needs_conversion:legacy_layout`. Open files and arrays share an LRU within `memory.cache_gb`.
-- `GET /api/stores/<version>/c0/<key>`: converted stores for Viv/zarrita, with Range requests.
+- `GET /api/stores/<version>/c0/<key>`: converted stores for Viv/zarrita, with Range requests,
+  streamed in 1 MB blocks. Symlinks inside a store are followed (stage 1: roots are chosen by the
+  admin); the store folder itself must lie inside its data root.
 - `POST /api/telemetry`: the browser's timing marks and GPU facts, logged as `client_event`.
 
 ## Frontend
@@ -116,3 +124,11 @@ Requests log their route template, status and duration and return `x-request-id`
 return a 500 reply that carries the request id. `timed()` stages nest (`convert/x_csc/write`)
 and log duration, RSS at exit, change and peak. Python warnings are logged as `python_warning`.
 To collect logs from the host, copy the whole log folder.
+
+**When the server seems stuck** (pages spin, nothing new in the log):
+- requests running longer than `server.slow_request_s` (20 s) are logged as `slow_request` every
+  30 s while they run, with route and dataset id; scans log `scan_progress` every 30 s, naming the
+  file being inspected for longest;
+- `kill -USR1 <pid>` (pid: in the log lines, or `pgrep -f "dbx serve"`) writes the stack of every
+  thread to `stacks-<pid>.txt` in the log folder: code locations only, no data. A hard crash
+  writes its stack there too. Copy that file with the logs.

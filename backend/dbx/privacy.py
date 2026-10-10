@@ -80,6 +80,12 @@ def redact_text(text: str, level: str, salt: str) -> str | None:
     return text
 
 
+def scrub_text(text: str) -> str:
+    """Free text that may be stored or shown (e.g. an element's error detail): absolute paths are
+    replaced by `<path>`; names in it are kept (the `standard` rule)."""
+    return _PATH.sub("<path>", text)
+
+
 def code_location(filename: str) -> str:
     """A source file as a location inside the installed software (no home or install prefix)."""
     parts = Path(filename).parts

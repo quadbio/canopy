@@ -10,7 +10,7 @@ from pathlib import Path
 from dbx.catalog.crawl import inside, scan
 from dbx.catalog.db import DB_FILE, CatalogDB, Row
 from dbx.config import Config
-from dbx.environment import NETWORK_FS, filesystem
+from dbx.environment import LOCAL_FS, filesystem
 from dbx.logs import get_logger
 
 
@@ -22,7 +22,9 @@ class Catalog:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.roots = {r.name: r for r in cfg.data_roots}
-        wal = filesystem(cfg.cache_dir).get("fstype") not in NETWORK_FS
+        wal = cfg.catalog.sqlite_wal
+        if wal is None:
+            wal = filesystem(cfg.cache_dir).get("fstype") in LOCAL_FS
         self.db = CatalogDB(cfg.cache_dir / DB_FILE, wal=wal)
         self._lock = threading.Lock()
         self._stop = threading.Event()

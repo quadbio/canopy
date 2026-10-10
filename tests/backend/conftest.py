@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from dbx.config import Config, DataRoot, LoggingConfig
+from dbx.config import Config, DataRoot, LoggingConfig, ServerConfig
 from dbx.logs import current_log_file, setup_logging
 
 
@@ -25,6 +25,8 @@ def cfg(tmp_path: Path) -> Config:
     c = Config(
         data_roots=[DataRoot(name="data", path=data)],
         cache_dir=tmp_path / "cache",
+        # "testserver" is the Host header of FastAPI's TestClient.
+        server=ServerConfig(allowed_hosts=["testserver", "127.0.0.1", "localhost"]),
         logging=LoggingConfig(dir=tmp_path / "logs", memory_sample_interval=0),
     )
     setup_logging(c.logging, role="test", salt="test-salt", to_console=False)

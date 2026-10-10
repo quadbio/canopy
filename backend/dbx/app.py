@@ -1,8 +1,10 @@
-"""FastAPI application factory."""
+"""FastAPI application factory: routers, middleware (request ids, timing, host and POST checks,
+gzip), error envelope, and the housekeeping thread (slow-request watchdog, idle cache sweep)."""
 
 from __future__ import annotations
 
 import re
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -11,7 +13,6 @@ from pathlib import Path
 
 import structlog
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
@@ -25,7 +26,8 @@ from dbx.config import Config
 from dbx.data.api import router as datasets_router
 from dbx.data.cache import DatasetCache
 from dbx.environment import environment_snapshot
-from dbx.logs import MemorySampler, get_logger, memory_snapshot
+from dbx.errors import error_response, install_error_handlers
+from dbx.logs import MemorySampler, get_logger, memory_snapshot, set_rollover_hook
 from dbx.stores import router as stores_router
 from dbx.telemetry import router as telemetry_router
 
@@ -36,8 +38,9 @@ REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
 class ApiGZip:
-    """gzip for API replies (JSON and binary arrays) when the client accepts it. Store files are
-    left alone: they are read by byte range and are already compressed (zstd)."""
+    """gzip for API replies and the app's own files when the client accepts it. Store files are
+    left alone (read by byte range, already zstd-compressed), and so are replies that set
+    `content-encoding: identity` (float arrays, which barely compress)."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -45,7 +48,7 @@ class ApiGZip:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "") if scope["type"] == "http" else ""
-        if path.startswith("/api/") and not path.startswith("/api/stores/"):
+        if not path.startswith("/api/stores/"):
             await self.gzip(scope, receive, send)
         else:
             await self.app(scope, receive, send)
@@ -57,11 +60,88 @@ class SpaStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope: Scope) -> Response:
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as e:
             if e.status_code != 404 or path.startswith("api") or "." in path.rsplit("/", 1)[-1]:
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+        # Built assets have content hashes in their names: cache them for good. The page itself
+        # must be revalidated so a new build is picked up.
+        immutable = path.startswith("assets/") and response.status_code in (200, 304)
+        response.headers["cache-control"] = (
+            "public, max-age=31536000, immutable" if immutable else "no-cache"
+        )
+        return response
+
+
+class InFlight:
+    """Requests being served, so a hang shows up in the log while it lasts."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._items: dict[str, tuple[float, Scope]] = {}
+        self._reported: dict[str, float] = {}
+
+    def start(self, request_id: str, scope: Scope) -> None:
+        with self._lock:
+            self._items[request_id] = (time.monotonic(), scope)
+
+    def end(self, request_id: str) -> None:
+        with self._lock:
+            self._items.pop(request_id, None)
+            self._reported.pop(request_id, None)
+
+    def report_slow(self, threshold_s: float, every_s: float = 30.0) -> None:
+        now = time.monotonic()
+        with self._lock:
+            slow = [
+                (rid, now - t0, scope)
+                for rid, (t0, scope) in self._items.items()
+                if now - t0 >= threshold_s and now - self._reported.get(rid, 0.0) >= every_s
+            ]
+            for rid, _, _ in slow:
+                self._reported[rid] = now
+            n = len(self._items)
+        log = get_logger("dbx.app")
+        for rid, age, scope in slow:
+            route = scope.get("route")
+            log.warning(
+                "slow_request",
+                request_id=rid,
+                route=str(getattr(route, "path", None) or "<routing>"),
+                method=scope.get("method"),
+                dataset_id=(scope.get("path_params") or {}).get("id"),
+                age_s=round(age, 1),
+                n_in_flight=n,
+            )
+
+
+class Housekeeper:
+    """One background thread: reports slow requests every few seconds and drops idle cache
+    entries (so memory is released even when nobody uses the server)."""
+
+    def __init__(self, inflight: InFlight, datasets: DatasetCache, slow_s: float) -> None:
+        self.inflight, self.datasets, self.slow_s = inflight, datasets, slow_s
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="housekeeper", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        tick = 0
+        while not self._stop.wait(5):
+            tick += 1
+            try:
+                self.inflight.report_slow(self.slow_s)
+                if tick % 6 == 0:
+                    self.datasets.sweep()
+            except Exception as e:  # housekeeping must never die
+                get_logger("dbx.app").warning("housekeeping_failed", error=type(e).__name__)
 
 
 def _route(request: Request) -> str:
@@ -77,22 +157,34 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     cfg.cache_dir.mkdir(parents=True, exist_ok=True)
     catalog = Catalog(cfg)
     datasets = DatasetCache(cfg)
+    inflight = InFlight()
+    housekeeper = Housekeeper(inflight, datasets, cfg.server.slow_request_s)
+    allowed = {h.lower() for h in cfg.server.allowed_hosts}
+
+    def log_environment(event: str = "startup") -> None:
+        log.info(
+            event,
+            **environment_snapshot(cfg),
+            data_roots=[r.name for r in cfg.data_roots],
+            allowed_hosts=sorted(allowed),
+            **memory_snapshot(cfg.cache_dir),
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        log.info(
-            "startup",
-            **environment_snapshot(cfg),
-            data_roots=[r.name for r in cfg.data_roots],
-            **memory_snapshot(cfg.cache_dir),
-        )
+        log_environment()
+        # Every new log file starts with the environment, so a rotated log is self-contained.
+        set_rollover_hook(lambda: log_environment("environment"))
         sampler.start()
+        housekeeper.start()
         if background:
             catalog.start()
         yield
         catalog.stop()
+        housekeeper.stop()
         datasets.clear()
         sampler.stop()
+        set_rollover_hook(None)
         log.info("shutdown")
 
     app = FastAPI(title="dbx", version=dbx.__version__, lifespan=lifespan)
@@ -103,6 +195,7 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     app.include_router(datasets_router)
     app.include_router(stores_router)
     app.include_router(telemetry_router)
+    install_error_handlers(app)
     app.add_middleware(ApiGZip)
 
     @app.middleware("http")
@@ -111,36 +204,65 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     ) -> Response:
         given = request.headers.get("x-request-id", "")
         request_id = given if REQUEST_ID.fullmatch(given) else uuid.uuid4().hex[:12]
+        request.state.request_id = request_id
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         t0 = time.perf_counter()
+        inflight.start(request_id, request.scope)
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
         try:
-            response = await call_next(request)
+            if "*" not in allowed and host not in allowed:
+                # A page on another site that resolves its own name to this machine (DNS
+                # rebinding) arrives with a foreign Host header.
+                response: Response = error_response(
+                    request,
+                    400,
+                    "host_not_allowed",
+                    "This host name is not allowed; add it to server.allowed_hosts.",
+                )
+            elif request.method in ("POST", "PUT", "DELETE") and not request.headers.get(
+                "content-type", ""
+            ).startswith("application/json"):
+                # Other sites can only send "simple" cross-site POSTs (form or text bodies);
+                # requiring JSON makes the browser ask first, and this server never agrees.
+                response = error_response(
+                    request, 415, "json_required", "Send this request as application/json."
+                )
+            else:
+                response = await call_next(request)
         except Exception:
             # Every failure still gets a status, a duration and the request id in the reply,
             # so a user's screenshot of the error can be matched to the log.
-            ms = round((time.perf_counter() - t0) * 1000, 2)
             log.exception(
                 "request_failed",
                 method=request.method,
                 route=_route(request),
                 path=request.url.path,
+                dataset_id=(request.scope.get("path_params") or {}).get("id"),
                 status=500,
-                ms=ms,
+                ms=round((time.perf_counter() - t0) * 1000, 2),
             )
-            response = JSONResponse(
-                {"detail": "internal error", "request_id": request_id}, status_code=500
+            response = error_response(
+                request,
+                500,
+                "internal_error",
+                f"Internal error. The server log has the details (request {request_id}).",
             )
         else:
-            ms = round((time.perf_counter() - t0) * 1000, 2)
             log.info(
                 "request",
                 method=request.method,
                 route=_route(request),
                 path=request.url.path,
+                dataset_id=(request.scope.get("path_params") or {}).get("id"),
                 status=response.status_code,
-                ms=ms,
+                code=getattr(request.state, "error_code", None),
+                bytes=response.headers.get("content-length"),
+                ms=round((time.perf_counter() - t0) * 1000, 2),
             )
+        finally:
+            inflight.end(request_id)
+        ms = round((time.perf_counter() - t0) * 1000, 2)
         response.headers["x-request-id"] = request_id
         response.headers["x-dbx-build"] = build_id()
         response.headers["server-timing"] = f"total;dur={ms}"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fitBounds, gridCells } from './layout';
+import { fitBounds, gridCells, resizeView } from './layout';
 
 describe('gridCells', () => {
   it('lays out views as square as possible', () => {
@@ -19,8 +19,22 @@ describe('gridCells', () => {
 
 describe('fitBounds', () => {
   it('centres the bounds and fits the tighter side', () => {
-    const v = fitBounds([0, 0, 100, 50], { x: 0, y: 0, width: 200, height: 200 }, 0);
+    const v = fitBounds([0, 0, 100, 50], { width: 200, height: 200 }, 0);
     expect(v.target).toEqual([50, 25, 0]);
     expect(v.zoom).toBeCloseTo(1); // 2 px per unit
+  });
+
+  it('leaves room for the title row', () => {
+    const v = fitBounds([0, 0, 100, 100], { width: 200, height: 220 }, 0, 20);
+    expect(v.zoom).toBeCloseTo(1);
+    expect(v.target[1]).toBeCloseTo(55); // centre moved up by 10 px = 5 units
+  });
+});
+
+describe('resizeView', () => {
+  it('keeps the centre and scales the zoom with the cell', () => {
+    const v = resizeView({ target: [3, 4, 0], zoom: 2 }, { width: 800, height: 600 }, { width: 400, height: 600 });
+    expect(v.target).toEqual([3, 4, 0]);
+    expect(v.zoom).toBeCloseTo(1);
   });
 });

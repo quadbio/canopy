@@ -33,6 +33,12 @@ class DataRoot(_Strict):
 class ServerConfig(_Strict):
     host: str = "127.0.0.1"
     port: int = 8765
+    # Host names the browser may use to reach the server (the Host header, without port); "*"
+    # allows any. Guards against DNS-rebinding pages. When serving to other machines, add the
+    # server's name and address here.
+    allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
+    # A request running longer than this is logged as `slow_request` while it runs.
+    slow_request_s: float = 20.0
 
 
 class LoggingConfig(_Strict):
@@ -58,6 +64,9 @@ class CatalogConfig(_Strict):
     # Count the files of zarr stores for their size (slow on network storage).
     measure_store_size: bool = False
     max_depth: int = Field(default=32, ge=1)
+    # SQLite write-ahead log for the index: None = only when the cache is on a known local file
+    # system; true/false to force.
+    sqlite_wal: bool | None = None
 
 
 class MemoryConfig(_Strict):

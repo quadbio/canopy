@@ -136,11 +136,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  padding: 4px 6px;
-  pointer-events: auto;
-  width: fit-content;
-  max-width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  pointer-events: none;
 }
+.view-header > * { pointer-events: auto; }
+.view-header-actions { margin-left: auto; display: flex; gap: 2px; }
 .view-title {
   border: 0;
   padding: 2px 6px;
@@ -151,6 +152,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.view-notice {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  margin: 0 var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--warning);
+  font-size: var(--text-sm);
+  pointer-events: auto;
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--space-2));
 }
 .view-error {
   margin: var(--space-2);
@@ -164,8 +180,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .view-legend {
   position: absolute;
   right: var(--space-2);
-  top: var(--space-2);
-  max-height: calc(100% - 2 * var(--space-2));
+  top: 32px; /* below the title row */
+  max-height: calc(100% - 32px - var(--space-2));
   display: flex;
   pointer-events: auto;
 }
@@ -202,6 +218,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .legend-title { display: flex; justify-content: space-between; gap: var(--space-2); font-weight: 600; margin-bottom: var(--space-1); }
 .legend-list { list-style: none; margin: 0; padding: 0; overflow: auto; }
 .legend.collapsed { min-width: 0; }
+.legend-note { margin: 0 0 var(--space-1); color: var(--warning); font-size: var(--text-xs); }
+.view-legend.compact .legend { max-width: 180px; }
 .legend.collapsed .legend-title { margin: 0; }
 .legend-toggle { border: 0; padding: 0; background: transparent; font-weight: 600; cursor: pointer; text-align: left; }
 .legend-item {
@@ -293,3 +311,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 }
 .slider-thumb:focus-visible { outline: none; box-shadow: var(--focus); }
 .slider-value { width: 48px; text-align: right; color: var(--text-muted); font-size: var(--text-sm); }
+
+/* app-level error page */
+.crash { max-width: 560px; margin: 15vh auto; padding: var(--space-5); background: var(--surface); border-radius: var(--radius-md); box-shadow: var(--shadow); }
+.crash h1 { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
+.crash-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from conftest import log_events
 from fastapi.testclient import TestClient
 
@@ -63,7 +65,9 @@ def test_failed_request_gets_status_id_and_log(cfg: Config) -> None:
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.get("/api/boom/patient42", headers={"x-request-id": "req-1"})
     assert r.status_code == 500
-    assert r.json() == {"detail": "internal error", "request_id": "req-1"}
+    body = r.json()
+    assert body["detail"]["code"] == "internal_error" and body["request_id"] == "req-1"
+    assert "req-1" in body["detail"]["message"]
     assert r.headers["x-request-id"] == "req-1" and "server-timing" in r.headers
     ev = next(e for e in log_events() if e["event"] == "request_failed")
     assert ev["status"] == 500 and ev["route"] == "/api/boom/{name}" and ev["ms"] >= 0
@@ -88,3 +92,97 @@ def test_client_telemetry_is_logged_and_bounded(cfg: Config) -> None:
     assert ok.status_code == 204 and bad.status_code == 422
     ev = next(e for e in log_events() if e["event"] == "client_event")
     assert ev["client_event"] == "first_draw" and ev["c_n_points"] == 51787 and ev["ms"] == 12.5
+
+
+def test_error_envelope_is_the_same_everywhere(cfg: Config) -> None:
+    with TestClient(create_app(cfg, background=False)) as client:
+        replies = [
+            client.get("/api/catalog/tree", params={"root": "nope"}),  # ApiError
+            client.get("/api/stores/0123456789abcdef/c0/x"),  # HTTPException
+            client.get("/api/catalog/search"),  # validation error (q missing)
+            client.get("/api/nope"),  # no route
+        ]
+    for r in replies:
+        body = r.json()
+        assert set(body) == {"detail", "request_id"}, body
+        assert set(body["detail"]) == {"code", "message"}
+    assert [r.json()["detail"]["code"] for r in replies] == [
+        "unknown_root",
+        "not_found",
+        "invalid_request",
+        "not_found",
+    ]
+    logged = [e for e in log_events() if e["event"] == "request" and e["status"] >= 400]
+    assert logged[0]["code"] == "unknown_root"
+
+
+def test_foreign_host_and_simple_posts_are_refused(cfg: Config) -> None:
+    with TestClient(create_app(cfg, background=False)) as client:
+        rebinding = client.get("/api/health", headers={"host": "evil.example:8765"})
+        form_post = client.post("/api/catalog/refresh", data={"x": "1"})
+        json_post = client.post("/api/catalog/refresh", json={})
+    assert rebinding.status_code == 400
+    assert rebinding.json()["detail"]["code"] == "host_not_allowed"
+    assert form_post.status_code == 415
+    assert json_post.status_code == 202
+
+
+def test_request_log_has_dataset_id_and_slow_requests_are_reported(cfg: Config) -> None:
+    import threading
+    import time
+
+    from dbx.app import InFlight
+
+    inflight = InFlight()
+    inflight.start("r1", {"method": "GET", "path_params": {"id": "abc123"}})
+    time.sleep(0.05)
+    inflight.report_slow(0.01)
+    inflight.report_slow(0.01)  # not again within 30 s
+    slow = [e for e in log_events() if e["event"] == "slow_request"]
+    assert len(slow) == 1 and slow[0]["dataset_id"] == "abc123" and slow[0]["age_s"] >= 0
+    inflight.end("r1")
+    assert threading.active_count() >= 1
+
+
+def test_stack_dump_on_signal(tmp_path: Path) -> None:
+    import os
+    import signal
+    import time
+
+    from dbx.logs import install_stack_dumps
+
+    path = install_stack_dumps(tmp_path)
+    assert path is not None
+    os.kill(os.getpid(), signal.SIGUSR1)
+    time.sleep(0.2)
+    text = path.read_text()
+    assert "Current thread" in text or "Thread" in text
+    assert "test_app.py" in text
+
+
+def test_telemetry_drops_free_text_and_limits_rate(cfg: Config) -> None:
+    from dbx import telemetry
+
+    with TestClient(create_app(cfg, background=False)) as client:
+        client.post(
+            "/api/telemetry",
+            json={
+                "session": "s-2",
+                "events": [{"name": "x", "fields": {"label": "SECRET value", "type": "embedding"}}],
+            },
+        )
+        old = telemetry.RATE_PER_MINUTE
+        telemetry.RATE_PER_MINUTE = 3
+        try:
+            client.post(
+                "/api/telemetry",
+                json={"session": "s-3", "events": [{"name": "y"}] * 5},
+            )
+        finally:
+            telemetry.RATE_PER_MINUTE = old
+    events = log_events()
+    x = next(e for e in events if e.get("client_event") == "x")
+    assert "c_label" not in x and x["c_type"] == "embedding"
+    assert sum(e.get("client_event") == "y" for e in events) == 3
+    dropped = [e for e in events if e["event"] == "client_events_dropped"]
+    assert {d["client_session"] for d in dropped} == {"s-2", "s-3"}

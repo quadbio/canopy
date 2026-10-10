@@ -1,29 +1,13 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+
+import { collectErrors, drawnFraction, freshPage, openDataset } from './helpers';
 
 // The S4 demo path: find a dataset, open it, see its embedding coloured by cell type.
 
-async function openDataset(page: Page, root: string, name: string) {
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await page.getByRole('button', { name: new RegExp(`${root} \\d+$`) }).waitFor();
-  await page.getByTestId('dataset-row').filter({ hasText: name }).first().click();
-  await expect(page.getByTestId('details')).toContainText(name);
-  await page.getByTestId('open-dataset').click();
-  await expect(page.getByTestId('view-cell').last()).toHaveAttribute('data-status', 'ready');
-}
-
-function collectErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
-  page.on('pageerror', (e) => errors.push(e.message));
-  return errors;
-}
-
 test('file browser lists the example datasets', async ({ page }) => {
-  await page.goto('/');
+  await freshPage(page);
   await expect(page.getByTestId('dataset-row')).toHaveCount(4); // data roots start expanded
-  await page.getByRole('button', { name: /extracted \d+$/ }).click(); // collapse
+  await page.getByRole('treeitem', { name: /extracted \d+$/ }).click(); // collapse
   await expect(page.getByTestId('dataset-row')).toHaveCount(2);
   await page.getByLabel('Search datasets').fill('region_1');
   await expect(page.getByTestId('dataset-row')).toHaveCount(1);
@@ -31,11 +15,14 @@ test('file browser lists the example datasets', async ({ page }) => {
 
 test('open spatial.h5ad and colour its UMAP by cell type', async ({ page }) => {
   const errors = collectErrors(page);
-  await openDataset(page, 'examples', 'spatial.h5ad');
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  const cell = page.getByTestId('view-cell').first();
   await expect(page.getByTestId('legend')).toContainText('celltype');
   await expect(page.getByTestId('embedding-select')).toContainText('X_umap');
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.03); // points drawn
   await page.screenshot({ path: 'test-results/screens/spatial-umap.png' });
-  // hide one category from the legend, then switch colouring to a numeric column
+
   await page.getByTestId('legend').locator('.legend-item').first().click();
   await expect(page.getByTestId('legend').locator('.legend-item.off')).toHaveCount(1);
   await page.getByTestId('colour-select').click();
@@ -46,14 +33,126 @@ test('open spatial.h5ad and colour its UMAP by cell type', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('two datasets side by side in one canvas', async ({ page }) => {
+test('hidden categories are neither drawn nor reported on hover', async ({ page }) => {
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  const cell = page.getByTestId('view-cell').first();
+  const box = (await cell.boundingBox())!;
+  // find a spot with a tooltip
+  let spot: { x: number; y: number } | null = null;
+  for (let gx = 0.2; gx < 0.6 && !spot; gx += 0.05) {
+    for (let gy = 0.3; gy < 0.9 && !spot; gy += 0.05) {
+      await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
+      if (await page.locator('.deck-tooltip').isVisible({ timeout: 150 }).catch(() => false)) {
+        spot = { x: box.x + gx * box.width, y: box.y + gy * box.height };
+      }
+    }
+  }
+  expect(spot).not.toBeNull();
+  await page.getByTestId('legend').getByRole('button', { name: 'hide all' }).click();
+  await expect(page.getByTestId('legend').locator('.legend-item.off').first()).toBeVisible();
+  await page.mouse.move(spot!.x + 1, spot!.y + 1);
+  await page.mouse.move(spot!.x, spot!.y);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.deck-tooltip')).toBeHidden();
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeLessThan(0.002);
+});
+
+test('a broken saved workspace does not break the app', async ({ page }) => {
   const errors = collectErrors(page);
-  await openDataset(page, 'examples', 'dissociated.h5ad');
-  await page.getByTestId('dataset-row').filter({ hasText: 'region_1' }).click();
-  await page.getByTestId('open-dataset').click();
+  await page.goto('/');
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'dbx-workspace',
+      JSON.stringify({
+        state: {
+          views: [
+            { id: 'a', type: 'spatial', datasetId: 'x', table: null, title: 'future view', params: {} },
+            { id: 'b', type: 'embedding', datasetId: 'nope', table: null, title: 'old', params: { embedding: 'X_umap' } },
+          ],
+          selected: 'a',
+        },
+        version: 1,
+      }),
+    ),
+  );
+  await page.reload();
+  await expect(page.getByTestId('dataset-row').first()).toBeVisible(); // the app is up
+  await expect(page.getByTestId('view-cell')).toHaveCount(1); // unknown type dropped
+  await expect(page.getByTestId('view-cell')).toHaveAttribute('data-status', 'error'); // unknown dataset: its own error
+  await page.getByRole('button', { name: 'Close all' }).click();
+  await expect(page.getByTestId('view-cell')).toHaveCount(0);
+  expect(errors.filter((e) => !/404|Not Found/.test(e))).toEqual([]);
+});
+
+test('two datasets side by side; zoom is kept when the second opens', async ({ page }) => {
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await openDataset(page, 'dissociated.h5ad');
+  const first = page.getByTestId('view-cell').first();
+  const box = (await first.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 5; i += 1) await page.mouse.wheel(0, -200);
+  await page.waitForTimeout(300);
+  const zoomed = Number(await first.getAttribute('data-zoom'));
+  await openDataset(page, 'region_1');
   await expect(page.getByTestId('view-cell')).toHaveCount(2);
-  await expect(page.getByTestId('view-cell').nth(1)).toHaveAttribute('data-status', 'ready');
+  const after = Number(await first.getAttribute('data-zoom'));
+  const box2 = (await first.boundingBox())!;
+  // kept: only scaled with the narrower cell, not refitted
+  expect(after).toBeCloseTo(zoomed + Math.log2(Math.min(box2.width / box.width, box2.height / box.height)), 1);
   expect(await page.locator('canvas').count()).toBe(1); // one WebGL context for all views
+  expect(await drawnFraction(page, first)).toBeGreaterThan(0.001); // zoomed in: fewer points on screen
+  expect(await drawnFraction(page, page.getByTestId('view-cell').nth(1))).toBeGreaterThan(0.01);
   await page.screenshot({ path: 'test-results/screens/two-views.png' });
   expect(errors).toEqual([]);
+});
+
+test('four views in dark mode', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await openDataset(page, 'dissociated.h5ad');
+  await openDataset(page, 'region_1');
+  await openDataset(page, 'region_3');
+  await expect(page.getByTestId('view-cell')).toHaveCount(4);
+  for (const c of await page.getByTestId('view-cell').all()) expect(await drawnFraction(page, c)).toBeGreaterThan(0.01);
+  await page.screenshot({ path: 'test-results/screens/four-views-dark.png' });
+});
+
+test('size and opacity changes send no point data to the GPU', async ({ page }) => {
+  // Count bytes uploaded into WebGL buffers.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __uploaded: number };
+    w.__uploaded = 0;
+    for (const proto of [WebGL2RenderingContext.prototype, WebGLRenderingContext.prototype]) {
+      const sub = proto.bufferSubData as (...a: unknown[]) => void;
+      proto.bufferSubData = function (this: unknown, ...a: unknown[]) {
+        const src = a[2] as ArrayBufferView | undefined;
+        w.__uploaded += src?.byteLength ?? 0;
+        return sub.apply(this, a);
+      } as typeof proto.bufferSubData;
+      const data = proto.bufferData as (...a: unknown[]) => void;
+      proto.bufferData = function (this: unknown, ...a: unknown[]) {
+        const src = a[1];
+        w.__uploaded += typeof src === 'number' ? 0 : ((src as ArrayBufferView | null)?.byteLength ?? 0);
+        return data.apply(this, a);
+      } as typeof proto.bufferData;
+    }
+  });
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await page.waitForTimeout(500);
+  const uploaded = () => page.evaluate(() => (window as unknown as { __uploaded: number }).__uploaded);
+  const before = await uploaded();
+  expect(before).toBeGreaterThan(400_000); // the counter works: opening uploaded the points
+  const size = page.getByRole('slider', { name: 'Point size' });
+  await size.focus();
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press('ArrowRight');
+  const opacity = page.getByRole('slider', { name: 'Opacity' });
+  await opacity.focus();
+  for (let i = 0; i < 3; i += 1) await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(300);
+  // 52 k cells: positions alone are 414 KB, colours 207 KB. Only small uniform buffers may move.
+  expect((await uploaded()) - before).toBeLessThan(20_000);
 });

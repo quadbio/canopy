@@ -3,12 +3,15 @@
 
 export type RGB = [number, number, number];
 
-// 30 distinct colours: Okabe–Ito first (colour-blind safe), then Tableau/Kelly-style colours.
+// 54 colours: matplotlib's tab20 (dark tones first, then light), tab20b and tab20c, without the
+// greys (grey means "missing") and without black (invisible on a dark canvas).
 export const CATEGORICAL: string[] = [
-  '#0072b2', '#e69f00', '#009e73', '#cc79a7', '#56b4e9', '#d55e00', '#f0e442', '#000000',
-  '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7',
-  '#9c755f', '#bab0ac', '#875692', '#f38400', '#a1caf1', '#be0032', '#c2b280', '#848482',
-  '#008856', '#e68fac', '#0067a5', '#f99379', '#604e97', '#f6a600',
+  '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#bcbd22', '#17becf',
+  '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5', '#c49c94', '#f7b6d2', '#dbdb8d', '#9edae5',
+  '#393b79', '#5254a3', '#6b6ecf', '#9c9ede', '#637939', '#8ca252', '#b5cf6b', '#cedb9c', '#8c6d31',
+  '#bd9e39', '#e7ba52', '#e7cb94', '#843c39', '#ad494a', '#d6616b', '#e7969c', '#7b4173', '#a55194',
+  '#ce6dbd', '#de9ed6', '#3182bd', '#6baed6', '#9ecae1', '#c6dbef', '#e6550d', '#fd8d3c', '#fdae6b',
+  '#fdd0a2', '#31a354', '#74c476', '#a1d99b', '#c7e9c0', '#756bb1', '#9e9ac8', '#bcbddc', '#dadaeb',
 ];
 
 export const MISSING: RGB = [190, 190, 190];
@@ -21,6 +24,11 @@ export function hexToRgb(hex: string): RGB {
 export function categoryColors(n: number, given: string[] | null): RGB[] {
   if (given && given.length === n) return given.map(hexToRgb);
   return Array.from({ length: n }, (_, i) => hexToRgb(CATEGORICAL[i % CATEGORICAL.length]));
+}
+
+/** True when the default palette has to repeat colours for this many categories. */
+export function coloursRepeat(n: number, given: string[] | null): boolean {
+  return !(given && given.length === n) && n > CATEGORICAL.length;
 }
 
 type Poly = [number, number, number][];

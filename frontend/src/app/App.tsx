@@ -2,7 +2,7 @@
 // settings (right).
 
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { catalog } from '../api/endpoints';
 import { useCatalogStatus } from '../api/queries';
@@ -10,7 +10,6 @@ import { useWorkspace } from '../state/workspace';
 import { FileBrowser } from '../ui/FileBrowser';
 import { Canvas } from '../views/Canvas';
 import { viewType } from '../views/registry';
-import '../views/embedding';
 
 type Theme = 'system' | 'light' | 'dark';
 
@@ -40,9 +39,15 @@ function CatalogStatus() {
   const qc = useQueryClient();
   const scanning = status.data?.scanning;
   const last = status.data?.last_scan;
+  const seen = useRef<number | null | undefined>(undefined);
   useEffect(() => {
-    if (!scanning) void qc.invalidateQueries({ predicate: (q) => ['roots', 'folder', 'search'].includes(String(q.queryKey[0])) });
-  }, [scanning, last?.id, qc]);
+    // Reload the listings when a scan finishes, not when the status first arrives.
+    if (scanning || last === undefined) return;
+    if (seen.current !== undefined && seen.current !== (last?.id ?? null)) {
+      void qc.invalidateQueries({ predicate: (q) => ['roots', 'folder', 'search'].includes(String(q.queryKey[0])) });
+    }
+    seen.current = last?.id ?? null;
+  }, [scanning, last, qc]);
   const when = last?.finished ? new Date(last.finished * 1000).toLocaleTimeString() : null;
   return (
     <div className="catalog-status">
@@ -74,6 +79,16 @@ function SettingsPanel() {
   );
 }
 
+function ResetWorkspace() {
+  const reset = useWorkspace((s) => s.reset);
+  const n = useWorkspace((s) => s.views.length);
+  return (
+    <button className="ghost" onClick={reset} disabled={!n} title="Close all views and start empty">
+      Close all
+    </button>
+  );
+}
+
 export function App() {
   const [theme, cycleTheme] = useTheme();
   return (
@@ -83,6 +98,7 @@ export function App() {
         <span className="muted small">data browser</span>
         <div className="spacer" />
         <CatalogStatus />
+        <ResetWorkspace />
         <button className="ghost" onClick={cycleTheme} title="Theme: system, light or dark">
           Theme: {theme === 'system' ? 'auto' : theme}
         </button>

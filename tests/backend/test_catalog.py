@@ -251,7 +251,7 @@ def test_api_status_and_refresh(client: TestClient) -> None:
     st = client.get("/api/catalog/status").json()
     assert st["scanning"] is False and st["last_scan"]["status"] == "done"
     assert st["last_scan"]["counts"]["new"] == 4
-    r = client.post("/api/catalog/refresh")
+    r = client.post("/api/catalog/refresh", json={})
     assert r.status_code == 202 and r.json() == {"started": True}
 
 
@@ -264,7 +264,7 @@ def test_server_scans_in_background(cfg: Config, data: Path) -> None:
                 break
             time.sleep(0.05)
         assert last["trigger"] == "startup" and last["counts"]["new"] == 1
-        assert c.post("/api/catalog/refresh", params={"full": True}).json()["started"]
+        assert c.post("/api/catalog/refresh", params={"full": True}, json={}).json()["started"]
         for _ in range(100):
             last = c.get("/api/catalog/status").json()["last_scan"]
             if last["trigger"] == "refresh" and last["status"] == "done":
@@ -296,3 +296,86 @@ def test_examples_are_indexed(cfg: Config, example: Callable[[str], Path]) -> No
     }
     row = _db(cfg).get(entry_id("extracted", "202302171205_region_1_scwf.zarr"))
     assert row is not None and row.kind == "spatialdata_zarr" and row.summary["n_points"] >= 1
+
+
+# ---------------------------------------------------------------- review R1 regressions
+
+
+def test_truncated_and_non_anndata_files_get_their_own_reasons(cfg: Config, data: Path) -> None:
+    import h5py
+
+    whole = tiny_h5ad(data / "whole.h5ad").read_bytes()
+    (data / "half.h5ad").write_bytes(whole[: len(whole) // 2])  # half-copied
+    with h5py.File(data / "other.h5ad", "w") as f:  # HDF5, but not AnnData
+        f["x"] = np.arange(3)
+    _scan(cfg)
+    db = _db(cfg)
+    half = db.get(entry_id("data", "half.h5ad"))
+    other = db.get(entry_id("data", "other.h5ad"))
+    assert half is not None and (half.state, half.reason) == ("failed", "truncated")
+    assert other is not None and (other.state, other.reason) == ("unsupported", "not_anndata")
+
+
+def test_unreadable_folder_keeps_its_entries(cfg: Config, data: Path) -> None:
+    tiny_h5ad(data / "ok" / "a.h5ad")
+    tiny_h5ad(data / "locked" / "b.h5ad")
+    _scan(cfg)
+    (data / "locked").chmod(0o000)
+    try:
+        counts = _scan(cfg)
+    finally:
+        (data / "locked").chmod(0o755)
+    assert counts["removed"] == 0 and counts["walk"]["unreadable"] == 1  # type: ignore[index]
+    assert set(_paths(cfg)) == {"ok/a.h5ad", "locked/b.h5ad"}
+
+
+def test_root_listing_empty_keeps_entries_until_full_scan(cfg: Config, data: Path) -> None:
+    tiny_h5ad(data / "a.h5ad")
+    _scan(cfg)
+    (data / "a.h5ad").unlink()  # looks like an unmounted share: the mount point is empty
+    counts = _scan(cfg)
+    assert counts["roots_unavailable"] == 1 and set(_paths(cfg)) == {"a.h5ad"}
+    assert any(e["event"] == "root_empty_kept" for e in log_events())
+    assert _scan(cfg, full=True)["removed"] == 1
+
+
+def test_symlink_to_root_is_not_walked_twice(cfg: Config, data: Path) -> None:
+    tiny_h5ad(data / "sub" / "a.h5ad")
+    (data / "sub" / "up").symlink_to(data)
+    (data / "alias").symlink_to(data / "sub")
+    _scan(cfg)
+    assert set(_paths(cfg)) == {"sub/a.h5ad", "alias/a.h5ad"}
+
+
+def test_cli_scan_leaves_a_live_scan_alone(cfg: Config) -> None:
+    import os
+
+    db = _db(cfg)
+    live = db.start_scan("startup", False)  # this (live) process owns it
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO scans (trigger, full, started, status, pid) "
+            "VALUES ('x', 0, 0, 'running', 999999)"
+        )
+    CatalogDB(cfg.cache_dir / DB_FILE)  # what another process does when it opens the index
+    with db.connect() as con:
+        rows = {r["id"]: (r["status"], r["pid"]) for r in con.execute("SELECT * FROM scans")}
+    assert rows[live] == ("running", os.getpid())
+    assert ("failed", 999999) in rows.values()
+
+
+def test_scan_progress_heartbeat(cfg: Config, data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbx.catalog import crawl
+
+    monkeypatch.setattr(crawl.Progress, "HEARTBEAT_S", 0.05)
+    tiny_h5ad(data / "a.h5ad")
+    real = crawl._check_one
+
+    def slow(*a: object, **k: object) -> object:
+        time.sleep(0.2)
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(crawl, "_check_one", slow)
+    _scan(cfg)
+    beats = [e for e in log_events() if e["event"] == "scan_progress"]
+    assert beats and any(b.get("oldest_path") == "a.h5ad" for b in beats)

@@ -43,6 +43,24 @@ structure that all later views use (reviewer B's S4 checklist, review items S6â€
 - Playwright (software WebGL): browse, search, open `spatial.h5ad`, legend toggling, numeric
   colouring, two datasets in one canvas (one `<canvas>` element), no console errors.
 
+## Changes after the S3â€“S4 code review (R1, 2026-10-10)
+- Saved workspaces are validated on restore (unknown view types dropped, parameters normalised
+  per view type, a notice when a saved column or embedding is gone); error boundaries per view and
+  for the app, which offers "Reset workspace" instead of a blank page.
+- Point size and opacity are uniforms; positions and colours are separate attributes with stable
+  identities: a slider step uploads nothing, a colour change uploads only colours (e2e-tested by
+  counting WebGL buffer bytes).
+- Hidden categories are transparent and not reported on hover. They are still drawn into the
+  picking buffer; a GPU-side mask comes with the shared colour shader (R2).
+- Default palette: 54 colours from matplotlib's tab20/tab20b/tab20c without greys or black; the
+  legend says when colours repeat. Opening or closing views no longer resets other views' zoom.
+- Floats are sent without gzip; built assets are cached as immutable and gzipped.
+- One error envelope; Host allow-list; POSTs must be JSON.
+
+Planned: R2 (start of S5): a shared colour module on the GPU, colours keyed by category name.
+R3 (before S6): views with several panels, linked view state, per-type view options.
+
 ## Known limits
 - No downsampling yet (S5): very large embeddings are sent whole.
-- The colour Worker receives copies of the codes (kept in the query cache for re-colouring).
+- The colour Worker receives copies of the codes (kept in the query cache for re-colouring); R2
+  moves colouring to the GPU.

@@ -26,6 +26,7 @@ from dbx.data.reader import (
     MemorySource,
     NeedsConversionError,
     Source,
+    UnknownElementError,
     estimate_memory_bytes,
 )
 from dbx.inspect.core import open_h5
@@ -48,14 +49,14 @@ def table_info(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataI
     """The AnnData description of a dataset's table (`table` names a SpatialData table)."""
     if fp.anndata is not None:
         if table not in (None, ""):
-            raise KeyError("table")
+            raise UnknownElementError("table")
         return None, fp.anndata
     tables = fp.spatialdata.tables if fp.spatialdata else {}
     if not tables:
         raise NeedsConversionError("no_table")
     name = table or next(iter(tables))
     if name not in tables:
-        raise KeyError("table")
+        raise UnknownElementError("table")
     return name, tables[name]
 
 
@@ -88,27 +89,50 @@ class DatasetCache:
         self.log = get_logger("dbx.cache")
 
     # ------------------------------------------------------------ public
+    def drop_closed_source(self, version: str, table: str | None) -> None:
+        """Forget a source found closed, so the next `source()` opens it again."""
+        key = ("source", version, table or "")
+        with self._lock:
+            e = self._lru.get(key)
+            if e is not None and getattr(e.value, "closed", False):
+                del self._lru[key]
+
     def has_source(self, version: str, table: str | None) -> bool:
         with self._lock:
             return ("source", version, table or "") in self._lru
 
-    def source(self, version: str, fp: Fingerprint, path: Path, table: str | None) -> Source:
+    def source(
+        self, version: str, fp: Fingerprint, path: Path, table: str | None, *, dataset: str = ""
+    ) -> Source:
         key = ("source", version, table or "")
         hit = self._get(key)
         if hit is not None:
             return hit  # type: ignore[no-any-return]
-        with timed("open_dataset", kind=fp.kind) as extra:
+        with timed("open_dataset", kind=fp.kind, dataset_id=dataset) as extra:
             src = open_source(fp, path, table, self.small_file)
             nbytes = estimate_memory_bytes(src.info) if src.mode == "memory" else 0
             extra.update(mode=src.mode, nbytes=nbytes)
         return self._put(key, src, nbytes, is_source=True)  # type: ignore[no-any-return]
 
-    def array(self, key: tuple[Any, ...], load: Callable[[], T], nbytes: Callable[[T], int]) -> T:
+    def array(
+        self,
+        key: tuple[Any, ...],
+        load: Callable[[], T],
+        nbytes: Callable[[T], int],
+        **log_fields: Any,
+    ) -> T:
+        """A cached array; on a miss `load()` runs as a timed `load_array` stage."""
         hit = self._get(("array", *key))
         if hit is not None:
             return hit  # type: ignore[no-any-return]
-        value = load()
-        return self._put(("array", *key), value, nbytes(value), is_source=False)  # type: ignore[no-any-return]
+        with timed("load_array", **log_fields) as extra:
+            value = load()
+            extra["nbytes"] = nbytes(value)
+        return self._put(("array", *key), value, extra["nbytes"], is_source=False)  # type: ignore[no-any-return]
+
+    def sweep(self) -> None:
+        """Drop entries idle for longer than `memory.idle_minutes` (also run by a timer)."""
+        self._sweep()
 
     def stats(self) -> dict[str, int]:
         with self._lock:
@@ -123,7 +147,7 @@ class DatasetCache:
             items = list(self._lru.items())
             self._lru.clear()
         for key, e in items:
-            self._close(key, e, "shutdown")
+            self._close(key, e, "shutdown", wait=True)
 
     # ------------------------------------------------------------ internals
     def _get(self, key: tuple[Any, ...]) -> Any:
@@ -186,12 +210,20 @@ class DatasetCache:
                 "cache_entries": len(self._lru),
             }
 
-    def _close(self, key: tuple[Any, ...], e: _Entry, reason: str) -> None:
+    def _close(self, key: tuple[Any, ...], e: _Entry, reason: str, *, wait: bool = False) -> None:
         if e.is_source:
-            try:
-                with e.value.lock:
-                    e.value.close()
-            except Exception as exc:  # closing must never fail a request
-                self.log.warning("close_failed", error=type(exc).__name__)
+            # Closing waits for a read in progress on that source; never make the request that
+            # caused the eviction wait for it.
+            if wait:
+                self._close_source(e.value)
+            else:
+                threading.Thread(target=self._close_source, args=(e.value,), daemon=True).start()
         if key[-1] != "dup":
             self.log.info("cache_evict", what=key[0], reason=reason, nbytes=e.nbytes)
+
+    def _close_source(self, src: Source) -> None:
+        try:
+            with src.lock:
+                src.close()
+        except Exception as exc:  # closing must never fail anything
+            self.log.warning("close_failed", error=type(exc).__name__)

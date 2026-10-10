@@ -2,8 +2,9 @@
 zarrita, with HTTP Range requests (contract SPEC §1.7).
 
 - Single ranges only: `bytes=a-b`, `bytes=a-` and suffix ranges `bytes=-n`; an end past the file
-  is clamped; a start at or past the end is 416. Several ranges are answered with the whole file
-  (allowed by RFC 9110).
+  is clamped; a start at or past the end is 416. Several ranges, or a malformed one, are answered
+  with the whole file (allowed by RFC 9110).
+- Replies are streamed in 1 MB blocks, so a large range never sits in memory as a whole.
 - Paths are relative keys inside one complete store (one with `manifest.json`); hidden or
   `.`/`..` segments are refused and the resolved path must stay inside the store.
 - A store URL contains the dataset version, so its files never change: they are cacheable
@@ -14,16 +15,18 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/stores", tags=["stores"])
 
 VERSION = re.compile(r"[0-9a-f]{16}")
 CONTRACT = re.compile(r"c\d{1,3}")
 RANGE = re.compile(r"bytes=(\d*)-(\d*)")
+BLOCK = 1 << 20
 CACHE_FOREVER = "public, max-age=31536000, immutable"
 
 
@@ -60,10 +63,27 @@ def parse_range(header: str, size: int) -> tuple[int, int] | None:
             raise HTTPException(416, headers={"content-range": f"bytes */{size}"})
         return max(0, size - n), size - 1
     start = int(m[1])
+    if m[2] and int(m[2]) < start:
+        return None  # malformed (last < first): ignore the header
     end = min(int(m[2]), size - 1) if m[2] else size - 1
-    if start >= size or end < start:
+    if start >= size:
         raise HTTPException(416, headers={"content-range": f"bytes */{size}"})
     return start, end
+
+
+def read_blocks(path: Path, start: int, end: int) -> Iterator[bytes]:
+    """Bytes start..end (inclusive) of a file, in blocks of at most BLOCK bytes."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        pos = start
+        while pos <= end:
+            chunk = os.pread(fd, min(BLOCK, end - pos + 1), pos)
+            if not chunk:  # the file shrank while being read
+                break
+            yield chunk
+            pos += len(chunk)
+    finally:
+        os.close(fd)
 
 
 @router.api_route("/{version}/{contract}/{key:path}", methods=["GET", "HEAD"])
@@ -76,16 +96,15 @@ def store(request: Request, version: str, contract: str, key: str) -> Response:
         return Response(status_code=304, headers=headers)
     rng = parse_range(request.headers.get("range", ""), st.st_size)
     media = "application/json" if path.suffix == ".json" else "application/octet-stream"
-    if rng is None:
-        return FileResponse(path, media_type=media, headers=headers, stat_result=st)
-    start, end = rng
-    headers["content-range"] = f"bytes {start}-{end}/{st.st_size}"
-    if request.method == "HEAD":
-        headers["content-length"] = str(end - start + 1)
-        return Response(status_code=206, headers=headers, media_type=media)
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        data = os.pread(fd, end - start + 1, start)
-    finally:
-        os.close(fd)
-    return Response(content=data, status_code=206, headers=headers, media_type=media)
+    status = 200
+    start, end = 0, st.st_size - 1
+    if rng is not None:
+        start, end = rng
+        status = 206
+        headers["content-range"] = f"bytes {start}-{end}/{st.st_size}"
+    headers["content-length"] = str(end - start + 1)
+    if request.method == "HEAD" or end < start:
+        return Response(status_code=status, headers=headers, media_type=media)
+    return StreamingResponse(
+        read_blocks(path, start, end), status_code=status, headers=headers, media_type=media
+    )

@@ -12,17 +12,21 @@ and correct when several processes write at once. Review findings P2, P3, P5–P
 ## Decisions
 
 **Catalog**
-- Index in SQLite at `<cache_dir>/catalog.sqlite`, one connection per operation; WAL, or the
-  rollback journal when the cache is on a network file system. Rebuildable: a schema change drops
+- Index in SQLite at `<cache_dir>/catalog.sqlite`, one connection per operation; WAL only when
+  the cache is on a known local file system (else the rollback journal; `catalog.sqlite_wal`
+  overrides). Rebuildable: a schema change drops
   and rebuilds it.
 - Entry id = hash of (root name, root-relative path): stable across new versions of a file, so
   workspaces and links keep working; `version` (the fingerprint's dataset id) changes with it.
 - Incremental rescans by version stamp (size + mtime_ns, or the store's newest group/metadata
   stamp). A failed dataset is retried only when it changes or on a `full` scan.
-- An unreadable root keeps its entries (an unmounted share must not empty the catalog); a root
-  removed from the config drops them.
-- States now: `inspected`, `unsupported`, `failed` (reason codes only: `hdf5_lock`,
-  `permission_denied`, `vanished`, `error:<Type>`). S4–S5 add preview/convert states.
+- An unreadable root keeps its entries (an unmounted share must not empty the catalog), and so
+  does a root that suddenly lists nothing (an empty mount point) until a `full` scan; entries
+  under folders that could not be listed are kept too. A root removed from the config drops them.
+  *(Review S3–S4, A-m1.)*
+- States now: `inspected`, `unsupported` (`not_supported`, `not_anndata`), `failed` (reason codes
+  only: `truncated`, `hdf5_lock`, `permission_denied`, `vanished`, `error:<Type>`). S5 adds
+  convert states. Stores are recognised from their own listing (no extra stat calls per folder).
 - Path safety: the walk checks each symlink with `realpath`; `Catalog.resolve()` checks again at
   open time (a symlink may change after the scan). The API takes ids and folder keys only and
   answers from the index.
@@ -35,8 +39,11 @@ and correct when several processes write at once. Review findings P2, P3, P5–P
   Python warnings and third-party lines are redacted the same way. Typer never prints locals.
 - `timed()` nests (`a/b/c`) and reports the peak RSS seen while the stage was open (sampled every
   50 ms by one shared thread), plus the process peak.
-- Requests log the route template (no ids or names), status and duration; failures return a 500
-  JSON reply with the request id. Client request ids are kept only if `[A-Za-z0-9._-]{1,64}`.
+- Requests log the route template, the dataset id (a hash, not a name), status, error code, bytes
+  and duration; the URL path is logged as a name field (a token under `strict`). Failures return
+  a 500 reply with the request id. Client request ids are kept only if `[A-Za-z0-9._-]{1,64}`.
+- Hangs are visible (review A-M2): `slow_request` while a request runs too long, `scan_progress`
+  heartbeats, and `kill -USR1` stack dumps to `stacks-<pid>.txt`.
 - Build identity: `_build.json` in a packaged install (written in S9), else the git commit read
   from `.git`; `dbx --version`, `x-dbx-build` header, `/api/version`.
 - Environment snapshot adds the HDF5 version and locking setting, available memory, and file
@@ -52,8 +59,9 @@ and correct when several processes write at once. Review findings P2, P3, P5–P
 
 ## Known limits
 - An inspection that hangs on a stalled network read blocks its scan thread (threads cannot be
-  killed). The S5 job system runs work in worker processes; inspection can move there with a
-  timeout if the host shows this.
+  killed). It is now visible (heartbeat names the file; stack dumps show where it waits). The S5
+  job system runs work in worker processes; inspection can move there with a timeout if the host
+  shows this.
 - Peak RSS is per process: stages running at the same time in one process see each other's memory.
 - Under `standard`, quoted text in messages becomes a token even when it is a harmless name;
   `debug` is the way to see it on a developer machine.

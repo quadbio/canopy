@@ -18,9 +18,13 @@ export interface ViewOutput {
   bounds: Bounds | null;
   status: 'loading' | 'ready' | 'error';
   error?: string;
+  /** A short note shown on the view, e.g. that a saved setting no longer applies. */
+  notice?: string;
   tooltip?: (index: number) => string | null;
   /** Number of items drawn, for telemetry. */
   n?: number;
+  /** Whatever the view's Legend needs, computed once by the view's hook. */
+  legend?: unknown;
 }
 
 export interface ViewType<P = Record<string, unknown>> {
@@ -28,9 +32,13 @@ export interface ViewType<P = Record<string, unknown>> {
   label: string;
   /** Whether this view can show the dataset, and its default parameters if so. */
   create: (meta: DatasetMeta) => P | null;
+  /** Saved parameters (from an older build, or edited by hand) made valid: defaults filled in,
+   * wrong types replaced. Null if they cannot be used at all. */
+  normalise: (raw: unknown) => P | null;
   useView: (spec: ViewSpec<P>) => ViewOutput;
   Panel: ComponentType<{ spec: ViewSpec<P> }>;
-  Legend?: ComponentType<{ spec: ViewSpec<P> }>;
+  /** `compact`: the cell is small, so the legend starts folded unless the user unfolded it. */
+  Legend?: ComponentType<{ spec: ViewSpec<P>; output: ViewOutput; compact: boolean }>;
 }
 
 const registry = new Map<string, ViewType<never>>();

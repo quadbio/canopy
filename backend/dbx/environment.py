@@ -59,9 +59,12 @@ def filesystem(path: Path) -> dict[str, Any]:
     try:
         for part in psutil.disk_partitions(all=True):
             mp = part.mountpoint
-            if (real == mp or real.startswith(mp.rstrip("/") + "/")) and (
-                best is None or len(mp) > len(best.mountpoint)
-            ):
+            if not (real == mp or real.startswith(mp.rstrip("/") + "/")):
+                continue
+            longer = best is None or len(mp) > len(best.mountpoint)
+            # autofs often shares the mount point with the real (NFS) mount: prefer the latter.
+            same_but_real = best is not None and mp == best.mountpoint and best.fstype == "autofs"
+            if longer or same_but_real:
                 best = part
     except OSError:
         pass
@@ -73,7 +76,45 @@ def filesystem(path: Path) -> dict[str, Any]:
     return out
 
 
-NETWORK_FS = frozenset({"nfs", "nfs4", "cifs", "smbfs", "smb3", "fuse.sshfs", "lustre", "gpfs"})
+NETWORK_FS = frozenset(
+    {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smbfs",
+        "smb3",
+        "fuse.sshfs",
+        "lustre",
+        "gpfs",
+        "beegfs",
+        "ceph",
+        "glusterfs",
+        "fuse.glusterfs",
+        "wekafs",
+        "autofs",
+        "9p",
+    }
+)
+# File systems known to be local; SQLite's WAL is used only on these (it needs shared memory
+# that network file systems do not provide reliably).
+LOCAL_FS = frozenset(
+    {
+        "apfs",
+        "hfs",
+        "ext2",
+        "ext3",
+        "ext4",
+        "xfs",
+        "btrfs",
+        "zfs",
+        "tmpfs",
+        "f2fs",
+        "overlay",
+        "ntfs",
+        "jfs",
+        "reiserfs",
+    }
+)
 
 
 def environment_snapshot(cfg: Config | None = None) -> dict[str, Any]:

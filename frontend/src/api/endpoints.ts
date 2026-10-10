@@ -22,6 +22,10 @@ export const datasets = {
     getJson<DatasetMeta>(url(`/api/datasets/${encodeURIComponent(id)}/meta`, { table })),
   obs: (id: string, table: string | null, column: string, signal?: AbortSignal) =>
     getBinary(url(`/api/datasets/${encodeURIComponent(id)}/obs`, { column, table }), fetch, { signal }),
+  labels: (id: string, table: string | null, column: string) =>
+    getJson<{ kind: string; categories: string[] | null }>(
+      url(`/api/datasets/${encodeURIComponent(id)}/obs/labels`, { column, table }),
+    ),
   obsm: (id: string, table: string | null, key: string, dims: number[], signal?: AbortSignal) =>
     getBinary(url(`/api/datasets/${encodeURIComponent(id)}/obsm`, { key, dims: dims.join(','), table }), fetch, {
       signal,

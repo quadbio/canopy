@@ -1,4 +1,4 @@
-// Grid geometry for 1–9 views in one canvas (row-major, as square as possible).
+// Grid geometry for 1–9 views in one canvas (row-major, as square as possible), and view fitting.
 
 export interface Cell {
   x: number;
@@ -21,11 +21,31 @@ export function gridCells(n: number, width: number, height: number, gap = 1): Ce
   }));
 }
 
-/** Orthographic view state that fits `bounds` into a cell with a margin. */
-export function fitBounds(bounds: [number, number, number, number], cell: Cell, margin = 0.06) {
+export interface OrthoState {
+  target: [number, number, number];
+  zoom: number;
+}
+
+/** Orthographic view state (y up) that fits `bounds` into a cell with a margin, leaving
+ * `insetTop` pixels free at the top (the view's title row). */
+export function fitBounds(
+  bounds: [number, number, number, number],
+  cell: Pick<Cell, 'width' | 'height'>,
+  margin = 0.06,
+  insetTop = 0,
+): OrthoState {
   const [x0, y0, x1, y1] = bounds;
   const dx = Math.max(x1 - x0, 1e-9);
   const dy = Math.max(y1 - y0, 1e-9);
-  const scale = Math.min(cell.width / dx, cell.height / dy) * (1 - 2 * margin);
-  return { target: [(x0 + x1) / 2, (y0 + y1) / 2, 0] as [number, number, number], zoom: Math.log2(scale) };
+  const h = Math.max(cell.height - insetTop, 1);
+  const scale = Math.min(cell.width / dx, h / dy) * (1 - 2 * margin);
+  // Centre the data in the area below the inset: move the view centre up by half the inset.
+  const shift = insetTop / 2 / scale;
+  return { target: [(x0 + x1) / 2, (y0 + y1) / 2 + shift, 0], zoom: Math.log2(scale) };
+}
+
+/** The same place, after the cell changed size: keep the centre, scale the zoom with the cell. */
+export function resizeView(state: OrthoState, from: Pick<Cell, 'width' | 'height'>, to: Pick<Cell, 'width' | 'height'>): OrthoState {
+  const ratio = Math.min(to.width / Math.max(from.width, 1), to.height / Math.max(from.height, 1));
+  return { ...state, zoom: state.zoom + Math.log2(ratio) };
 }

@@ -48,6 +48,9 @@
     --accent-text: #0e1116;
     --accent-soft: #1f2a40;
     --canvas-bg: #0d0e11;
+    --danger: #f0776f;
+    --warning: #e3b14f;
+    --success: #5fc38c;
     --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 30%);
   }
 }
@@ -63,5 +66,8 @@
   --accent-text: #0e1116;
   --accent-soft: #1f2a40;
   --canvas-bg: #0d0e11;
+  --danger: #f0776f;
+  --warning: #e3b14f;
+  --success: #5fc38c;
   --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 30%);
 }

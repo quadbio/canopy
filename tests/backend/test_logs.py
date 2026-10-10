@@ -168,3 +168,52 @@ def test_memory_snapshot_fields(cfg: Config) -> None:
     snap = memory_snapshot()
     assert snap["rss_mb"] > 0
     assert snap["host_total_gb"] > 0
+
+
+def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
+    """End to end: a server in strict mode, with marker names in roots, folders, files, columns
+    and config, exercised through every endpoint and its error paths."""
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+    from fastapi.testclient import TestClient
+
+    from dbx.app import create_app
+    from dbx.catalog import entry_id
+    from dbx.config import CatalogConfig, Config, DataRoot, ServerConfig
+
+    data = tmp_path / "SECRETROOT"
+    (data / "SECRETFOLDER").mkdir(parents=True)
+    a = ad.AnnData(X=np.zeros((4, 2), np.float32))
+    a.obs["SECRETCOLUMN"] = pd.Categorical(["SECRETVALUE", "b", "b", "SECRETVALUE"])
+    a.obsm["X_umap"] = np.zeros((4, 2), np.float32)
+    a.write_h5ad(data / "SECRETFOLDER" / "SECRETFILE.h5ad")
+    (data / "SECRETBROKEN.h5ad").write_bytes(b"\x89HDF\r\n\x1a\n" + b"\0" * 64)
+    cfg = Config(
+        data_roots=[DataRoot(name="SECRETNAME", path=data)],
+        cache_dir=tmp_path / "cache",
+        server=ServerConfig(allowed_hosts=["testserver"]),
+        logging=LoggingConfig(dir=tmp_path / "logs", privacy="strict", memory_sample_interval=0),
+        catalog=CatalogConfig(ignore=["SECRETIGNORE*"]),
+    )
+    setup_logging(cfg.logging, role="test", salt="s", to_console=False)
+    get_logger("dbx.config").info("config_loaded", config=cfg.model_dump(mode="json"))
+    app = create_app(cfg, background=False)
+    app.state.catalog.scan_now()
+    id = entry_id("SECRETNAME", "SECRETFOLDER/SECRETFILE.h5ad")
+    with TestClient(app) as c:
+        c.get("/api/catalog/roots")
+        c.get("/api/catalog/tree", params={"root": "SECRETNAME", "path": "SECRETFOLDER"})
+        c.get("/api/catalog/search", params={"q": "SECRETFILE"})
+        c.get(f"/api/datasets/{id}/meta")
+        c.get(f"/api/datasets/{id}/obs", params={"column": "SECRETCOLUMN"})
+        c.get(f"/api/datasets/{id}/obs", params={"column": "SECRETMISSING"})
+        c.get(f"/api/datasets/{id}/obsm", params={"key": "SECRETKEY"})
+        c.post(
+            "/api/telemetry",
+            json={"session": "s", "events": [{"name": "x", "fields": {"label": "SECRETTEL"}}]},
+        )
+    text = (tmp_path / "logs" / log_file_name("test")).read_text()
+    leaks = [w for w in ("SECRET", str(tmp_path)) if w in text]
+    assert leaks == [], [line for line in text.splitlines() if "SECRET" in line][:3]
+    assert id in text  # the dataset id (a hash) is kept: it is how requests are traced

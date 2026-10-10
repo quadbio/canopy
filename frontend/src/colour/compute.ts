@@ -2,16 +2,16 @@
 
 import { colormapLut, type ColormapName, MISSING, type RGB } from './palettes';
 
+// Opacity is not part of the colours: views apply it as a layer property (free to change).
 export type ColourSpec =
-  | { kind: 'constant'; n: number; rgb: RGB; opacity: number }
+  | { kind: 'constant'; n: number; rgb: RGB }
   | {
       kind: 'categorical';
       codes: Int8Array | Int16Array | Int32Array | Uint8Array;
       colors: RGB[];
       hidden: boolean[]; // per category; hidden points get alpha 0
-      opacity: number;
     }
-  | { kind: 'continuous'; values: Float32Array; colormap: ColormapName; range: [number, number] | null; opacity: number };
+  | { kind: 'continuous'; values: Float32Array; colormap: ColormapName; range: [number, number] | null };
 
 export interface ColourResult {
   rgba: Uint8Array;
@@ -31,10 +31,16 @@ export function robustRange(values: Float32Array): [number, number] {
 }
 
 export function computeColours(spec: ColourSpec): ColourResult {
-  const alpha = Math.round(Math.min(1, Math.max(0, spec.opacity)) * 255);
+  const alpha = 255;
   if (spec.kind === 'constant') {
     const rgba = new Uint8Array(spec.n * 4);
-    for (let i = 0; i < spec.n; i += 1) rgba.set([...spec.rgb, alpha], i * 4);
+    const [r, g, b] = spec.rgb;
+    for (let o = 0; o < rgba.length; o += 4) {
+      rgba[o] = r;
+      rgba[o + 1] = g;
+      rgba[o + 2] = b;
+      rgba[o + 3] = alpha;
+    }
     return { rgba, range: null };
   }
   if (spec.kind === 'categorical') {
@@ -60,7 +66,10 @@ export function computeColours(spec: ColourSpec): ColourResult {
     const v = values[i];
     const o = i * 4;
     if (!Number.isFinite(v)) {
-      rgba.set([...MISSING, alpha], o);
+      rgba[o] = MISSING[0];
+      rgba[o + 1] = MISSING[1];
+      rgba[o + 2] = MISSING[2];
+      rgba[o + 3] = alpha;
       continue;
     }
     const k = Math.min(255, Math.max(0, Math.round((v - range[0]) * scale))) * 3;

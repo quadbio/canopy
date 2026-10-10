@@ -5,7 +5,8 @@
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 port=${DBX_E2E_PORT:-8791}
-tmp=${DBX_E2E_DIR:-$(mktemp -d)}
+tmp=${DBX_E2E_DIR:-$repo/.cache/e2e}  # one reused folder, not a new temp folder per run
+rm -rf "$tmp/cache" "$tmp/logs"
 mkdir -p "$tmp"
 cat > "$tmp/config.toml" <<CONF
 cache_dir = "cache"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gzip
 from collections.abc import Callable
 from pathlib import Path
 
@@ -102,8 +101,9 @@ def test_string_column_is_served_as_sorted_categories(
     codes = decode(r)
     m = c.get(f"/api/datasets/{id}/meta").json()
     label = next(col for col in m["obs"] if col["name"] == "label")
-    # strings written by anndata become categoricals on disk; either way codes index categories
-    cats = label["categories"] or ["s0", "s1", "s2", "s3", "s4"]
+    # anndata writes string columns as categoricals; plain string arrays: see
+    # test_string_and_nullable_boolean_columns
+    cats = label["categories"]
     assert [cats[i] for i in codes[:6]] == list(a.obs["label"][:6])
 
 
@@ -132,12 +132,27 @@ def test_etag_revalidation_and_gzip(tiny_ds: tuple[TestClient, str, ad.AnnData])
     c, id, _ = tiny_ds
     url, q = f"/api/datasets/{id}/obsm", {"key": "X_pca", "dims": "0,1"}
     r = c.get(url, params=q, headers={"accept-encoding": "gzip"})
-    assert r.headers["content-encoding"] == "gzip"  # httpx decodes it transparently
+    # floats barely compress: sent as they are
+    assert r.headers["content-encoding"] == "identity" and r.headers["etag"].startswith('W/"')
     again = c.get(url, params=q, headers={"if-none-match": r.headers["etag"]})
     assert again.status_code == 304 and again.content == b""
-    raw = c.get(url, params=q, headers={"accept-encoding": "identity"})
-    assert "content-encoding" not in raw.headers
-    assert gzip  # noqa: B018 - module used for clarity of intent above
+    meta = c.get(f"/api/datasets/{id}/meta", headers={"accept-encoding": "gzip"})
+    assert meta.headers["content-encoding"] == "gzip"  # JSON is (httpx decodes it)
+
+
+def test_304_is_answered_without_reading(
+    tiny_ds: tuple[TestClient, str, ad.AnnData], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c, id, _ = tiny_ds
+    url, q = f"/api/datasets/{id}/obs", {"column": "score"}
+    etag = c.get(url, params=q).headers["etag"]
+    c.app.state.datasets.clear()  # type: ignore[attr-defined]
+
+    def no_read(*a: object, **k: object) -> None:
+        raise AssertionError("read on revalidation")
+
+    monkeypatch.setattr("dbx.data.reader.LazySource.obs", no_read)
+    assert c.get(url, params=q, headers={"if-none-match": etag}).status_code == 304
 
 
 def test_arrays_are_cached_and_logged(tiny_ds: tuple[TestClient, str, ad.AnnData]) -> None:
@@ -253,8 +268,8 @@ def test_example_h5ad_golden(cfg: Config, example: Callable[[str], Path], name: 
                 assert col["categories"] == [str(x) for x in s.cat.categories]
             np.testing.assert_array_equal(got, s.cat.codes.to_numpy())
             colors = a.uns.get(f"{col['name']}_colors")
-            if col["colors"] is not None:
-                assert col["colors"] == list(colors)
+            if colors is not None and len(colors) == len(s.cat.categories):
+                assert col["colors"] == list(colors), col["name"]
         elif s.dtype.kind in "iuf":
             np.testing.assert_array_equal(got, s.to_numpy().astype(np.float32))
     for e in m["embeddings"]:
@@ -362,3 +377,134 @@ def test_spa_fallback(cfg: Config) -> None:
     assert page.status_code == 200 and '<div id="root">' in page.text
     assert c.get("/api/nope").status_code == 404
     assert c.get("/missing.js").status_code == 404
+
+
+# ---------------------------------------------------------------- review R1 regressions
+
+
+def test_store_range_spanning_blocks_is_streamed(
+    store_client: tuple[TestClient, str, Path],
+) -> None:
+    from dbx.stores import BLOCK
+
+    c, url, base = store_client
+    big = base / "big.bin"
+    data = np.random.default_rng(0).integers(0, 255, 3 * BLOCK + 17, dtype=np.uint8).tobytes()
+    big.write_bytes(data)
+    r = c.get(f"{url}/big.bin", headers={"range": f"bytes={BLOCK - 5}-"})
+    assert r.status_code == 206 and r.content == data[BLOCK - 5 :]
+    assert r.headers["content-length"] == str(len(data) - BLOCK + 5)
+    whole = c.get(f"{url}/big.bin")
+    assert whole.status_code == 200 and whole.content == data
+    bad = c.get(f"{url}/big.bin", headers={"range": "bytes=5-3"})  # malformed: ignored
+    assert bad.status_code == 200 and len(bad.content) == len(data)
+
+
+def test_string_and_nullable_boolean_columns(cfg: Config) -> None:
+    import h5py
+
+    p = cfg.data_roots[0].path / "s.h5ad"
+    a = tiny(p)
+    with h5py.File(p, "a") as f:  # a plain string array, as R and older tools write it
+        del f["obs/label"]
+        f["obs"].create_dataset(
+            "label",
+            data=np.array([f"s{i % 5}" for i in range(a.n_obs)], dtype=object),
+            dtype=h5py.string_dtype(),
+        )
+        f["obs/label"].attrs["encoding-type"] = "string-array"
+        f["obs/label"].attrs["encoding-version"] = "0.2.0"
+    a2 = ad.read_h5ad(p)
+    a2.obs["maybe"] = pd.array([True, None, False] * 100, dtype="boolean")
+    a2.write_h5ad(p)
+    with h5py.File(p, "a") as f:
+        del f["obs/label"]
+        f["obs"].create_dataset(
+            "label",
+            data=np.array([f"s{i % 5}" for i in range(a.n_obs)], dtype=object),
+            dtype=h5py.string_dtype(),
+        )
+        f["obs/label"].attrs["encoding-type"] = "string-array"
+        f["obs/label"].attrs["encoding-version"] = "0.2.0"
+    c = client_for(cfg)
+    id = entry_id("data", "s.h5ad")
+    meta = {col["name"]: col for col in c.get(f"/api/datasets/{id}/meta").json()["obs"]}
+    assert meta["label"]["kind"] == "string"
+    labels = c.get(f"/api/datasets/{id}/obs/labels", params={"column": "label"}).json()
+    assert labels == {"kind": "string", "categories": ["s0", "s1", "s2", "s3", "s4"]}
+    codes = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "label"}))
+    assert [labels["categories"][i] for i in codes[:6]] == ["s0", "s1", "s2", "s3", "s4", "s0"]
+    r = c.get(f"/api/datasets/{id}/obs", params={"column": "maybe"})
+    assert r.headers["x-dbx-kind"] == "boolean" and r.headers["x-dbx-dtype"] == "int8"
+    assert decode(r)[:3].tolist() == [1, -1, 0]  # missing stays missing
+    assert meta["maybe"]["categories"] == ["false", "true"]
+
+
+def test_source_closed_during_a_request_is_reopened(cfg: Config) -> None:
+    tiny(cfg.data_roots[0].path / "t.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "t.h5ad")
+    assert c.get(f"/api/datasets/{id}/meta").status_code == 200
+    cache = c.app.state.datasets  # type: ignore[attr-defined]
+    real_source = cache.source
+    calls = []
+
+    def closing_source(*a: object, **k: object) -> object:
+        src = real_source(*a, **k)
+        if not calls:  # the first source handed out is closed under the request's feet
+            src.close()
+        calls.append(1)
+        return src
+
+    cache.source = closing_source
+    r = c.get(f"/api/datasets/{id}/obs", params={"column": "score"})
+    assert r.status_code == 200 and len(calls) == 2
+
+
+def test_preview_never_reads_the_matrix(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    import h5py
+
+    tiny(cfg.data_roots[0].path / "t.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "t.h5ad")
+    real_getitem = h5py.Dataset.__getitem__
+
+    def guarded(self: h5py.Dataset, key: object) -> object:
+        assert not self.name.startswith("/X"), f"X was read: {self.name}"
+        return real_getitem(self, key)
+
+    monkeypatch.setattr(h5py.Dataset, "__getitem__", guarded)
+    m = c.get(f"/api/datasets/{id}/meta").json()
+    for col in m["obs"]:
+        assert c.get(f"/api/datasets/{id}/obs", params={"column": col["name"]}).status_code == 200
+    for e in m["embeddings"]:
+        assert c.get(f"/api/datasets/{id}/obsm", params={"key": e["key"]}).status_code == 200
+
+
+def test_reader_failure_is_a_logged_500_not_a_404(
+    tiny_ds: tuple[TestClient, str, ad.AnnData], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c, id, _ = tiny_ds
+
+    def broken(*a: object, **k: object) -> None:
+        raise KeyError("inside a library")
+
+    monkeypatch.setattr("dbx.data.reader.read_elem", broken)
+    r = c.get(f"/api/datasets/{id}/obs", params={"column": "score"})
+    assert r.status_code == 500 and r.json()["detail"]["code"] == "internal_error"
+    failed = next(e for e in log_events() if e["event"] == "request_failed")
+    assert failed["exc_type"] == "KeyError" and failed["dataset_id"] == id
+
+
+def test_idle_entries_are_swept(cfg: Config) -> None:
+    import time
+
+    from dbx.data.cache import DatasetCache
+
+    cfg.memory = MemoryConfig(idle_minutes=0.001)  # 60 ms
+    cache = DatasetCache(cfg)
+    cache.array(("k",), lambda: np.zeros(10), lambda a: int(a.nbytes))
+    time.sleep(0.1)
+    cache.sweep()
+    assert cache.stats()["entries"] == 0
+    assert any(e["event"] == "cache_evict" and e["reason"] == "idle" for e in log_events())

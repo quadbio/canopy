@@ -19,6 +19,7 @@ from dbx.inspect.models import (
 )
 from dbx.inspect.nodes import Node, attr_list
 from dbx.logs import get_logger
+from dbx.privacy import scrub_text
 
 DETAIL_CHARS = 200
 
@@ -32,7 +33,10 @@ def _guarded[T](
     except Exception as e:
         errors.append(
             ElementError(
-                kind=kind, element=name, error_type=type(e).__name__, detail=str(e)[:DETAIL_CHARS]
+                kind=kind,
+                element=name,
+                error_type=type(e).__name__,
+                detail=scrub_text(str(e))[:DETAIL_CHARS],
             )
         )
         get_logger("dbx.inspect").warning(

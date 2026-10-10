@@ -118,3 +118,17 @@ Resume rule: read this file, then continue with the first unchecked step.
     `check-all`. 155 backend tests, 11 frontend unit tests, 3 e2e tests.
   - Next: user reviews the demo; then S5 (gene expression, converter, jobs, memory guard,
     downsampling).
+- 2026-10-10 Cold code review S3–S4 (2 subagents; ../reviews/code_review_S3-S4/: reviewer_A,
+  reviewer_B, SUMMARY). A: S3 7, S4 backend 6.5, logging 6.5; B: F9 6.5, F10 7, F11a 7, F7 7.5.
+  1 blocker, 13 major. All accepted. Batch R1 DONE (list in SUMMARY §4): Range streaming, hang
+  visibility (slow_request, scan_progress, SIGUSR1 stacks), strict leaks closed + end-to-end strict
+  test, truncated/not_anndata reasons, error envelope + codes in logs, no gzip on floats, catalog
+  keeps entries on transient errors, string labels endpoint, nullable bools; frontend: validated
+  workspace restore + error boundaries + Close all, stable GPU attributes (uploads tested), hidden
+  not hovered, zoom kept, new palette, legend layout, version-keyed queries, view auto-registration.
+  Also added: demo launcher + guide (docs/demo), architecture map (docs/architecture, artifact).
+  176 backend tests, 19 frontend unit tests, 7 e2e tests.
+  - Planned: R2 (GPU colour module, name-keyed colours) as the first task of S5; R3 (multi-panel
+    view contract, per-type view options) before S6.
+  - Next: user tries the demo (docs/demo/S4-demo-guide.md) and sends feedback; then S5.
+

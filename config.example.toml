@@ -9,6 +9,8 @@ path = "../example_datasets"
 [server]
 host = "127.0.0.1"
 port = 8765
+allowed_hosts = ["localhost", "127.0.0.1"]   # add the server's name/address when serving to others
+slow_request_s = 20                          # longer requests are logged while they run
 
 [logging]
 dir = "logs"
@@ -22,6 +24,7 @@ ignore = []                  # glob patterns on names or root-relative paths, e.
 rescan_minutes = 10          # automatic rescans; 0 = only at start-up and on "refresh"
 inspect_workers = 4          # datasets inspected in parallel
 measure_store_size = false   # count files of zarr stores for their size (slow on network storage)
+# sqlite_wal = true          # default: only when the cache is on a known local file system
 
 [memory]
 budget_gb = 8                # host: ~800

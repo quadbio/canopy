@@ -31,6 +31,7 @@ function clean(fields: Record<string, Value | null | undefined>): Record<string,
 export function event(name: string, ms: number | null = null, fields: Record<string, Value | null | undefined> = {}) {
   queue.push({ name, ms: ms === null ? null : Math.round(ms * 100) / 100, fields: clean(fields) });
   performance.mark(`dbx:${name}`);
+  if (performance.getEntriesByType('mark').length > 500) performance.clearMarks();
   if (typeof window === 'undefined') return;
   if (queue.length >= 100) flush();
   else timer ??= setTimeout(flush, FLUSH_MS);

@@ -6,11 +6,12 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from dbx.catalog.db import Row
 from dbx.catalog.service import Catalog
+from dbx.errors import ApiError
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -84,10 +85,10 @@ def _entry(r: Row) -> DatasetEntry:
 def clean_folder(path: str) -> str:
     """A folder key as stored in the index; rejects anything that is not a plain relative path."""
     if len(path) > MAX_PATH or "\0" in path or "\\" in path:
-        raise HTTPException(400, "invalid folder path")
+        raise ApiError(400, "invalid_folder", "The folder path is not a plain relative path.")
     parts = [p for p in path.strip("/").split("/") if p]
     if any(p in (".", "..") for p in parts):
-        raise HTTPException(400, "invalid folder path")
+        raise ApiError(400, "invalid_folder", "The folder path is not a plain relative path.")
     return "/".join(parts)
 
 
@@ -105,11 +106,11 @@ def roots(request: Request) -> list[RootEntry]:
 def tree(request: Request, root: str, path: str = "") -> FolderListing:
     cat = _catalog(request)
     if root not in cat.roots:
-        raise HTTPException(404, "unknown data root")
+        raise ApiError(404, "unknown_root", "No data root with this name.")
     folder = clean_folder(path)
     rows, sub = cat.db.folder(root, folder)
     if folder and not rows and not sub:
-        raise HTTPException(404, "folder not in the catalog")
+        raise ApiError(404, "unknown_folder", "No indexed dataset is in this folder.")
     return FolderListing(
         root=root,
         path=folder,
@@ -130,7 +131,7 @@ def search(
 ) -> list[DatasetEntry]:
     cat = _catalog(request)
     if root is not None and root not in cat.roots:
-        raise HTTPException(404, "unknown data root")
+        raise ApiError(404, "unknown_root", "No data root with this name.")
     rows = cat.db.search(q, root=root, limit=limit)
     return [_entry(r) for r in rows if r.root in cat.roots]
 
@@ -139,7 +140,7 @@ def search(
 def dataset(request: Request, id: str) -> DatasetDetail:
     row = _catalog(request).get(id)
     if row is None:
-        raise HTTPException(404, "unknown dataset")
+        raise ApiError(404, "unknown_dataset", "No dataset with this id in the catalog.")
     fp = json.loads(row.fingerprint) if row.fingerprint else None
     if fp is not None:
         fp["path"] = row.relpath

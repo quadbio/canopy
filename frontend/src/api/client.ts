@@ -16,6 +16,7 @@ export class ApiError extends Error {
     readonly requestId: string | null,
     detail: unknown = null,
   ) {
+    // Server errors: {"detail": {"code", "message"}, "request_id"} (see backend/dbx/errors.py).
     const d = detail as { code?: string; message?: string } | string | null;
     const message = typeof d === 'string' ? d : (d?.message ?? null);
     super(message ?? `API ${path} failed with ${status}${requestId ? ` (request ${requestId})` : ''}`);

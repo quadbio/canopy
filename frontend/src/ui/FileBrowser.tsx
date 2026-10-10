@@ -2,13 +2,12 @@
 // "Open". Everything comes from the catalog index; nothing here touches the file system.
 
 import { useQueryClient } from '@tanstack/react-query';
-import { useDeferredValue, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ApiError } from '../api/client';
-import { datasets } from '../api/endpoints';
-import { useDatasetDetail, useFolder, useRoots, useSearch } from '../api/queries';
+import { metaQuery, useDatasetDetail, useFolder, useRoots, useSearch } from '../api/queries';
 import type { DatasetEntry } from '../api/types';
-import { useWorkspace } from '../state/workspace';
+import { MAX_VIEWS, useWorkspace } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { viewTypes } from '../views/registry';
 import { formatBytes, formatCount } from './controls';
@@ -26,7 +25,9 @@ function DatasetRow({ d, depth }: { d: DatasetEntry; depth: number }) {
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => select(d.id)}
         data-testid="dataset-row"
-        title={d.path}
+        title={`${d.path}${d.size_bytes !== null ? ` · ${formatBytes(d.size_bytes)}` : ''}`}
+        role="treeitem"
+        aria-selected={selected}
       >
         <span className={`badge kind-${d.kind ?? 'none'}`}>{d.kind ? KIND_LABEL[d.kind] : d.state}</span>
         <span className="tree-name">{d.name}</span>
@@ -41,13 +42,19 @@ function Folder({ root, path, name, depth, count }: { root: string; path: string
   const q = useFolder(root, path, open);
   return (
     <li>
-      <button className="tree-row folder" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button
+        className="tree-row folder"
+        style={{ paddingLeft: 8 + depth * 14 }}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        role="treeitem"
+      >
         <span className="chevron">{open ? '▾' : '▸'}</span>
         <span className="tree-name">{name}</span>
         <span className="tree-meta">{count}</span>
       </button>
       {open && (
-        <ul className="tree">
+        <ul className="tree" role="group">
           {q.isLoading && <li className="muted small" style={{ paddingLeft: 22 + depth * 14 }}>Loading…</li>}
           {q.error && <li className="error small">{String(q.error.message)}</li>}
           {q.data?.folders.map((f) => (
@@ -78,20 +85,21 @@ function Details({ id }: { id: string }) {
     setBusy(true);
     setProblem(null);
     try {
-      const meta = await queryClient.fetchQuery({
-        queryKey: ['meta', d.id, chosenTable],
-        queryFn: () => datasets.meta(d.id, chosenTable),
-      });
+      const meta = await queryClient.fetchQuery(metaQuery(d.id, chosenTable));
       for (const t of viewTypes()) {
         const params = t.create(meta);
         if (params) {
-          addView({
+          const added = addView({
             type: t.type,
             datasetId: d.id,
             table: chosenTable,
             title: chosenTable ? `${d.name} · ${chosenTable}` : d.name,
             params,
           });
+          if (added === null) {
+            setProblem(`At most ${MAX_VIEWS} views fit in the canvas: close one first.`);
+            return;
+          }
           event('view_opened', null, { type: t.type, kind: d.kind ?? '', n_obs: meta.n_obs });
           return;
         }
@@ -175,7 +183,11 @@ function Details({ id }: { id: string }) {
 export function FileBrowser() {
   const roots = useRoots();
   const [query, setQuery] = useState('');
-  const q = useDeferredValue(query.trim());
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setQ(query.trim()), 150); // one request per pause, not per key
+    return () => clearTimeout(t);
+  }, [query]);
   const search = useSearch(q);
   const selected = useWorkspace((s) => s.browserSelection);
 
@@ -192,12 +204,15 @@ export function FileBrowser() {
       </div>
       <div className="sidebar-tree">
         {q ? (
-          <ul className="tree">
+          <ul className="tree" role="tree" aria-label="Search results">
             {search.data?.length === 0 && <li className="muted small pad">No matches.</li>}
             {search.data?.map((d) => <DatasetRow key={d.id} d={d} depth={0} />)}
+            {search.data?.length === 100 && (
+              <li className="muted small pad">Showing the first 100 matches; type more to narrow down.</li>
+            )}
           </ul>
         ) : (
-          <ul className="tree">
+          <ul className="tree" role="tree" aria-label="Data folders">
             {roots.error && <li className="error small pad">{String(roots.error.message)}</li>}
             {roots.data?.length === 0 && <li className="muted small pad">No data roots configured.</li>}
             {roots.data?.map((r) => (

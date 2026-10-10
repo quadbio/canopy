@@ -8,6 +8,7 @@ classic rollback journal is used instead.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator
@@ -16,7 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "1"
+import psutil
+
+SCHEMA_VERSION = "2"
 DB_FILE = "catalog.sqlite"
 
 _SCHEMA = """
@@ -50,6 +53,7 @@ CREATE TABLE IF NOT EXISTS scans (
     started REAL NOT NULL,
     finished REAL,
     status TEXT NOT NULL,        -- running | done | failed
+    pid INTEGER,                 -- process running the scan (server or `dbx catalog scan`)
     counts TEXT,                 -- JSON
     error TEXT
 );
@@ -129,10 +133,15 @@ class CatalogDB:
             elif v[0] != SCHEMA_VERSION:  # the index is rebuildable: start over
                 con.executescript("DROP TABLE datasets; DROP TABLE scans;" + _SCHEMA)
                 con.execute("UPDATE meta SET value=? WHERE key='schema'", (SCHEMA_VERSION,))
-            # Scans interrupted by a crash or restart.
-            con.execute(
-                "UPDATE scans SET status='failed', error='interrupted' WHERE status='running'"
-            )
+            # Scans whose process is gone were interrupted (crash or restart). A scan running in
+            # another live process (the server, while `dbx catalog scan` runs) is left alone.
+            running = con.execute("SELECT id, pid FROM scans WHERE status='running'").fetchall()
+            for r in running:
+                if r["pid"] is None or not psutil.pid_exists(r["pid"]):
+                    con.execute(
+                        "UPDATE scans SET status='failed', error='interrupted' WHERE id=?",
+                        (r["id"],),
+                    )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -150,8 +159,9 @@ class CatalogDB:
     def start_scan(self, trigger: str, full: bool) -> int:
         with self.connect() as con:
             cur = con.execute(
-                "INSERT INTO scans (trigger, full, started, status) VALUES (?, ?, ?, 'running')",
-                (trigger, int(full), time.time()),
+                "INSERT INTO scans (trigger, full, started, status, pid) "
+                "VALUES (?, ?, ?, 'running', ?)",
+                (trigger, int(full), time.time(), os.getpid()),
             )
             return int(cur.lastrowid or 0)
 
