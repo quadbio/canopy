@@ -17,6 +17,13 @@ pixi run serve --config config.toml    # http://127.0.0.1:8765
 
 During frontend work, `pixi run -e dev fe-dev` starts Vite on :5173 with `/api` proxied to the backend.
 
+## Demo and architecture map
+
+- `pixi run -e dev demo`: the current demo on this Mac at http://127.0.0.1:8765 on the example
+  datasets. Walk-through and how to send feedback: `docs/demo/S4-demo-guide.md`.
+- `pixi run -e dev architecture`: regenerates `docs/architecture/index.html`, a map of modules,
+  classes, methods and their relationships, read from the code (open it in a browser).
+
 ## Configuration, logs and privacy
 
 - Every command takes `--config FILE` (or the `DBX_CONFIG` environment variable). Unknown keys,

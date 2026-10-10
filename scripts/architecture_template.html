@@ -1,0 +1,462 @@
+<title>dbx Architecture Map</title>
+<meta name="description" content="Modules, classes, methods and their relationships in the dbx data browser, generated from the code.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: a technical atlas. Wide reading column for prose and diagrams; the explorer is a
+   two-pane instrument (module index | module sheet). Package hues encode which part of the
+   system a module belongs to, the same hue everywhere it appears. */
+:root {
+  --bg: #f5f6f4;
+  --surface: #ffffff;
+  --ink: #1d2321;
+  --muted: #5f6b67;
+  --line: #d9dfdc;
+  --accent: #1f6f5c;
+  --accent-soft: #e2efeb;
+  --code-bg: #eef1ef;
+  --hue-catalog: #2f7d6d;
+  --hue-data: #3b62a8;
+  --hue-inspect: #8a5a2b;
+  --hue-contract: #7a4a8c;
+  --hue-synth: #9a6b00;
+  --hue-core: #4c5a57;
+  --hue-api: #2f5c8f;
+  --hue-views: #2f7d6d;
+  --hue-ui: #a2513a;
+  --hue-colour: #8a3f78;
+  --hue-state: #6a5b2a;
+  --hue-telemetry: #4c5a57;
+  --hue-app: #4c5a57;
+  --font-display: 'IBM Plex Sans Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --step-3: 2.25rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121615; --surface: #1a1f1e; --ink: #e3e9e6; --muted: #98a59f; --line: #2c3432;
+    --accent: #5fbfa6; --accent-soft: #1c302b; --code-bg: #20272500;
+    --hue-catalog: #5fbfa6; --hue-data: #7ea2e6; --hue-inspect: #d29a5f; --hue-contract: #be8fd1;
+    --hue-synth: #d6aa3f; --hue-core: #9aaba6; --hue-api: #7ea2e6; --hue-views: #5fbfa6;
+    --hue-ui: #e08e74; --hue-colour: #d585c0; --hue-state: #c7b46a; --hue-telemetry: #9aaba6; --hue-app: #9aaba6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121615; --surface: #1a1f1e; --ink: #e3e9e6; --muted: #98a59f; --line: #2c3432;
+  --accent: #5fbfa6; --accent-soft: #1c302b; --code-bg: #20272500;
+  --hue-catalog: #5fbfa6; --hue-data: #7ea2e6; --hue-inspect: #d29a5f; --hue-contract: #be8fd1;
+  --hue-synth: #d6aa3f; --hue-core: #9aaba6; --hue-api: #7ea2e6; --hue-views: #5fbfa6;
+  --hue-ui: #e08e74; --hue-colour: #d585c0; --hue-state: #c7b46a; --hue-telemetry: #9aaba6; --hue-app: #9aaba6;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 400 var(--step-0)/1.55 var(--font-body); padding-inline: 16px; padding-block: 0 64px; }
+.wrap { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+header.top { padding-block: 40px 8px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 24px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: 0.005em; }
+h1 { font-size: var(--step-3); font-weight: 700; }
+h2 { font-size: var(--step-2); font-weight: 600; }
+h3 { font-size: var(--step-1); font-weight: 600; }
+.lede { max-width: 68ch; color: var(--muted); margin: 0; }
+.eyebrow { font: 500 var(--step--1) var(--font-mono); color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 8px 0 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+.stats li { display: flex; flex-direction: column; }
+.stats b { font: 600 var(--step-2) var(--font-display); }
+.stats span { color: var(--muted); font-size: var(--step--1); }
+section { display: flex; flex-direction: column; gap: 16px; }
+section > p { max-width: 72ch; margin: 0; }
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; }
+.figure pre.mermaid { margin: 0; background: transparent; font-family: var(--font-body); }
+.figcaption { color: var(--muted); font-size: var(--step--1); max-width: 80ch; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { font: 500 var(--step--1) var(--font-body); padding: 6px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.legend-hues { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--step--1); color: var(--muted); }
+.legend-hues span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; background: var(--h); vertical-align: -1px; }
+
+/* explorer */
+.explorer { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-height: 640px; }
+.index { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; max-height: 820px; }
+.index input { margin: 12px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
+.index ul { list-style: none; margin: 0; padding: 0 0 12px; overflow: auto; }
+.index .group { padding: 10px 14px 4px; font: 500 var(--step--1) var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.index button { display: flex; width: 100%; gap: 8px; align-items: baseline; padding: 4px 14px; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font: 400 var(--step--1) var(--font-mono); }
+.index button:hover { background: var(--accent-soft); }
+.index button[aria-current="true"] { background: var(--accent-soft); font-weight: 500; }
+.index button i { width: 8px; height: 8px; border-radius: 2px; background: var(--h); flex: none; align-self: center; }
+.index button small { margin-left: auto; color: var(--muted); }
+.sheet { padding: 20px 24px; min-width: 0; overflow: auto; max-height: 820px; display: flex; flex-direction: column; gap: 18px; }
+.sheet .path { font: 400 var(--step--1) var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
+.sheet .doc { margin: 0; max-width: 75ch; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 400 var(--step--1) var(--font-mono); border: 1px solid var(--line); border-left: 3px solid var(--h); padding: 2px 8px; border-radius: 4px; background: var(--bg); color: var(--ink); cursor: pointer; }
+.chip:hover { border-color: var(--h); }
+.relations { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.relations h4, .sheet h4 { margin: 0 0 6px; font: 600 var(--step--1) var(--font-body); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.item { border-top: 1px solid var(--line); padding: 10px 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.item code, .sig { font-family: var(--font-mono); font-size: var(--step--1); }
+.item .name { font: 600 var(--step-0) var(--font-mono); }
+.item .kind { font: 500 11px var(--font-mono); color: var(--muted); text-transform: uppercase; margin-right: 6px; }
+.item p { margin: 0; color: var(--ink); max-width: 75ch; }
+.item .muted, .muted { color: var(--muted); }
+.methods { list-style: none; margin: 6px 0 0 0; padding: 0 0 0 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.methods li { min-width: 0; }
+.methods .private { opacity: 0.7; }
+.route { font: 500 11px var(--font-mono); color: var(--surface); background: var(--hue-api); padding: 1px 6px; border-radius: 3px; margin-right: 6px; }
+.toggle { font-size: var(--step--1); color: var(--muted); display: flex; gap: 6px; align-items: center; }
+
+table.api { width: 100%; border-collapse: collapse; font-size: var(--step--1); }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table.api th, table.api td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.api th { font: 600 var(--step--1) var(--font-body); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+table.api td:first-child, table.api td:nth-child(2) { font-family: var(--font-mono); white-space: nowrap; }
+table.api a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+footer { color: var(--muted); font-size: var(--step--1); border-top: 1px solid var(--line); padding-top: 16px; }
+
+@media (max-width: 760px) {
+  .explorer { grid-template-columns: 1fr; }
+  .index { border-right: 0; border-bottom: 1px solid var(--line); max-height: 320px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">dbx · lab single-cell and spatial data browser</span>
+    <h1>Architecture map</h1>
+    <p class="lede">How the code is organised after step S4, read straight from the source at commit <code>%%COMMIT%%</code>. The diagrams show the parts and the three main paths through them; the explorer lists every module with its classes, methods and functions, what each does, and which modules it uses and is used by.</p>
+    <ul class="stats" id="stats"></ul>
+  </header>
+
+  <section id="overview">
+    <span class="eyebrow">1 · The whole system</span>
+    <h2>How the parts fit together</h2>
+    <p>Two processes talk over HTTP: the browser app and the <code>dbx serve</code> server. The server never sends file paths to the browser and never takes one from it; datasets are addressed by id. Every server part writes structured log lines, which are the only thing copied back from the host.</p>
+    <div class="figure"><pre class="mermaid">
+flowchart TB
+  subgraph B["Browser · frontend/src"]
+    direction LR
+    FB["File browser<br/><small>ui/FileBrowser</small>"]
+    WS[("Workspace<br/><small>state/workspace</small>")]
+    PN["Settings panel<br/><small>app/App</small>"]
+    RUN["One ViewRunner per view<br/><small>views/Canvas</small>"]
+    VT["View type: embedding<br/><small>views/embedding</small>"]
+    REG["View registry<br/><small>views/registry</small>"]
+    Q["Query hooks + API client<br/><small>api/queries · api/client</small>"]
+    CW[["Colour worker<br/><small>colour/</small>"]]
+    OUT[("Layer outputs<br/><small>views/outputs</small>")]
+    DECK["One deck.gl canvas, grid of views<br/><small>views/Canvas</small>"]
+    TEL["Telemetry<br/><small>telemetry/</small>"]
+    FB --> WS
+    PN --> WS
+    WS --> RUN --> VT
+    REG -.-> VT
+    VT --> Q
+    VT --> CW
+    VT --> OUT --> DECK
+  end
+  subgraph S["Server · backend/dbx · dbx serve"]
+    direction LR
+    MW["Middleware: request id, timing,<br/>error replies, gzip<br/><small>app</small>"]
+    CAPI["Catalog API<br/><small>catalog/api</small>"]
+    DAPI["Dataset API<br/><small>data/api</small>"]
+    SAPI["Store files + Range<br/><small>stores</small>"]
+    TAPI["Telemetry intake<br/><small>telemetry</small>"]
+    CAT["Catalog service: scans, resolve<br/><small>catalog/service</small>"]
+    CR["Crawler<br/><small>catalog/crawl</small>"]
+    DB[("SQLite index<br/><small>catalog/db</small>")]
+    CACHE["Dataset cache (LRU)<br/><small>data/cache</small>"]
+    RD["Readers: lazy / in memory<br/><small>data/reader</small>"]
+    INS["Inspector: fingerprints<br/><small>inspect/</small>"]
+    LOG[["Logging + privacy<br/><small>logs · privacy</small>"]]
+    MW --> CAPI & DAPI & SAPI & TAPI
+    CAPI --> CAT
+    DAPI --> CAT
+    DAPI --> CACHE --> RD
+    CAT --> CR --> INS
+    CR --> DB
+    CAT --> DB
+  end
+  subgraph D["Disk"]
+    direction LR
+    ROOTS[("Data roots<br/>h5ad · zarr stores")]
+    STORES[("Converted stores<br/>cache_dir/&lt;version&gt;/c0")]
+    LOGS[("Log files<br/>dbx-&lt;role&gt;-&lt;pid&gt;.jsonl")]
+  end
+  Q -- "JSON + binary arrays" --> MW
+  TEL -- "timings, GPU facts" --> MW
+  CR -- "scandir, stat" --> ROOTS
+  INS -- "metadata only" --> ROOTS
+  RD -- "one element at a time" --> ROOTS
+  SAPI -- "byte ranges" --> STORES
+  LOG --> LOGS
+    </pre></div>
+    <p class="figcaption">Solid arrows: calls or data flow. Dotted: the embedding view registers itself with the registry, which the file browser asks for default parameters when opening a dataset. Converted stores are served already (used by the S6 spatial view); the converter that writes them arrives in S5/S6.</p>
+  </section>
+
+  <section id="paths">
+    <span class="eyebrow">2 · Three paths through the code</span>
+    <h2>What happens, step by step</h2>
+    <h3>Indexing the data roots</h3>
+    <div class="figure" id="p-scan"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant T as Catalog thread<br/>(catalog/service)
+  participant S as scan()<br/>(catalog/crawl)
+  participant W as walk()<br/>(catalog/crawl)
+  participant P as Inspect pool<br/>(4 threads)
+  participant I as inspect_path()<br/>(inspect/core)
+  participant D as CatalogDB<br/>(catalog/db)
+  Note over T: at start-up, every rescan_minutes,<br/>or POST /api/catalog/refresh
+  T->>S: scan(roots, trigger)
+  S->>D: start_scan · remove roots no longer configured
+  loop each data root
+    S->>D: stamps(root): what was indexed last time
+    S->>W: walk(root)
+    Note over W: os.scandir only · skips hidden + ignored<br/>symlinks must stay inside the root<br/>never descends into a zarr store
+    W-->>S: candidates (.h5ad files, zarr stores)
+    S->>P: _check(candidate) for each
+    alt size/mtime stamp unchanged
+      P-->>S: unchanged (no file read)
+    else new or changed
+      P->>I: fingerprint (structure only, no values)
+      I-->>P: Fingerprint or error
+      P-->>S: row: state, reason, summary, fingerprint
+    end
+    S->>D: upsert in batches · touch unchanged · remove unseen
+  end
+  S->>D: finish_scan(counts)
+  Note over T,D: an unreadable root keeps its rows.<br/>Every step is logged with its timing.
+    </pre></div>
+    <h3>Opening a dataset and drawing it</h3>
+    <div class="figure" id="p-open"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as You
+  participant FB as File browser<br/>(ui/FileBrowser)
+  participant WS as Workspace<br/>(state/workspace)
+  participant V as Embedding view hook<br/>(views/embedding)
+  participant API as Dataset API<br/>(data/api)
+  participant C as Catalog + cache<br/>(catalog/service · data/cache)
+  participant R as Reader<br/>(data/reader)
+  participant CW as Colour worker
+  participant DK as deck.gl canvas<br/>(views/Canvas)
+  U->>FB: select dataset, click Open
+  FB->>API: GET /api/datasets/{id}/meta
+  API->>C: get(id) · resolve(): path re-checked inside its root
+  C->>R: open once (lazy read, or whole file if legacy and small)
+  R-->>API: obs columns, categories, colours, embeddings
+  API-->>FB: DatasetMeta (JSON)
+  FB->>WS: addView(type, defaults from registry)
+  WS->>V: ViewRunner runs the view's hook
+  par positions
+    V->>API: GET /obsm?key=X_umap&dims=0,1
+    API->>R: read 2 columns → float32
+    API-->>V: binary array (ETag, gzip)
+  and colours
+    V->>API: GET /obs?column=celltype
+    API->>R: read 1 column → category codes
+    API-->>V: binary array
+  end
+  V->>CW: codes + palette + hidden categories
+  CW-->>V: RGBA per cell
+  V->>DK: publish layers + bounds
+  DK->>DK: fit the view to its cell, draw
+  Note over V,DK: telemetry: dataset_meta, embedding_loaded,<br/>colours_computed, view_ready (ms)
+    </pre></div>
+    <h3>A log line, from event to file</h3>
+    <div class="figure" id="p-log"><pre class="mermaid">
+flowchart LR
+  E["log.info(event, fields)<br/>or a library's log line<br/>or a Python warning"] --> C1["merge context<br/>request_id / job id"]
+  C1 --> C2["add pid · role · build<br/>timestamp · level"]
+  C2 --> P{"privacy level"}
+  P -- debug --> F1["everything kept<br/>full traceback"]
+  P -- standard --> F2["names kept in name fields<br/>quoted text + paths in messages → tokens<br/>messages cut at 300 chars"]
+  P -- strict --> F3["every name field → salted token<br/>free text dropped<br/>exceptions: type + code lines only"]
+  F1 & F2 & F3 --> J["JSON line"] --> FILE[("dbx-&lt;role&gt;-&lt;pid&gt;.jsonl<br/>rotating, pruned after retention_days")]
+  T["timed('stage')"] -. "nested stage path,<br/>ms, RSS peak" .-> E
+    </pre></div>
+  </section>
+
+  <section id="deps">
+    <span class="eyebrow">3 · Who uses whom</span>
+    <h2>Module dependencies</h2>
+    <p>Generated from the import statements. An arrow points from a module to a module it uses; a dotted arrow means it starts that module as a Web Worker. Click a box to open it in the explorer below.</p>
+    <h3>Server (Python)</h3>
+    <p class="figcaption">To keep the structure readable, two kinds of edges are left out here (the explorer lists them): imports of the foundation modules <code>logs</code>, <code>config</code>, <code>build</code>, <code>privacy</code> and <code>environment</code>, which nearly every module uses, and the imports of <code>cli</code>, the command-line entry point, which uses almost everything.</p>
+    <div class="figure" id="g-backend"><pre class="mermaid">
+%%BACKEND_GRAPH%%
+    </pre></div>
+    <h3>Browser (TypeScript)</h3>
+    <div class="figure" id="g-frontend"><pre class="mermaid">
+%%FRONTEND_GRAPH%%
+    </pre></div>
+  </section>
+
+  <section id="explorer-section">
+    <span class="eyebrow">4 · Every module</span>
+    <h2>Module explorer</h2>
+    <p>Pick a module on the left, or search for a class, method or function name. Descriptions are the code's own docstrings and header comments. Colours mark the package.</p>
+    <div class="legend-hues" id="hues"></div>
+    <div class="explorer">
+      <nav class="index" aria-label="Modules">
+        <input id="q" type="search" placeholder="Search modules, classes, functions…" aria-label="Search">
+        <ul id="index"></ul>
+      </nav>
+      <article class="sheet" id="sheet" aria-live="polite"></article>
+    </div>
+  </section>
+
+  <section id="api">
+    <span class="eyebrow">5 · The contract between browser and server</span>
+    <h2>HTTP API</h2>
+    <div class="table-wrap"><table class="api"><thead><tr><th>Method</th><th>Path</th><th>Handler</th><th>What it does</th></tr></thead><tbody id="api-rows"></tbody></table></div>
+  </section>
+
+  <footer>Generated by <code>scripts/architecture.py</code> from commit <code>%%COMMIT%%</code>. Regenerate after each step with <code>pixi run -e dev architecture</code>.</footer>
+</div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const HUES = {
+  backend: { core: '--hue-core', catalog: '--hue-catalog', data: '--hue-data', inspect: '--hue-inspect', contract: '--hue-contract', synth: '--hue-synth' },
+  frontend: { api: '--hue-api', views: '--hue-views', ui: '--hue-ui', colour: '--hue-colour', state: '--hue-state', telemetry: '--hue-telemetry', app: '--hue-app' },
+};
+const PKG_NAMES = {
+  'backend:core': 'server core: app, CLI, config, logs, privacy',
+  'backend:catalog': 'catalog: crawler, index, catalog API',
+  'backend:data': 'data: readers, cache, dataset API',
+  'backend:inspect': 'inspect: fingerprints',
+  'backend:contract': 'contract: store format, validator',
+  'backend:synth': 'synth: synthetic data and mocks',
+  'frontend:api': 'api: client and queries',
+  'frontend:views': 'views: canvas, registry, embedding',
+  'frontend:ui': 'ui: file browser, controls',
+  'frontend:colour': 'colour: palettes, worker',
+  'frontend:state': 'state: workspace',
+  'frontend:telemetry': 'telemetry',
+  'frontend:app': 'app shell',
+};
+const byId = new Map(DATA.modules.map((m) => [m.id, m]));
+const hue = (m) => `var(${(HUES[m.side] || {})[m.package] || '--hue-core'})`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const short = (m) => (m.side === 'backend' ? m.id.replace(/^dbx\./, '') || 'dbx' : m.id.replace(/^src\//, ''));
+
+// header stats
+(() => {
+  const mods = DATA.modules;
+  const n = (f) => mods.reduce((a, m) => a + f(m), 0);
+  const stats = [
+    [n((m) => (m.side === 'backend' ? 1 : 0)), 'Python modules'],
+    [n((m) => (m.side === 'frontend' ? 1 : 0)), 'TypeScript modules'],
+    [n((m) => (m.classes || []).length), 'classes'],
+    [n((m) => (m.functions || []).length + (m.classes || []).reduce((a, c) => a + c.methods.length, 0) + (m.exports || []).filter((e) => e.kind === 'function').length), 'functions and methods'],
+    [n((m) => (m.routes || []).length), 'HTTP routes'],
+    [n((m) => m.loc).toLocaleString(), 'lines of code'],
+  ];
+  document.getElementById('stats').innerHTML = stats.map(([v, l]) => `<li><b>${v}</b><span>${l}</span></li>`).join('');
+  const hues = document.getElementById('hues');
+  hues.innerHTML = Object.entries(PKG_NAMES)
+    .filter(([k]) => DATA.modules.some((m) => `${m.side}:${m.package}` === k))
+    .map(([k, label]) => { const [side, pkg] = k.split(':'); return `<span style="--h: var(${HUES[side][pkg]})">${esc(label)}</span>`; })
+    .join('');
+})();
+
+
+// explorer
+let current = null;
+function matches(m, q) {
+  if (!q) return true;
+  const hay = [m.id, m.doc, ...(m.classes || []).flatMap((c) => [c.name, ...c.methods.map((x) => x.name)]), ...(m.functions || []).map((f) => f.name), ...(m.exports || []).map((e) => e.name)].join(' ').toLowerCase();
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+function renderIndex() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const groups = {};
+  for (const m of DATA.modules) if (matches(m, q)) (groups[`${m.side}:${m.package}`] ||= []).push(m);
+  const order = Object.keys(PKG_NAMES);
+  document.getElementById('index').innerHTML = Object.entries(groups)
+    .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
+    .map(([k, mods]) => `<li class="group">${esc(PKG_NAMES[k] || k)}</li>` + mods.map((m) => `<li><button data-id="${esc(m.id)}" style="--h:${hue(m)}" aria-current="${m.id === current}"><i></i>${esc(short(m))}<small>${m.loc}</small></button></li>`).join(''))
+    .join('') || '<li class="group">No match</li>';
+}
+function chip(id) {
+  const m = byId.get(id);
+  return m ? `<button class="chip" data-id="${esc(id)}" style="--h:${hue(m)}">${esc(short(m))}</button>` : '';
+}
+function fnItem(f, kind) {
+  const routes = (f.routes || []).map((r) => `<span class="route">${esc(r)}</span>`).join('');
+  return `<li class="${f.private ? 'private' : ''}"><span class="kind">${kind}</span><code class="name">${esc(f.name)}</code><code class="sig muted">${esc(f.sig)}</code>${routes ? `<div>${routes}</div>` : ''}${f.doc ? `<p>${esc(f.doc)}</p>` : ''}</li>`;
+}
+function renderModule(id) {
+  const m = byId.get(id);
+  if (!m) return;
+  current = id;
+  const showPrivate = document.getElementById('priv')?.checked ?? false;
+  const parts = [];
+  parts.push(`<div><span class="eyebrow" style="color:${hue(m)}">${esc(PKG_NAMES[`${m.side}:${m.package}`] || m.package)}</span><h3>${esc(m.id)}</h3><div class="path">${esc(m.file)} · ${m.loc} lines</div></div>`);
+  if (m.doc) parts.push(`<p class="doc">${esc(m.doc)}</p>`);
+  if (m.registers?.length) parts.push(`<p class="doc">Registers view type <code>${esc(m.registers.join(', '))}</code> with the view registry.</p>`);
+  parts.push(`<div class="relations"><div><h4>Uses</h4><div class="chips">${m.imports.map(chip).join('') || '<span class="muted">nothing inside dbx</span>'}</div></div><div><h4>Used by</h4><div class="chips">${m.used_by.map(chip).join('') || '<span class="muted">entry point (nothing imports it)</span>'}</div></div></div>`);
+  if (m.side === 'backend') {
+    parts.push(`<label class="toggle"><input type="checkbox" id="priv" ${showPrivate ? 'checked' : ''}> show private helpers (names starting with _)</label>`);
+    for (const c of m.classes) {
+      const methods = c.methods.filter((x) => showPrivate || !x.private || x.name === '__init__' || x.routes.length);
+      parts.push(`<div class="item"><div><span class="kind">class</span><code class="name">${esc(c.name)}</code>${c.bases.length ? `<code class="sig muted"> (${esc(c.bases.join(', '))})</code>` : ''}</div>${c.doc ? `<p>${esc(c.doc)}</p>` : ''}${c.fields.length ? `<p class="muted"><code>${esc(c.fields.join(' · '))}</code></p>` : ''}${methods.length ? `<ul class="methods">${methods.map((x) => fnItem(x, 'method')).join('')}</ul>` : ''}</div>`);
+    }
+    const fns = m.functions.filter((f) => showPrivate || !f.private || f.routes.length);
+    if (fns.length) parts.push(`<div class="item"><h4>Functions</h4><ul class="methods">${fns.map((f) => fnItem(f, f.routes.length ? 'route' : 'def')).join('')}</ul></div>`);
+  } else {
+    const ex = m.exports || [];
+    if (ex.length) parts.push(`<div class="item"><h4>Exports</h4><ul class="methods">${ex.map((e) => `<li><span class="kind">${esc(e.kind)}</span><code class="name">${esc(e.name)}</code><code class="sig muted">${esc(e.sig)}</code>${e.doc ? `<p>${esc(e.doc)}</p>` : ''}</li>`).join('')}</ul></div>`);
+  }
+  const sheet = document.getElementById('sheet');
+  sheet.innerHTML = parts.join('');
+  sheet.scrollTop = 0;
+  document.getElementById('priv')?.addEventListener('change', () => renderModule(id));
+  renderIndex();
+}
+window.showModule = (id) => { renderModule(id); document.getElementById('explorer-section').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+document.getElementById('q').addEventListener('input', renderIndex);
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-id]');
+  if (b) renderModule(b.dataset.id);
+  const a = e.target.closest('a[data-module]');
+  if (a) window.showModule(a.dataset.module);
+});
+renderIndex();
+renderModule('dbx.app');
+
+// API table
+document.getElementById('api-rows').innerHTML = DATA.modules
+  .flatMap((m) => (m.routes || []).map((r) => ({ ...r, module: m.id })))
+  .sort((a, b) => a.route.split(' ')[1].localeCompare(b.route.split(' ')[1]))
+  .map((r) => { const [verb, path] = r.route.split(' '); return `<tr><td>${esc(verb)}</td><td>${esc(path)}</td><td><a data-module="${esc(r.module)}">${esc(r.handler.replace(/^dbx\./, ''))}</a></td><td>${esc(r.doc || '')}</td></tr>`; })
+  .join('');
+
+// Diagrams: the artifact viewer renders mermaid itself; opened as a local file, load it.
+function renderMermaid() {
+  if (!window.mermaid) return;
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light' || document.documentElement.dataset.theme === 'dark';
+  window.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: dark ? 'dark' : 'neutral', flowchart: { htmlLabels: true, curve: 'basis' }, fontFamily: 'IBM Plex Sans, system-ui, sans-serif' });
+  const pending = [...document.querySelectorAll('pre.mermaid:not([data-processed])')];
+  if (pending.length) window.mermaid.run({ nodes: pending });
+}
+setTimeout(() => {
+  const unrendered = [...document.querySelectorAll('pre.mermaid')].some((el) => !el.querySelector('svg') && !el.dataset.processed);
+  if (!unrendered) return;
+  if (window.mermaid) return renderMermaid();
+  const s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js';
+  s.onload = renderMermaid;
+  document.head.appendChild(s);
+}, 600);
+</script>

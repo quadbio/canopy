@@ -51,6 +51,7 @@ check-py = { depends-on = ["lint-py", "types-py", "test-py"] }
 fmt = "ruff format backend tests bench && ruff check --fix backend tests bench"
 install-hooks = "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit"
 contract-schema = "dbx contract schema --out contract/schema/manifest.schema.json"
+architecture = "python scripts/architecture.py"     # docs/architecture/index.html from the code
 # Benchmark fixtures (~0.5 GB each, ~1 min each) in .cache/bench; see bench/README.md
 synth-bench = """
 dbx synth anndata .cache/bench/synth_1m_csr.h5ad --n-obs 1000000 --n-vars 2000 --encoding csr &&
@@ -81,6 +82,10 @@ depends-on = ["check-py", "check-fe", "check-store-js"]
 [feature.dev.tasks.e2e]
 cmd = "pnpm build && pnpm exec playwright test"
 cwd = "frontend"
+
+# The demo on this Mac: http://127.0.0.1:8765 on the example datasets (see docs/demo/).
+[feature.dev.tasks.demo]
+cmd = "bash scripts/demo.sh"
 
 # Everything, with the example datasets required: what to run before a demo or release.
 [feature.dev.tasks.check-all]
