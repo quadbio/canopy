@@ -8,6 +8,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] S0 Foundation + compatibility checks
 - [x] S1 Inspector + synthetic generator
 - [x] S2 Contract v0 — APPROVED 2026-10-10 (decisions in contract/SPEC.md §11)
+- [ ] Contract v0.2 DRAFT (contract/drafts/) awaiting user decision (options A/B/C)
 - [ ] S3 Crawler + catalog API
 - [ ] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo
 - [ ] S5 Genes + AnnData converter + jobs + memory guard
@@ -69,3 +70,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   structured Notice warnings, no-leak test; fingerprint v2. 71 backend tests.
   Note: inspector reads root consolidated metadata when present (fast, one read).
   - Next: batch 2 = contract v0.2 draft (SUMMARY C1–C10, validator rules, JS check) → user sign-off.
+- 2026-10-10 Contract v0.2 drafted: contract/drafts/SPEC-v0.2-draft.md + v0.2-comparison.md;
+  bench/contract_v02_points.py (region_1: median gene 6.9 MB -> 0.11 MB with 16,384-row chunks;
+  zoomed-out 39 MB -> 6.7 MB). Options A (approve all; spatial parts implemented at S6),
+  B (cross-cutting now, spatial decided at S6), C (keep v0.1). Awaiting user decision.
