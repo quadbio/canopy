@@ -62,3 +62,10 @@ Resume rule: read this file, then continue with the first unchecked step.
     reviews/code_review_S0-S2.md; then adapt; then S3.
 - 2026-10-10 Cold review results in ../reviews/code_review_S0-S2/SUMMARY.md (finding IDs C*, I*,
   P*, S*). Fix batches 1–4 planned; contract v0.2 awaits user sign-off.
+- 2026-10-10 Review batch 1 DONE (a687539): config strict + path checks + DBX_CONFIG; CLI logs
+  never in cwd, --config everywhere; contract example safe; legacy h5ad (pre-0.7, 0.7);
+  fixed-length strings; per-element errors; SpatialData w/o root attrs; HDF5 locking=False;
+  dataset_id with size/store metadata; optional size; secret per-install salt, validated level,
+  structured Notice warnings, no-leak test; fingerprint v2. 71 backend tests.
+  Note: inspector reads root consolidated metadata when present (fast, one read).
+  - Next: batch 2 = contract v0.2 draft (SUMMARY C1–C10, validator rules, JS check) → user sign-off.
