@@ -1,6 +1,6 @@
 # 0003: Data contract v0.1
 
-Date: 2026-10-09 · Status: **accepted** 2026-10-10 (review decisions in SPEC §11)
+Date: 2026-10-09 · Status: **accepted** 2026-10-10 (review decisions in SPEC §11); layout superseded by 0004 (v0.2)
 
 Specification: `contract/SPEC.md`. Schema: `contract/schema/manifest.schema.json`.
 Models and validator: `backend/dbx/contract/`. Reference store: `dbx contract example OUT`.

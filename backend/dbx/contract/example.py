@@ -18,6 +18,7 @@ import zarr
 import dbx
 from dbx.contract.models import (
     INDPTR_CHUNK,
+    OBSM_CHUNK,
     X_CHUNK,
     CategoricalInfo,
     ChannelInfo,
@@ -36,9 +37,14 @@ from dbx.contract.write import (
     anndata_dict_group,
     array,
     csc_x,
-    morton_order,
+    image_label_attrs,
+    labels_container_attrs,
     ome_multiscale_attrs,
+    points_layout,
+    polygon_layout,
     prepare_output_dir,
+    write_points,
+    write_polygons,
     write_pyramid,
 )
 from dbx.synth.anndata_gen import consolidate
@@ -53,8 +59,10 @@ def write_example_store(
     n_cells: int = 300,
     n_genes: int = 40,
     size: tuple[int, int] = (1100, 900),
-    n_points: int = 5000,
+    n_points: int = 40_000,
     force: bool = False,
+    overview: int = 3_000,
+    lod_cap: int = 2_000,
 ) -> Path:
     """Write a complete store to `out`. An existing store there is replaced; any other
     non-empty folder is refused unless `force`."""
@@ -79,6 +87,7 @@ def write_example_store(
             "cluster": cluster,
             "area": rng.random(n_cells).astype(np.float32),
             "region": pd.Categorical(["cells"] * n_cells),
+            "section": pd.Categorical(np.where(cx < side / 2, "left", "right")),
             "cell_id": np.arange(n_cells),
         },
         index=pd.Index([f"cell{i}" for i in range(n_cells)]),
@@ -99,6 +108,11 @@ def write_example_store(
     tables = root.require_group("tables")
     table.write_zarr(out / "tables" / "cells")
     tg = zarr.open_group(out / "tables" / "cells", mode="a", use_consolidated=False)
+    obsm = tg["obsm"]
+    assert isinstance(obsm, zarr.Group)
+    for key in table.obsm:
+        v: np.ndarray = np.asarray(table.obsm[key])
+        array(obsm, key, v, chunks=(OBSM_CHUNK, v.shape[1]), attrs=ANNDATA_ARRAY)
     x = SynthMatrix(n_cells, n_genes, 0.3, seed=1).cols(0, n_genes).tocsc()
     csc_x(tg, x.data, x.indices, x.indptr, (n_cells, n_genes), X_CHUNK, INDPTR_CHUNK)
     dbxg = anndata_dict_group(tg["uns"], "dbx")  # type: ignore[arg-type]
@@ -148,44 +162,40 @@ def write_example_store(
     lab[lab > n_cells] = 0
     lg = root.require_group("labels").require_group("cells")
     lab_levels = write_pyramid(lg, lab.astype(np.uint32), nearest=True)
-    lg.attrs.update(ome_multiscale_attrs("cells", ["y", "x"], len(lab_levels)))
+    attrs = ome_multiscale_attrs("cells", ["y", "x"], len(lab_levels))
+    attrs["ome"].update(image_label_attrs("img"))
+    lg.attrs.update(attrs)
+    root.require_group("labels").attrs.update(labels_container_attrs(["cells"]))
     lookup = np.full(n_cells + 1, -1, dtype=np.int32)
     lookup[1:] = np.arange(n_cells, dtype=np.int32)
     ag = root.require_group("aux").require_group("labels").require_group("cells")
     array(ag, "row", lookup)
 
-    # ---- shapes: one square polygon per cell
+    # ---- shapes: one square polygon per cell (written clockwise and open: the layout fixes it)
     half = np.array([cell_w, cell_h], dtype=np.float32) * 0.4
-    corners = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]], dtype=np.float32)
-    verts = (centers[:, None, :] + corners[None, :, :] * half).reshape(-1, 2)
-    sg = root.require_group("shapes").require_group("cells")
-    array(sg, "vertices", verts.astype(np.float32))
-    array(sg, "starts", np.arange(0, 4 * n_cells + 1, 4, dtype=np.int64))
-    array(sg, "row", np.arange(n_cells, dtype=np.int32))
-    bbox = np.concatenate([centers - half, centers + half], axis=1).astype(np.float32)
-    array(sg, "bbox", bbox)
+    corners = np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]], dtype=np.float32)
+    rings = [c + corners * half for c in centers]
+    poly = polygon_layout(rings, np.arange(n_cells))
+    write_polygons(root.require_group("shapes").require_group("cells"), poly)
 
-    # ---- points: transcripts near cell centres, 10 genes
+    # ---- points: transcripts near cell centres, 10 genes with skewed expression
     n_feat = 10
     owner = rng.integers(0, n_cells, n_points)
-    px = centers[owner, 0] + rng.normal(0, cell_w / 6, n_points)
-    py = centers[owner, 1] + rng.normal(0, cell_h / 6, n_points)
-    feat = rng.integers(0, n_feat, n_points)
-    pbox = (0.0, 0.0, float(w), float(h))
-    order = np.lexsort((morton_order(px, py, pbox), feat))
-    pg = root.require_group("points").require_group("transcripts")
-    array(pg, "xy", np.stack([px, py], 1)[order].astype(np.float32))
-    array(pg, "feature", feat[order].astype(np.int32))
-    array(pg, "cell", owner[order].astype(np.int32))
+    pxy = np.stack(
+        [
+            centers[owner, 0] + rng.normal(0, cell_w / 6, n_points),
+            centers[owner, 1] + rng.normal(0, cell_h / 6, n_points),
+        ],
+        1,
+    )
+    weights = 0.5 ** np.arange(n_feat)
+    feat = rng.choice(n_feat, n_points, p=weights / weights.sum())
     pz = rng.integers(0, 7, n_points).astype(np.float32)  # 7 z-planes, as in MERSCOPE
-    array(pg, "z", pz[order])
-    pg.attrs["dbx"] = {"features": [f"Gene{i}" for i in range(n_feat)]}
-    counts = np.bincount(feat, minlength=n_feat)
-    array(pg, "offsets", np.concatenate([[0], np.cumsum(counts)]).astype(np.int64))
-    array(
-        pg,
-        "overview",
-        np.sort(rng.choice(n_points, min(n_points, 1000), replace=False)).astype(np.int32),
+    pts = points_layout(pxy, feat, n_feat, z=pz, cell=owner, overview=overview, lod_cap=lod_cap)
+    write_points(
+        root.require_group("points").require_group("transcripts"),
+        pts,
+        [f"Gene{i}" for i in range(n_feat)],
     )
 
     systems = {"global": IDENTITY, "rot": ROTATE_90}
@@ -204,6 +214,7 @@ def write_example_store(
             duration_s=0.0,
         ),
         coordinate_systems=["global", "rot"],
+        units={"global": "micrometer", "rot": "micrometer"},
         tables={
             "cells": TableEntry(
                 path="tables/cells",
@@ -215,11 +226,13 @@ def write_example_store(
                 categorical={
                     "cluster": CategoricalInfo(n_categories=k, has_colors=True),
                     "region": CategoricalInfo(n_categories=1),
+                    "section": CategoricalInfo(n_categories=2),
                 },
                 numeric=["area"],
                 region=["cells"],
                 region_key="region",
                 instance_key="cell_id",
+                section_keys=["section"],
             )
         },
         images={
@@ -241,6 +254,7 @@ def write_example_store(
                 path="labels/cells",
                 levels=lab_levels,
                 max_label=n_cells,
+                n_labels=n_cells,
                 table="cells",
                 lookup="aux/labels/cells/row",
                 transforms=systems,
@@ -248,7 +262,12 @@ def write_example_store(
         },
         shapes={
             "cells": ShapesEntry(
-                path="shapes/cells", kind="polygons", n=n_cells, table="cells", transforms=systems
+                path="shapes/cells",
+                kind="polygons",
+                n=n_cells,
+                n_vertices=int(poly.vertices.shape[0]),
+                table="cells",
+                transforms=systems,
             )
         },
         points={
@@ -261,7 +280,9 @@ def write_example_store(
                 has_z=True,
                 z_range=(float(pz.min()), float(pz.max())),
                 z_planes=sorted(float(v) for v in np.unique(pz)),
-                bbox=pbox,
+                bbox=pts.bbox,
+                n_overview=int(pts.overview["xy"].shape[0]),
+                lod_cap=lod_cap,
                 table="cells",
                 transforms={"global": IDENTITY},
             )

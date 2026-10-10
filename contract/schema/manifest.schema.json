@@ -1,7 +1,6 @@
 {
   "$defs": {
     "CategoricalInfo": {
-      "additionalProperties": false,
       "properties": {
         "n_categories": {
           "title": "N Categories",
@@ -20,7 +19,6 @@
       "type": "object"
     },
     "ChannelInfo": {
-      "additionalProperties": false,
       "properties": {
         "name": {
           "title": "Name",
@@ -61,7 +59,6 @@
       "type": "object"
     },
     "ConverterInfo": {
-      "additionalProperties": false,
       "properties": {
         "dbx_version": {
           "title": "Dbx Version",
@@ -104,7 +101,6 @@
       "type": "object"
     },
     "ImageEntry": {
-      "additionalProperties": false,
       "properties": {
         "path": {
           "title": "Path",
@@ -180,7 +176,6 @@
       "type": "object"
     },
     "LabelsEntry": {
-      "additionalProperties": false,
       "properties": {
         "path": {
           "title": "Path",
@@ -231,6 +226,15 @@
           "title": "Max Label",
           "type": "integer"
         },
+        "n_labels": {
+          "title": "N Labels",
+          "type": "integer"
+        },
+        "relabelled": {
+          "default": false,
+          "title": "Relabelled",
+          "type": "boolean"
+        },
         "table": {
           "anyOf": [
             {
@@ -259,13 +263,13 @@
       "required": [
         "path",
         "levels",
-        "max_label"
+        "max_label",
+        "n_labels"
       ],
       "title": "LabelsEntry",
       "type": "object"
     },
     "PointsEntry": {
-      "additionalProperties": false,
       "properties": {
         "path": {
           "title": "Path",
@@ -380,6 +384,15 @@
           "title": "Bbox",
           "type": "array"
         },
+        "n_overview": {
+          "title": "N Overview",
+          "type": "integer"
+        },
+        "lod_cap": {
+          "default": 100000,
+          "title": "Lod Cap",
+          "type": "integer"
+        },
         "table": {
           "anyOf": [
             {
@@ -398,13 +411,13 @@
         "n",
         "n_features",
         "feature_key",
-        "bbox"
+        "bbox",
+        "n_overview"
       ],
       "title": "PointsEntry",
       "type": "object"
     },
     "ShapesEntry": {
-      "additionalProperties": false,
       "properties": {
         "path": {
           "title": "Path",
@@ -447,6 +460,18 @@
           "title": "N",
           "type": "integer"
         },
+        "n_vertices": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "N Vertices"
+        },
         "table": {
           "anyOf": [
             {
@@ -469,7 +494,6 @@
       "type": "object"
     },
     "SourceInfo": {
-      "additionalProperties": false,
       "properties": {
         "path": {
           "title": "Path",
@@ -508,7 +532,6 @@
       "type": "object"
     },
     "TableEntry": {
-      "additionalProperties": false,
       "properties": {
         "path": {
           "title": "Path",
@@ -626,6 +649,13 @@
           ],
           "default": null,
           "title": "Instance Key"
+        },
+        "section_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Section Keys",
+          "type": "array"
         }
       },
       "required": [
@@ -638,7 +668,6 @@
       "type": "object"
     }
   },
-  "additionalProperties": false,
   "properties": {
     "contract": {
       "const": "dbx-store",
@@ -647,7 +676,7 @@
       "type": "string"
     },
     "contract_version": {
-      "default": "0.1.0",
+      "default": "0.2.0",
       "title": "Contract Version",
       "type": "string"
     },
@@ -667,6 +696,18 @@
       },
       "title": "Coordinate Systems",
       "type": "array"
+    },
+    "units": {
+      "additionalProperties": {
+        "enum": [
+          "micrometer",
+          "pixel",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "title": "Units",
+      "type": "object"
     },
     "tables": {
       "additionalProperties": {
@@ -709,7 +750,7 @@
     "source",
     "converter"
   ],
-  "title": "dbx store manifest (contract 0.1.0)",
+  "title": "dbx store manifest (contract 0.2.0)",
   "type": "object",
-  "$id": "https://dbx.local/contract/0.1.0/manifest.schema.json"
+  "$id": "https://dbx.local/contract/0.2.0/manifest.schema.json"
 }

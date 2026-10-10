@@ -42,11 +42,11 @@ ruff = ">=0.6"
 mypy = ">=1.11"
 
 [feature.dev.tasks]
-lint-py = "ruff check backend tests && ruff format --check backend tests"
+lint-py = "ruff check backend tests bench && ruff format --check backend tests bench"
 types-py = "mypy backend/dbx"
 test-py = "pytest -q tests/backend"
 check-py = { depends-on = ["lint-py", "types-py", "test-py"] }
-fmt = "ruff format backend tests && ruff check --fix backend tests"
+fmt = "ruff format backend tests bench && ruff check --fix backend tests bench"
 install-hooks = "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit"
 contract-schema = "dbx contract schema --out contract/schema/manifest.schema.json"
 # Benchmark fixtures (~0.5 GB each, ~1 min each) in .cache/bench; see bench/README.md
@@ -66,8 +66,12 @@ fe-dev = { cmd = "pnpm dev", cwd = "frontend" }
 build-frontend = { cmd = "pnpm build", cwd = "frontend" }
 check-fe = { cmd = "pnpm check", cwd = "frontend" }
 
+# Browser-side contract check: write the reference store, read it with Viv + zarrita over HTTP.
+[feature.dev.tasks.check-store-js]
+cmd = "dbx contract example .cache/example/c0 && node frontend/scripts/read-store.mjs .cache/example/c0"
+
 [feature.dev.tasks.check]
-depends-on = ["check-py", "check-fe"]
+depends-on = ["check-py", "check-fe", "check-store-js"]
 
 [environments]
 default = { solve-group = "main" }

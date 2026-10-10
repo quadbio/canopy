@@ -8,7 +8,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] S0 Foundation + compatibility checks
 - [x] S1 Inspector + synthetic generator
 - [x] S2 Contract v0 — APPROVED 2026-10-10 (decisions in contract/SPEC.md §11)
-- [ ] Contract v0.2 DRAFT (contract/drafts/) awaiting user decision (options A/B/C)
+- [x] Contract v0.2 APPROVED (option A) and implemented in the contract code (2026-10-10)
 - [ ] S3 Crawler + catalog API
 - [ ] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo
 - [ ] S5 Genes + AnnData converter + jobs + memory guard
@@ -74,3 +74,13 @@ Resume rule: read this file, then continue with the first unchecked step.
   bench/contract_v02_points.py (region_1: median gene 6.9 MB -> 0.11 MB with 16,384-row chunks;
   zoomed-out 39 MB -> 6.7 MB). Options A (approve all; spatial parts implemented at S6),
   B (cross-cutting now, spatial decided at S6), C (keep v0.1). Awaiting user decision.
+- 2026-10-10 Contract v0.2 APPROVED (option A) and implemented: SPEC.md v0.2, CHANGELOG, ADR 0004,
+  history/v0.1-to-v0.2-comparison.md; models (reader ignores unknown fields), validator
+  (compat policy, layout/codec/shard rules, canonical CSC, root consolidation, names, polygons
+  closed+CCW+Morton, points order/chunk_bbox/overview/lod, labels relabel/image-label; chunked
+  deep checks), writer helpers for S5/S6 (sharded, polygon_layout, points_layout, relabel),
+  example store v0.2; JS check automated (`check-store-js`, in `check`). 91 backend tests.
+  Findings: @zarrita/storage 0.1.4 suffix-read bug -> use useSuffixRequest; Viv probes v2 (2x404).
+  Still open from review S8: JS check against `dbx serve` (needs S3/S4 store serving),
+  Playwright + check-all (S4), examples pytest marker. Batch 3 (logging for workers) before S5.
+  - Next: S3 crawler + catalog (batch 3 alongside S3/S4).
