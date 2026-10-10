@@ -19,6 +19,10 @@ scipy = ">=1.13"
 pandas = ">=2.2"
 pyarrow = ">=16"
 spatialdata = ">=0.4"
+# Used directly by dbx.synth (also pulled in by spatialdata).
+dask = ">=2024.1"
+geopandas = ">=0.14"
+shapely = ">=2.0"
 structlog = ">=24"
 psutil = ">=5.9"
 typer = ">=0.12"
@@ -54,7 +58,7 @@ dbx synth anndata .cache/bench/synth_1m_csc.h5ad --n-obs 1000000 --n-vars 2000 -
 # ---------------------------------------------------------------- frontend toolchain
 [feature.frontend.dependencies]
 nodejs = ">=22"
-pnpm = ">=9"
+pnpm = ">=10"           # pnpm-workspace.yaml allowBuilds needs pnpm 10+
 
 [feature.frontend.tasks]
 fe-install = { cmd = "pnpm install --frozen-lockfile", cwd = "frontend" }

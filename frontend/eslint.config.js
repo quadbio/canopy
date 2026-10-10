@@ -12,4 +12,9 @@ export default tseslint.config(
     plugins: { 'react-hooks': reactHooks },
     rules: { ...reactHooks.configs.recommended.rules },
   },
+  {
+    extends: [js.configs.recommended],
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { ecmaVersion: 2022, globals: globals.node },
+  },
 );

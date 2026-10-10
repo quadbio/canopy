@@ -44,8 +44,10 @@ Status: **v0.1 approved** (2026-10-10, with the review decisions in §11). Chang
   points/<points>/                 transcripts partitioned by feature (§8)
 ```
 
-- `dataset_id` comes from the source fingerprint (hash of real path and modification time), so a
-  changed source file gets a new store.
+- `dataset_id` comes from the source fingerprint: a hash of the real path plus, for a file, its
+  size and modification time, or, for a zarr store, the newest modification time of its groups
+  and metadata files. A changed source gets a new store. (Rewriting chunks of a zarr store in place
+  without touching any metadata is not detected; such stores need a manual rebuild.)
 - A store is built in `<…>/c0.tmp-<random>/` and renamed to `c0/` only after `dbx validate`
   passes. A folder without `manifest.json` is incomplete and is ignored.
 - **Consolidated metadata** is written for each table group (anndata reads through it) and for

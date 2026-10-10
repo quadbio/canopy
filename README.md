@@ -17,6 +17,16 @@ pixi run serve --config config.toml    # http://127.0.0.1:8765
 
 During frontend work, `pixi run -e dev fe-dev` starts Vite on :5173 with `/api` proxied to the backend.
 
+## Configuration, logs and privacy
+
+- Every command takes `--config FILE` (or the `DBX_CONFIG` environment variable). Unknown keys,
+  missing data roots and a cache inside a data root are errors, so typos never fall back silently.
+- Logs go to `[logging] dir` of the config, else to `~/.cache/dbx/logs` (or `$XDG_CACHE_HOME`),
+  never to the current folder.
+- `dbx inspect PATH --level strict` replaces user-chosen names with tokens salted by a random
+  secret created once per installation (`<cache_dir>/.dbx_salt`, or `~/.cache/dbx/.dbx_salt`
+  without a config). The salt stays on the host; never copy it off with diagnostic bundles.
+
 ## Checks
 
 `pixi run -e dev check` runs ruff, mypy and pytest (backend) and eslint, tsc and vitest (frontend).

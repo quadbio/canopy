@@ -27,7 +27,13 @@ file's structure before reading it.
    user-chosen name (path, file and element names, columns, keys, channels, coordinate systems)
    with a salted hash token, keeping format-defined names (`global`, `x`, `y`, `X_umap`, …).
    Tokens are stable for a given salt, so bundles from one installation stay comparable.
-   A test checks that known secret names do not appear in strict output.
+   *Revised 2026-10-10 (code review):* the salt is a random per-installation secret kept on the
+   host (a public salt let a word list reverse common names); unknown levels are errors; a test
+   checks that no user-chosen name from the standard fingerprint survives in strict output.
+   Warnings are structured (`code`, `message`, `kind`, `element`) so names are never embedded in
+   free text, and unreadable elements are recorded in `errors` instead of aborting.
+   Fingerprint version 2 adds these, `layout` (anndata `current` / `0.7` / `pre-0.7`) and an
+   optional `size_bytes`.
 3. **Synthetic data** (`dbx.synth`): `SynthMatrix` defines a matrix by hashing (row, column), so
    the same values can be streamed in row blocks (CSR, dense) or column blocks (CSC). Files of
    any size are written with bounded memory (~1.4 GB peak at 1 M × 2 k).

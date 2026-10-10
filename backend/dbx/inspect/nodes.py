@@ -80,6 +80,27 @@ class Node:
             return str(dt)
 
     @property
+    def dtype_kind(self) -> str:
+        """numpy kind letter: "S"/"U" fixed-length strings, "O" variable-length, "V" compound…"""
+        try:
+            return str(np.dtype(self.obj.dtype).kind)
+        except TypeError:
+            return "O"
+
+    def fields(self) -> dict[str, tuple[str, list[int]]]:
+        """Fields of a compound (structured) dataset: name -> (dtype name, sub-shape)."""
+        dt = np.dtype(self.obj.dtype) if not self.is_group else None
+        if dt is None or dt.names is None:
+            return {}
+        out: dict[str, tuple[str, list[int]]] = {}
+        for name in dt.names:
+            sub = dt.fields[name][0]
+            base = sub.base if sub.subdtype else sub
+            kind = "string" if h5py.check_string_dtype(base) or base.kind in "SUO" else base.name
+            out[name] = (kind, [int(x) for x in sub.shape])
+        return out
+
+    @property
     def length(self) -> int:
         """Number of elements along the first axis, also for encoded groups
         (nullable arrays store `values` + `mask`, categoricals store `codes`)."""

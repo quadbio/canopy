@@ -11,7 +11,7 @@ import h5py
 import zarr
 
 from dbx.inspect.anndata_info import anndata_info
-from dbx.inspect.models import DatasetKind, Fingerprint
+from dbx.inspect.models import AnnDataInfo, DatasetKind, Fingerprint, Notice
 from dbx.inspect.nodes import Node
 from dbx.inspect.spatialdata_info import spatialdata_info
 from dbx.logs import timed
@@ -34,6 +34,18 @@ def _zarr_root_attrs(path: Path) -> dict[str, object] | None:
     return None
 
 
+SPATIAL_GROUPS = ("images", "labels", "points", "shapes", "tables")
+
+
+def _is_group_dir(path: Path) -> bool:
+    if (path / ".zgroup").is_file():
+        return True
+    try:
+        return bool(json.loads((path / "zarr.json").read_text()).get("node_type") == "group")
+    except (OSError, ValueError):
+        return False
+
+
 def detect_kind(path: Path) -> DatasetKind | None:
     """Cheap detection from file signature or root metadata; None if not a dataset."""
     if path.is_file():
@@ -49,6 +61,9 @@ def detect_kind(path: Path) -> DatasetKind | None:
             return "spatialdata_zarr"
         if attrs.get("encoding-type") == "anndata":
             return "anndata_zarr"
+        # Older SpatialData writers left the root attributes empty.
+        if any(_is_group_dir(path / g) for g in SPATIAL_GROUPS):
+            return "spatialdata_zarr"
     return None
 
 
@@ -70,31 +85,67 @@ def _dir_size(path: Path, limit: int = SIZE_SCAN_LIMIT) -> tuple[int, bool]:
     return total, True
 
 
-def _mtime_for_id(path: Path) -> int:
-    """File mtime, or for a store the newest of its root and root metadata."""
-    if path.is_file():
-        return path.stat().st_mtime_ns
+def _store_stamps(path: Path, depth: int = 4) -> list[int]:
+    """Modification times of a store's group folders and their direct entries (metadata files,
+    array folders, parquet files). Only groups are descended into, never array chunk folders,
+    so this stays cheap on network storage. Rewriting chunks in place without touching any
+    metadata is not detected."""
     stamps = [path.stat().st_mtime_ns]
-    stamps += [(path / m).stat().st_mtime_ns for m in ZARR_META if (path / m).exists()]
-    return max(stamps)
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return stamps
+    for e in entries:
+        try:
+            stamps.append(e.stat().st_mtime_ns)
+        except OSError:
+            continue
+        if depth > 1 and e.is_dir() and _is_group_dir(Path(e.path)):
+            stamps += _store_stamps(Path(e.path), depth - 1)
+    return stamps
 
 
 def dataset_id(path: Path) -> str:
+    """Stable id of a dataset version: real path plus size and mtime (file), or the newest
+    modification time of the store's groups and metadata (zarr store)."""
     real = os.path.realpath(path)
-    return hashlib.sha256(f"{real}|{_mtime_for_id(path)}".encode()).hexdigest()[:16]
+    if path.is_file():
+        st = path.stat()
+        version = f"{st.st_size}|{st.st_mtime_ns}"
+    else:
+        version = str(max(_store_stamps(path)))
+    return hashlib.sha256(f"{real}|{version}".encode()).hexdigest()[:16]
 
 
-def inspect_path(path: Path) -> Fingerprint:
-    """Fingerprint a dataset. Raises ValueError if the path is not a supported dataset."""
-    path = Path(path)
+def open_h5(path: Path) -> h5py.File:
+    """Open an HDF5 file read-only without HDF5 file locking (locks commonly fail on network
+    shares and are not needed for reading). Lock failures get a recognisable message."""
+    try:
+        return h5py.File(path, "r", locking=False)
+    except OSError as e:
+        if "lock" in str(e).lower():
+            raise OSError(f"hdf5_lock: cannot open {path.name} because of a file lock") from e
+        raise
+
+
+def inspect_path(path: Path, *, measure_size: bool = True) -> Fingerprint:
+    """Fingerprint a dataset. Raises ValueError if the path is not a supported dataset.
+
+    `measure_size=False` skips counting the files of a directory store (slow on network
+    storage); `size_bytes` is then None.
+    """
+    path = Path(path).absolute()
     kind = detect_kind(path)
     if kind is None:
-        raise ValueError(f"not a supported dataset: {path}")
+        raise ValueError("not a supported dataset")
     with timed("inspect", kind=kind) as extra:
+        size: int | None
         if path.is_file():
             size, exact = path.stat().st_size, True
-        else:
+        elif measure_size:
             size, exact = _dir_size(path)
+        else:
+            size, exact = None, False
         fp = Fingerprint(
             dataset_id=dataset_id(path),
             kind=kind,
@@ -105,38 +156,95 @@ def inspect_path(path: Path) -> Fingerprint:
             mtime=path.stat().st_mtime,
         )
         if kind == "h5ad":
-            with h5py.File(path, "r") as f:
+            with open_h5(path) as f:
                 fp.anndata = anndata_info(Node(f))
         elif kind == "anndata_zarr":
             fp.anndata = anndata_info(Node(zarr.open_group(path, mode="r")))
         else:
-            fp.spatialdata = spatialdata_info(Node(zarr.open_group(path, mode="r")), path)
+            fp.spatialdata = spatialdata_info(
+                Node(zarr.open_group(path, mode="r")), path, fp.errors
+            )
         fp.warnings = _warnings(fp)
         extra["dataset_id"] = fp.dataset_id
         extra["size_bytes"] = size
+        extra["n_errors"] = len(fp.errors)
     return fp
 
 
-def _warnings(fp: Fingerprint) -> list[str]:
+def _warnings(fp: Fingerprint) -> list[Notice]:
     """Structural facts that change how the dataset can be served."""
-    out: list[str] = []
-    tables = (
+    out: list[Notice] = []
+    tables: dict[str, AnnDataInfo] = (
         {"": fp.anndata} if fp.anndata else dict(fp.spatialdata.tables if fp.spatialdata else {})
     )
     for name, ad in tables.items():
-        where = f"table {name!r}: " if name else ""
+        el = {"kind": "table", "element": name} if name else {}
         if ad.X is not None and ad.X.encoding == "csr":
-            out.append(f"{where}X is CSR (cell-major): gene queries need conversion or full load")
+            out.append(
+                Notice(
+                    code="x_csr",
+                    message="X is CSR (cell-major): gene queries need conversion or full load",
+                    **el,
+                )
+            )
         if ad.X is not None and ad.X.dtype not in ("float32", "float64"):
-            out.append(f"{where}X dtype is {ad.X.dtype}")
+            out.append(Notice(code="x_dtype", message=f"X dtype is {ad.X.dtype}", **el))
+        if ad.layout != "current":
+            out.append(
+                Notice(
+                    code="legacy_layout",
+                    message=f"legacy anndata layout ({ad.layout}): served after conversion",
+                    **el,
+                )
+            )
+        if ad.X is not None and len(ad.X.shape) == 2 and ad.X.shape != [ad.n_obs, ad.n_vars]:
+            out.append(
+                Notice(
+                    code="shape_mismatch",
+                    message=f"obs/var describe {ad.n_obs}x{ad.n_vars} but X is "
+                    f"{ad.X.shape[0]}x{ad.X.shape[1]}",
+                    **el,
+                )
+            )
     if fp.spatialdata:
-        for name, img in fp.spatialdata.images.items():
+        sd = fp.spatialdata
+        if sd.format_version is None:
+            out.append(
+                Notice(code="no_spatialdata_attrs", message="no SpatialData version at the root")
+            )
+        for name, img in sd.images.items():
             if len(img.levels) == 1:
-                out.append(f"image {name!r} has a single resolution level (no pyramid)")
+                out.append(
+                    Notice(
+                        code="single_level",
+                        message="image has a single resolution level (no pyramid)",
+                        kind="image",
+                        element=name,
+                    )
+                )
             lvl = img.levels[0]
             if lvl.chunks and lvl.chunks == lvl.shape:
-                out.append(f"image {name!r} is stored as one chunk")
-        for name, pts in fp.spatialdata.points.items():
+                out.append(
+                    Notice(
+                        code="single_chunk",
+                        message="image is stored as one chunk",
+                        kind="image",
+                        element=name,
+                    )
+                )
+        for name, pts in sd.points.items():
             if pts.feature_key is None:
-                out.append(f"points {name!r} declare no feature_key")
-    return sorted(set(out))
+                out.append(
+                    Notice(
+                        code="no_feature_key",
+                        message="points declare no feature_key",
+                        kind="points",
+                        element=name,
+                    )
+                )
+    if fp.errors:
+        out.append(
+            Notice(code="element_errors", message=f"{len(fp.errors)} element(s) could not be read")
+        )
+    uniq = {(n.code, n.kind, n.element): n for n in out}
+    return [uniq[k] for k in sorted(uniq, key=lambda k: tuple(x or "" for x in k))]

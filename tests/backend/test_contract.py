@@ -163,3 +163,17 @@ def test_morton_order_is_spatially_local() -> None:
     y = np.array([0.0, 0.0, 1.0, 1.0])
     codes = morton_order(x, y, (0.0, 0.0, 1.0, 1.0))
     assert list(np.argsort(codes)) == [0, 1, 2, 3]
+
+
+def test_example_refuses_foreign_folder(tmp_path: Path) -> None:
+    victim = tmp_path / "victim"
+    (victim / "sub").mkdir(parents=True)
+    (victim / "sub" / "thesis.txt").write_text("precious")
+    with pytest.raises(FileExistsError):
+        write_example_store(victim)
+    assert (victim / "sub" / "thesis.txt").read_text() == "precious"
+    # an empty folder and an existing store are fine
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    write_example_store(empty)
+    write_example_store(empty)

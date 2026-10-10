@@ -10,11 +10,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-FINGERPRINT_VERSION = 1
+FINGERPRINT_VERSION = 2
 
 DatasetKind = Literal["h5ad", "anndata_zarr", "spatialdata_zarr"]
 MatrixEncoding = Literal["dense", "csr", "csc"]
 ColumnKind = Literal["categorical", "numeric", "boolean", "string", "other"]
+# "pre-0.7": obs/var as compound datasets, h5sparse X (anndata < 0.7);
+# "0.7": categories referenced from <frame>/__categories (anndata 0.7.x).
+AnnDataLayout = Literal["current", "0.7", "pre-0.7"]
 
 
 class ArrayInfo(BaseModel):
@@ -53,6 +56,7 @@ class FrameInfo(BaseModel):
 
 class AnnDataInfo(BaseModel):
     encoding_version: str | None = None
+    layout: AnnDataLayout = "current"
     n_obs: int
     n_vars: int
     X: MatrixInfo | None = None
@@ -113,16 +117,38 @@ class SpatialDataInfo(BaseModel):
     coordinate_systems: list[str] = Field(default_factory=list)
 
 
+class Notice(BaseModel):
+    """A structural fact that changes how the dataset can be served. Names are kept in `element`
+    only (never inside `message`), so strict redaction can replace them reliably."""
+
+    code: str
+    message: str
+    kind: str | None = None  # "table", "image", "labels", "points", "shapes"
+    element: str | None = None
+
+
+class ElementError(BaseModel):
+    """Part of a dataset that could not be described; the rest of the fingerprint is valid."""
+
+    kind: str
+    element: str
+    error_type: str
+    detail: str | None = None  # exception text (truncated); dropped at strict level
+
+
 class Fingerprint(BaseModel):
     fingerprint_version: int = FINGERPRINT_VERSION
     dataset_id: str
     kind: DatasetKind
     path: str
     name: str
-    size_bytes: int
+    # None when the size was not measured (directory stores on network storage are counted
+    # lazily by the crawler).
+    size_bytes: int | None = None
     size_exact: bool = True
     mtime: float
     anndata: AnnDataInfo | None = None
     spatialdata: SpatialDataInfo | None = None
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[Notice] = Field(default_factory=list)
+    errors: list[ElementError] = Field(default_factory=list)
     redacted: bool = False

@@ -4,14 +4,23 @@
 user-chosen name (paths, file and element names, columns, keys, channels, coordinate systems)
 by a stable salted hash, so the same name maps to the same token within one installation and
 structure stays comparable across bundles. Structural names defined by the formats are kept.
+
+The salt is a random secret created once per installation and kept on the host (never written
+into a bundle). Without it, tokens cannot be reversed by hashing a list of likely names.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import secrets
+from pathlib import Path
 from typing import Any
 
+from dbx.config import PRIVACY_LEVELS
 from dbx.inspect.models import Fingerprint
+
+SALT_FILE = ".dbx_salt"
 
 # Names defined by the file formats or near-universal conventions: kept in strict mode.
 KEEP = frozenset(
@@ -39,6 +48,24 @@ def token(name: str, salt: str) -> str:
     return "h_" + hashlib.sha256(f"{salt}|{name}".encode()).hexdigest()[:10]
 
 
+def installation_salt(folder: Path) -> str:
+    """Read the installation's secret salt from `folder`, creating it (mode 600) on first use."""
+    path = folder / SALT_FILE
+    try:
+        return path.read_text().strip()
+    except FileNotFoundError:
+        pass
+    folder.mkdir(parents=True, exist_ok=True)
+    value = secrets.token_hex(32)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # created concurrently by another process
+        return path.read_text().strip()
+    with os.fdopen(fd, "w") as f:
+        f.write(value + "\n")
+    return value
+
+
 def _rename_keys(d: dict[str, Any], salt: str) -> dict[str, Any]:
     return {token(k, salt): v for k, v in d.items()}
 
@@ -61,8 +88,13 @@ def _transforms(items: list[dict[str, Any]], salt: str) -> None:
 
 
 def redact(fp: Fingerprint, level: str, salt: str) -> Fingerprint:
+    """Apply a privacy level. Unknown levels are errors (a typo must never mean "no redaction")."""
+    if level not in PRIVACY_LEVELS:
+        raise ValueError(f"unknown privacy level {level!r}; expected one of {PRIVACY_LEVELS}")
     if level != "strict":
         return fp
+    if not salt:
+        raise ValueError("strict redaction needs a non-empty salt")
     d = fp.model_dump()
     d["path"] = token(d["path"], salt)
     d["name"] = token(d["name"], salt)
@@ -94,12 +126,11 @@ def redact(fp: Fingerprint, level: str, salt: str) -> Fingerprint:
         sd["tables"] = _rename_keys(sd["tables"], salt)
         sd["table_refs"] = _rename_keys(sd["table_refs"], salt)
         sd["coordinate_systems"] = [token(c, salt) for c in sd["coordinate_systems"]]
-    # Warnings quote element names; regenerate them from tokens is not possible, so drop names.
-    d["warnings"] = [_strip_quoted(w) for w in d["warnings"]]
+    for w in d["warnings"]:
+        if w.get("element"):
+            w["element"] = token(w["element"], salt)
+    for e in d["errors"]:
+        e["element"] = token(e["element"], salt)
+        e["detail"] = None
     d["redacted"] = True
     return Fingerprint.model_validate(d)
-
-
-def _strip_quoted(text: str) -> str:
-    parts = text.split("'")
-    return "".join(p if i % 2 == 0 else "<name>" for i, p in enumerate(parts))

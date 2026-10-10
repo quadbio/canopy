@@ -32,9 +32,30 @@ _LEVELS = {
 LOG_FILE = "dbx.jsonl"
 
 
-def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> None:
-    """Configure structlog to write JSON lines to a rotating file (and readable console)."""
-    cfg.dir.mkdir(parents=True, exist_ok=True)
+def default_log_dir() -> Path:
+    """Per-user fallback log folder (never the current directory)."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "dbx" / "logs"
+
+
+def _writable_dir(*candidates: Path) -> Path | None:
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(d, os.W_OK):
+            return d
+    return None
+
+
+def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> Path | None:
+    """Configure structlog to write JSON lines to a rotating file (and readable console).
+
+    Returns the log folder actually used: the configured one, else the per-user fallback, else
+    None (file logging off) when neither is writable, e.g. on a read-only share.
+    """
+    log_dir = _writable_dir(cfg.dir, default_log_dir())
     level = _LEVELS[cfg.level]
 
     shared: list[Any] = [
@@ -45,15 +66,17 @@ def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> None:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
-    file_handler = logging.handlers.RotatingFileHandler(
-        cfg.dir / LOG_FILE, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count
-    )
-    file_handler.setFormatter(
-        structlog.stdlib.ProcessorFormatter(
-            processor=structlog.processors.JSONRenderer(), foreign_pre_chain=shared
+    handlers: list[logging.Handler] = []
+    if log_dir is not None:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_dir / LOG_FILE, maxBytes=cfg.max_bytes, backupCount=cfg.backup_count
         )
-    )
-    handlers: list[logging.Handler] = [file_handler]
+        file_handler.setFormatter(
+            structlog.stdlib.ProcessorFormatter(
+                processor=structlog.processors.JSONRenderer(), foreign_pre_chain=shared
+            )
+        )
+        handlers.append(file_handler)
     if to_console:
         console = logging.StreamHandler(sys.stderr)
         console.setFormatter(
@@ -78,6 +101,7 @@ def setup_logging(cfg: LoggingConfig, *, to_console: bool = True) -> None:
         wrapper_class=structlog.make_filtering_bound_logger(level),
         cache_logger_on_first_use=True,
     )
+    return log_dir
 
 
 def get_logger(name: str | None = None) -> Any:

@@ -2,16 +2,40 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import zarr
 from zarr.codecs import ZstdCodec
 
-from dbx.contract.models import ROW_CHUNK, TILE, ZSTD_LEVEL
+from dbx.contract.models import CONTRACT, ROW_CHUNK, TILE, ZSTD_LEVEL
 
 ANNDATA_ARRAY = {"encoding-type": "array", "encoding-version": "0.2.0"}
 ANNDATA_DICT = {"encoding-type": "dict", "encoding-version": "0.1.0"}
+
+
+def is_store(path: Path) -> bool:
+    """True if `path` holds a dbx store (its manifest names the contract)."""
+    try:
+        return bool(json.loads((path / "manifest.json").read_text()).get("contract") == CONTRACT)
+    except (OSError, ValueError):
+        return False
+
+
+def prepare_output_dir(out: Path, *, force: bool = False) -> None:
+    """Clear `out` for a new store. Only an empty folder or an existing dbx store is replaced;
+    anything else is refused unless `force`, so a mistyped path never deletes user data."""
+    if not out.exists():
+        return
+    if not out.is_dir():
+        raise FileExistsError(f"{out} exists and is not a folder")
+    if force or is_store(out) or not any(out.iterdir()):
+        shutil.rmtree(out)
+        return
+    raise FileExistsError(f"{out} exists and is not a dbx store; refusing to replace it")
 
 
 def codecs() -> list[Any]:

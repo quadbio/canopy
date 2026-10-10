@@ -7,7 +7,6 @@ before the real converter exists. The converter (S5/S6) must produce the same la
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,6 +38,7 @@ from dbx.contract.write import (
     csc_x,
     morton_order,
     ome_multiscale_attrs,
+    prepare_output_dir,
     write_pyramid,
 )
 from dbx.synth.anndata_gen import consolidate
@@ -54,11 +54,12 @@ def write_example_store(
     n_genes: int = 40,
     size: tuple[int, int] = (1100, 900),
     n_points: int = 5000,
+    force: bool = False,
 ) -> Path:
-    """Write a complete store to `out` (replaced if present)."""
+    """Write a complete store to `out`. An existing store there is replaced; any other
+    non-empty folder is refused unless `force`."""
     out = Path(out)
-    if out.exists():
-        shutil.rmtree(out)
+    prepare_output_dir(out, force=force)
     rng = np.random.default_rng(0)
     h, w = size
     root = zarr.open_group(out, mode="w")
