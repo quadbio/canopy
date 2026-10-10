@@ -1,0 +1,60 @@
+// TanStack Query hooks: caching, de-duplication and loading states for every backend read.
+
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+
+import { catalog, datasets } from './endpoints';
+import { timeAsync } from '../telemetry/telemetry';
+
+const MINUTE = 60_000;
+
+export const useRoots = () => useQuery({ queryKey: ['roots'], queryFn: catalog.roots, staleTime: MINUTE });
+
+export const useFolder = (root: string, path: string, enabled = true) =>
+  useQuery({ queryKey: ['folder', root, path], queryFn: () => catalog.folder(root, path), enabled, staleTime: MINUTE });
+
+export const useSearch = (q: string) =>
+  useQuery({
+    queryKey: ['search', q],
+    queryFn: ({ signal }) => catalog.search(q, signal),
+    enabled: q.trim().length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: MINUTE,
+  });
+
+export const useDatasetDetail = (id: string | null) =>
+  useQuery({ queryKey: ['dataset', id], queryFn: () => catalog.dataset(id!), enabled: !!id, staleTime: MINUTE });
+
+export const useCatalogStatus = () =>
+  useQuery({
+    queryKey: ['catalog-status'],
+    queryFn: catalog.status,
+    refetchInterval: (q) => (q.state.data?.scanning ? 1000 : 15_000),
+  });
+
+export const useMeta = (id: string, table: string | null) =>
+  useQuery({
+    queryKey: ['meta', id, table],
+    queryFn: () => timeAsync('dataset_meta', () => datasets.meta(id, table)),
+    staleTime: 10 * MINUTE,
+    retry: false,
+  });
+
+export const useObs = (id: string, table: string | null, column: string | null) =>
+  useQuery({
+    queryKey: ['obs', id, table, column],
+    queryFn: ({ signal }) =>
+      timeAsync('obs_loaded', () => datasets.obs(id, table, column!, signal), (a) => ({ n: a.data.length })),
+    enabled: !!column,
+    staleTime: 10 * MINUTE,
+    retry: false,
+  });
+
+export const useEmbedding = (id: string, table: string | null, key: string | null, dims: number[]) =>
+  useQuery({
+    queryKey: ['obsm', id, table, key, dims.join(',')],
+    queryFn: ({ signal }) =>
+      timeAsync('embedding_loaded', () => datasets.obsm(id, table, key!, dims, signal), (a) => ({ n: a.shape[0] })),
+    enabled: !!key,
+    staleTime: 10 * MINUTE,
+    retry: false,
+  });

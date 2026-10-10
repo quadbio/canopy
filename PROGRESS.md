@@ -10,7 +10,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] S2 Contract v0 — APPROVED 2026-10-10 (decisions in contract/SPEC.md §11)
 - [x] Contract v0.2 APPROVED (option A) and implemented in the contract code (2026-10-10)
 - [x] S3 Crawler + catalog API (+ review batch 3: logging for several processes)
-- [ ] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo
+- [x] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo (awaiting user review)
 - [ ] S5 Genes + AnnData converter + jobs + memory guard
 - [ ] S6 Spatial ingest + spatial view + section grid → demo
 - [ ] S7 Workspace + colours + search + filters
@@ -104,3 +104,17 @@ Resume rule: read this file, then continue with the first unchecked step.
   - Next: S4 vertical slice. First task: adopt reviewer B's S4 kickoff checklist (SUMMARY 2.4
     note); also S6/S7 review items (SPA fallback, gzip, v3-only opens), Playwright + check-all,
     JS read check against `dbx serve`.
+- 2026-10-10 S4 DONE (ADR 0006), demo ready for the user.
+  - Backend: `dbx.data` (element-wise preview reads for h5ad / AnnData-zarr / SpatialData tables,
+    legacy layouts loaded whole below small_file_gb, LRU cache for files + arrays with idle
+    timeout), dataset API (meta, obs, obsm as binary + ETag), `/api/stores` with Range (single,
+    suffix, clamped; hidden keys 404), gzip for /api, SPA fallback, `/api/telemetry`.
+    `check-store-js` now runs against a real `dbx serve`.
+  - Frontend (reviewer B checklist): api/ state/ views/ ui/ colour/ telemetry/ styles/; zustand,
+    TanStack Query, Radix, tokens light/dark, colour Web Worker, view registry, one Deck with a
+    grid of OrthographicViews; file browser (tree, search, details, Open); embedding view
+    (embedding + dims, colour by category/number, legend with show/hide, size, opacity, tooltip).
+  - Playwright e2e (`pixi run -e dev e2e`, screenshots in frontend/test-results/screens/);
+    `check-all`. 155 backend tests, 11 frontend unit tests, 3 e2e tests.
+  - Next: user reviews the demo; then S5 (gene expression, converter, jobs, memory guard,
+    downsampling).

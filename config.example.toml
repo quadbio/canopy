@@ -26,4 +26,5 @@ measure_store_size = false   # count files of zarr stores for their size (slow o
 [memory]
 budget_gb = 8                # host: ~800
 cache_gb = 4                 # host: ~200-300
-small_file_gb = 2            # preview loads files below this fully into memory
+small_file_gb = 2            # legacy-layout (anndata < 0.8) files below this are loaded fully for preview
+idle_minutes = 30            # open datasets and loaded arrays unused this long are dropped

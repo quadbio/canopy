@@ -1,7 +1,8 @@
 // Read a dbx store over HTTP the way the browser will (Viv + zarrita) and assert the contract.
-// Usage: node scripts/read-store.mjs <store-dir>      (e.g. ../.cache/example/c0)
-// Serves the folder itself with HTTP Range support (sharded arrays are read by byte ranges),
-// counts requests and bytes, and exits non-zero on any mismatch.
+// Usage: node scripts/read-store.mjs <store-dir>     serve the folder with a minimal Range server
+//        node scripts/read-store.mjs <store-url>     read from a running `dbx serve`
+//                                                    (http://host:port/api/stores/<version>/c0)
+// Counts requests and bytes (by wrapping fetch) and exits non-zero on any mismatch.
 import assert from 'node:assert/strict';
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -9,27 +10,37 @@ import { join, normalize } from 'node:path';
 import { loadOmeZarr } from '@hms-dbmi/viv';
 import * as zarr from 'zarrita';
 
-const dir = process.argv[2];
-if (!dir) throw new Error('usage: node scripts/read-store.mjs <store-dir>');
+const target = process.argv[2];
+if (!target) throw new Error('usage: node scripts/read-store.mjs <store-dir | store-url>');
 
 const stats = { requests: 0, ranged: 0, bytes: 0, notFound: [], head: 0 };
-const server = createServer((req, res) => {
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const req = new Request(input, init);
+  const res = await realFetch(req);
+  stats.requests += 1;
+  if (req.method === 'HEAD') stats.head += 1;
+  if (req.headers.get('range')) stats.ranged += 1;
+  if (res.status === 404) stats.notFound.push(new URL(req.url).pathname.slice(storePath.length));
+  if (res.status === 206 && !res.headers.get('content-range')) throw new Error(`206 without content-range: ${req.url}`);
+  stats.bytes += Number(res.headers.get('content-length') ?? 0);
+  return res;
+};
+
+const dir = target.startsWith('http') ? null : target;
+const server = dir && createServer((req, res) => {
   const path = normalize(join(dir, decodeURIComponent(new URL(req.url, 'http://x').pathname)));
   let size;
   try {
     size = statSync(path).size;
   } catch {
-    stats.notFound.push(req.url);
     res.writeHead(404).end();
     return;
   }
-  stats.requests += 1;
-  if (req.method === 'HEAD') stats.head += 1;
   const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? '');
   let start = 0;
   let end = size - 1;
   if (m) {
-    stats.ranged += 1;
     if (m[1] === '') start = Math.max(0, size - Number(m[2])); // suffix range: last N bytes
     else {
       start = Number(m[1]);
@@ -39,11 +50,11 @@ const server = createServer((req, res) => {
   } else {
     res.writeHead(200, { 'content-length': size });
   }
-  stats.bytes += end - start + 1;
   createReadStream(path, { start, end }).pipe(res);
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const base = `http://127.0.0.1:${server.address().port}`;
+if (server) await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const base = server ? `http://127.0.0.1:${server.address().port}` : target.replace(/\/$/, '');
+const storePath = new URL(base).pathname.replace(/\/$/, '');
 
 try {
   const manifest = await (await fetch(`${base}/manifest.json`)).json();
@@ -131,5 +142,5 @@ try {
   assert.equal(stats.head, 0, 'no HEAD requests (suffix requests are used)');
   console.log(`OK: ${stats.requests} requests (${stats.ranged} range, ${stats.notFound.length} Viv v2 probes), ${(stats.bytes / 1024).toFixed(0)} KB`);
 } finally {
-  server.close();
+  server?.close();
 }

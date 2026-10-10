@@ -1,0 +1,212 @@
+// File browser (F10, basic): data roots as a folder tree, name search, and a details panel with
+// "Open". Everything comes from the catalog index; nothing here touches the file system.
+
+import { useQueryClient } from '@tanstack/react-query';
+import { useDeferredValue, useState } from 'react';
+
+import { ApiError } from '../api/client';
+import { datasets } from '../api/endpoints';
+import { useDatasetDetail, useFolder, useRoots, useSearch } from '../api/queries';
+import type { DatasetEntry } from '../api/types';
+import { useWorkspace } from '../state/workspace';
+import { event } from '../telemetry/telemetry';
+import { viewTypes } from '../views/registry';
+import { formatBytes, formatCount } from './controls';
+
+const KIND_LABEL: Record<string, string> = { h5ad: 'h5ad', anndata_zarr: 'zarr', spatialdata_zarr: 'spatial' };
+
+function DatasetRow({ d, depth }: { d: DatasetEntry; depth: number }) {
+  const selected = useWorkspace((s) => s.browserSelection === d.id);
+  const select = useWorkspace((s) => s.selectDataset);
+  const s = d.summary;
+  return (
+    <li>
+      <button
+        className={`tree-row dataset${selected ? ' selected' : ''}${d.state !== 'inspected' ? ' dim' : ''}`}
+        style={{ paddingLeft: 8 + depth * 14 }}
+        onClick={() => select(d.id)}
+        data-testid="dataset-row"
+        title={d.path}
+      >
+        <span className={`badge kind-${d.kind ?? 'none'}`}>{d.kind ? KIND_LABEL[d.kind] : d.state}</span>
+        <span className="tree-name">{d.name}</span>
+        <span className="tree-meta">{s.n_obs !== undefined ? formatCount(s.n_obs) : ''}</span>
+      </button>
+    </li>
+  );
+}
+
+function Folder({ root, path, name, depth, count }: { root: string; path: string; name: string; depth: number; count: number }) {
+  const [open, setOpen] = useState(depth === 0);
+  const q = useFolder(root, path, open);
+  return (
+    <li>
+      <button className="tree-row folder" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="chevron">{open ? '▾' : '▸'}</span>
+        <span className="tree-name">{name}</span>
+        <span className="tree-meta">{count}</span>
+      </button>
+      {open && (
+        <ul className="tree">
+          {q.isLoading && <li className="muted small" style={{ paddingLeft: 22 + depth * 14 }}>Loading…</li>}
+          {q.error && <li className="error small">{String(q.error.message)}</li>}
+          {q.data?.folders.map((f) => (
+            <Folder key={f.path} root={root} path={f.path} name={f.name} depth={depth + 1} count={f.n_datasets} />
+          ))}
+          {q.data?.datasets.map((d) => <DatasetRow key={d.id} d={d} depth={depth + 1} />)}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+function Details({ id }: { id: string }) {
+  const q = useDatasetDetail(id);
+  const addView = useWorkspace((s) => s.addView);
+  const queryClient = useQueryClient();
+  const [table, setTable] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!q.data) return <div className="details muted">{q.error ? String(q.error.message) : 'Loading…'}</div>;
+  const d = q.data;
+  const s = d.summary;
+  const fp = d.fingerprint as { spatialdata?: { tables?: Record<string, unknown> } } | null;
+  const tables = Object.keys(fp?.spatialdata?.tables ?? {});
+  const chosenTable = d.kind === 'spatialdata_zarr' ? (table ?? tables[0] ?? null) : null;
+
+  const open = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const meta = await queryClient.fetchQuery({
+        queryKey: ['meta', d.id, chosenTable],
+        queryFn: () => datasets.meta(d.id, chosenTable),
+      });
+      for (const t of viewTypes()) {
+        const params = t.create(meta);
+        if (params) {
+          addView({
+            type: t.type,
+            datasetId: d.id,
+            table: chosenTable,
+            title: chosenTable ? `${d.name} · ${chosenTable}` : d.name,
+            params,
+          });
+          event('view_opened', null, { type: t.type, kind: d.kind ?? '', n_obs: meta.n_obs });
+          return;
+        }
+      }
+      setProblem('This dataset has no embedding to show yet.');
+    } catch (e) {
+      setProblem(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="details" data-testid="details">
+      <h3 title={d.path}>{d.name}</h3>
+      <p className="muted small path">
+        {d.root} / {d.path}
+      </p>
+      <dl className="facts">
+        <dt>Type</dt>
+        <dd>{d.kind ?? '–'}</dd>
+        <dt>Size</dt>
+        <dd>{formatBytes(d.size_bytes)}</dd>
+        {s.n_obs !== undefined && (
+          <>
+            <dt>Cells × genes</dt>
+            <dd>
+              {formatCount(s.n_obs)} × {formatCount(s.n_vars)}
+            </dd>
+            <dt>Matrix</dt>
+            <dd>{s.x_encoding ?? '–'}</dd>
+            <dt>Embeddings</dt>
+            <dd>{s.embeddings?.length ? s.embeddings.join(', ') : 'none'}</dd>
+          </>
+        )}
+        {d.kind === 'spatialdata_zarr' && (
+          <>
+            <dt>Spatial</dt>
+            <dd>
+              {s.n_images ?? 0} images · {s.n_labels ?? 0} labels · {s.n_shapes ?? 0} shapes · {s.n_points ?? 0} points
+            </dd>
+          </>
+        )}
+      </dl>
+      {tables.length > 1 && (
+        <label className="field">
+          <span className="field-label">Table</span>
+          <select className="native-select" value={chosenTable ?? ''} onChange={(e) => setTable(e.target.value)}>
+            {tables.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {d.state !== 'inspected' ? (
+        <p className="error small">
+          {d.state === 'unsupported' ? 'Not a supported dataset.' : `Could not be read (${d.reason}).`}
+        </p>
+      ) : (
+        <button className="primary" onClick={open} disabled={busy} data-testid="open-dataset">
+          {busy ? 'Opening…' : 'Open'}
+        </button>
+      )}
+      {problem && <p className="error small">{problem}</p>}
+      {!!s.warnings?.length && (
+        <details className="small">
+          <summary>{s.warnings.length} notes</summary>
+          <ul>
+            {s.warnings.map((w) => (
+              <li key={w}>
+                <code>{w}</code>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+export function FileBrowser() {
+  const roots = useRoots();
+  const [query, setQuery] = useState('');
+  const q = useDeferredValue(query.trim());
+  const search = useSearch(q);
+  const selected = useWorkspace((s) => s.browserSelection);
+
+  return (
+    <aside className="sidebar" aria-label="Datasets">
+      <div className="sidebar-search">
+        <input
+          type="search"
+          placeholder="Search datasets…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search datasets"
+        />
+      </div>
+      <div className="sidebar-tree">
+        {q ? (
+          <ul className="tree">
+            {search.data?.length === 0 && <li className="muted small pad">No matches.</li>}
+            {search.data?.map((d) => <DatasetRow key={d.id} d={d} depth={0} />)}
+          </ul>
+        ) : (
+          <ul className="tree">
+            {roots.error && <li className="error small pad">{String(roots.error.message)}</li>}
+            {roots.data?.length === 0 && <li className="muted small pad">No data roots configured.</li>}
+            {roots.data?.map((r) => (
+              <Folder key={r.name} root={r.name} path="" name={r.name} depth={0} count={r.n_datasets} />
+            ))}
+          </ul>
+        )}
+      </div>
+      {selected && <Details key={selected} id={selected} />}
+    </aside>
+  );
+}

@@ -70,10 +70,21 @@ check-fe = { cmd = "pnpm check", cwd = "frontend" }
 
 # Browser-side contract check: write the reference store, read it with Viv + zarrita over HTTP.
 [feature.dev.tasks.check-store-js]
-cmd = "dbx contract example .cache/example/c0 && node frontend/scripts/read-store.mjs .cache/example/c0"
+# Viv + zarrita read the reference store served by `dbx serve` (Range requests, sharding).
+cmd = "bash scripts/check-store-served.sh"
 
 [feature.dev.tasks.check]
 depends-on = ["check-py", "check-fe", "check-store-js"]
+
+# Browser tests (Playwright, software WebGL) against `dbx serve` on the example datasets.
+# Screenshots land in frontend/test-results/screens/.
+[feature.dev.tasks.e2e]
+cmd = "pnpm build && pnpm exec playwright test"
+cwd = "frontend"
+
+# Everything, with the example datasets required: what to run before a demo or release.
+[feature.dev.tasks.check-all]
+depends-on = ["check", "test-examples", "e2e"]
 
 [environments]
 default = { solve-group = "main" }

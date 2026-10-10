@@ -64,8 +64,11 @@ class MemoryConfig(_Strict):
     # Upper bound for everything the browser holds (cache + jobs), in GB.
     budget_gb: float = 8.0
     cache_gb: float = 4.0
-    # Files smaller than this are loaded fully into memory in preview.
+    # Legacy-layout files (anndata < 0.8) whose estimated in-memory size is below this are loaded
+    # fully for preview; larger ones need conversion.
     small_file_gb: float = 2.0
+    # Open datasets and loaded arrays unused for this long are dropped from the cache.
+    idle_minutes: float = 30.0
 
     @model_validator(mode="after")
     def _cache_within_budget(self) -> MemoryConfig:

@@ -50,11 +50,35 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 - API: `GET /api/catalog/roots`, `/tree?root=&path=`, `/search?q=`, `/datasets/{id}`, `/status`;
   `POST /api/catalog/refresh?full=`.
 
+## Dataset API and stores
+
+- `GET /api/datasets/{id}/meta?table=`: cells, genes, obs columns (kind, categories, colours
+  from `uns[<col>_colors]`), embeddings. `table` picks a SpatialData table.
+- `GET /api/datasets/{id}/obs?column=` and `/obsm?key=&dims=0,1`: binary little-endian arrays
+  (`x-dbx-dtype`, `x-dbx-shape`, `x-dbx-kind` headers; ETag; gzip). Category codes are int8/16/32
+  with -1 for missing; numbers float32 (NaN for missing).
+- Files are read element by element, never loaded whole; files in the anndata < 0.8 layout are
+  loaded fully when their estimated memory size is below `memory.small_file_gb`, else 409
+  `needs_conversion:legacy_layout`. Open files and arrays share an LRU within `memory.cache_gb`.
+- `GET /api/stores/<version>/c0/<key>`: converted stores for Viv/zarrita, with Range requests.
+- `POST /api/telemetry`: the browser's timing marks and GPU facts, logged as `client_event`.
+
+## Frontend
+
+`frontend/src/`: `api/` (typed client, TanStack Query hooks; views never call fetch), `state/`
+(zustand workspace, kept per browser), `views/` (view registry, the single deck.gl canvas,
+`embedding/`), `ui/` (file browser, Radix-based controls), `colour/` (palettes and the colour
+Web Worker), `telemetry/`, `styles/` (design tokens, light/dark). A new view type is one module
+that calls `registerView` (see `views/registry.ts`).
+
 ## Checks
 
 `pixi run -e dev check` runs ruff, mypy and pytest (backend), eslint, tsc and vitest (frontend)
-and the browser-library read check of the reference store. `pixi run -e dev test-examples` runs
-the backend tests with the example datasets required (missing ones fail instead of skipping).
+and the browser-library read check of the reference store served by `dbx serve`.
+`pixi run -e dev test-examples` runs the backend tests with the example datasets required.
+`pixi run -e dev e2e` builds the frontend and runs the Playwright tests in Chromium (software
+WebGL) against `dbx serve` on the example datasets; screenshots go to
+`frontend/test-results/screens/`. `pixi run -e dev check-all` runs all of these.
 
 ## Environments and versions
 

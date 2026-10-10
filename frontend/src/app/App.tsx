@@ -1,57 +1,97 @@
-import { OrthographicView } from '@deck.gl/core';
-import { ScatterplotLayer } from '@deck.gl/layers';
-import DeckGL from '@deck.gl/react';
+// Application shell: header, file browser (left), the canvas (centre), the selected view's
+// settings (right).
+
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
-import { getHealth, type Health } from '../api/client';
+import { catalog } from '../api/endpoints';
+import { useCatalogStatus } from '../api/queries';
+import { useWorkspace } from '../state/workspace';
+import { FileBrowser } from '../ui/FileBrowser';
+import { Canvas } from '../views/Canvas';
+import { viewType } from '../views/registry';
+import '../views/embedding';
 
-// S0 smoke screen: backend health + one deck.gl canvas with two views, proving the
-// rendering stack builds and runs. Replaced by the real shell in S4.
-const points = Array.from({ length: 2000 }, (_, i) => ({
-  position: [Math.cos(i) * (i % 97), Math.sin(i) * (i % 89)] as [number, number],
-  group: i % 2,
-}));
+type Theme = 'system' | 'light' | 'dark';
 
-const views = [
-  new OrthographicView({ id: 'left', x: 0, width: '50%' }),
-  new OrthographicView({ id: 'right', x: '50%', width: '50%' }),
-];
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      return (localStorage.getItem('dbx-theme') as Theme) || 'system';
+    } catch {
+      return 'system';
+    }
+  });
+  useEffect(() => {
+    if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('dbx-theme', theme);
+    } catch {
+      // storage unavailable: the choice lasts for this page only
+    }
+  }, [theme]);
+  const next: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
+  return [theme, () => setTheme(next[theme])];
+}
+
+function CatalogStatus() {
+  const status = useCatalogStatus();
+  const qc = useQueryClient();
+  const scanning = status.data?.scanning;
+  const last = status.data?.last_scan;
+  useEffect(() => {
+    if (!scanning) void qc.invalidateQueries({ predicate: (q) => ['roots', 'folder', 'search'].includes(String(q.queryKey[0])) });
+  }, [scanning, last?.id, qc]);
+  const when = last?.finished ? new Date(last.finished * 1000).toLocaleTimeString() : null;
+  return (
+    <div className="catalog-status">
+      <span className="muted small">{scanning ? 'Scanning…' : when ? `Indexed ${when}` : ''}</span>
+      <button className="ghost" onClick={() => void catalog.refresh().then(() => status.refetch())} disabled={scanning}>
+        Refresh
+      </button>
+    </div>
+  );
+}
+
+function SettingsPanel() {
+  const spec = useWorkspace((s) => s.views.find((v) => v.id === s.selected) ?? null);
+  const t = spec ? viewType(spec.type) : undefined;
+  return (
+    <aside className="panel" aria-label="View settings">
+      {spec && t ? (
+        <>
+          <h3 className="panel-title" title={spec.title}>
+            {spec.title}
+          </h3>
+          <p className="muted small">{t.label}</p>
+          <t.Panel spec={spec} />
+        </>
+      ) : (
+        <p className="muted small pad">Select a view to change its settings.</p>
+      )}
+    </aside>
+  );
+}
 
 export function App() {
-  const [health, setHealth] = useState<Health | string>('…');
-
-  useEffect(() => {
-    getHealth()
-      .then(setHealth)
-      .catch((e: Error) => setHealth(e.message));
-  }, []);
-
-  const layers = [
-    new ScatterplotLayer({
-      id: 'pts',
-      data: points,
-      getPosition: (d) => d.position,
-      getFillColor: (d) => (d.group ? [214, 96, 77] : [67, 147, 195]),
-      getRadius: 1.5,
-    }),
-  ];
-
+  const [theme, cycleTheme] = useTheme();
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui' }}>
-      <header style={{ padding: '8px 16px', borderBottom: '1px solid #ddd' }}>
-        dbx · backend: {typeof health === 'string' ? health : `${health.status} (v${health.version})`}
+    <div className="app">
+      <header className="header">
+        <span className="brand">dbx</span>
+        <span className="muted small">data browser</span>
+        <div className="spacer" />
+        <CatalogStatus />
+        <button className="ghost" onClick={cycleTheme} title="Theme: system, light or dark">
+          Theme: {theme === 'system' ? 'auto' : theme}
+        </button>
       </header>
-      <div style={{ position: 'relative', flex: 1 }}>
-        <DeckGL
-          views={views}
-          initialViewState={{
-            left: { target: [0, 0, 0], zoom: 1 },
-            right: { target: [0, 0, 0], zoom: 2 },
-          }}
-          controller
-          layers={layers}
-        />
-      </div>
+      <FileBrowser />
+      <main className="main">
+        <Canvas />
+      </main>
+      <SettingsPanel />
     </div>
   );
 }

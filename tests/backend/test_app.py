@@ -70,3 +70,21 @@ def test_failed_request_gets_status_id_and_log(cfg: Config) -> None:
     assert ev["exc_type"] == "RuntimeError"
     # standard privacy: the quoted name in the message is a token
     assert "patient42" not in ev["exc_message"]
+
+
+def test_client_telemetry_is_logged_and_bounded(cfg: Config) -> None:
+    with TestClient(create_app(cfg, background=False)) as client:
+        ok = client.post(
+            "/api/telemetry",
+            json={
+                "session": "s-1",
+                "events": [{"name": "first_draw", "ms": 12.5, "fields": {"n_points": 51787}}],
+            },
+        )
+        bad = client.post(
+            "/api/telemetry",
+            json={"session": "s-1", "events": [{"name": "x", "fields": {"k": "a'name\nwith"}}]},
+        )
+    assert ok.status_code == 204 and bad.status_code == 422
+    ev = next(e for e in log_events() if e["event"] == "client_event")
+    assert ev["client_event"] == "first_draw" and ev["c_n_points"] == 51787 and ev["ms"] == 12.5

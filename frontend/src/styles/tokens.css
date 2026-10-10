@@ -1,0 +1,67 @@
+/* Design tokens. Components use these variables only, never literal colours or sizes, so the
+   look can be refined (stage 3) without touching component code. Light and dark follow the
+   system unless data-theme is set on <html>. */
+:root {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --sidebar-width: 300px;
+  --panel-width: 280px;
+  --header-height: 40px;
+
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #f0f1f3;
+  --border: #e1e3e8;
+  --text: #1b1d22;
+  --text-muted: #6a707c;
+  --accent: #3b6fd8;
+  --accent-text: #ffffff;
+  --accent-soft: #e6eefc;
+  --danger: #c4372f;
+  --warning: #b7791f;
+  --success: #2f855a;
+  --canvas-bg: #ffffff;
+  --focus: 0 0 0 2px var(--accent-soft), 0 0 0 3px var(--accent);
+  --shadow: 0 1px 2px rgb(0 0 0 / 6%), 0 2px 8px rgb(0 0 0 / 6%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #121317;
+    --surface: #1a1c21;
+    --surface-2: #23262d;
+    --border: #2e323a;
+    --text: #e6e8ec;
+    --text-muted: #9097a3;
+    --accent: #6d97ef;
+    --accent-text: #0e1116;
+    --accent-soft: #1f2a40;
+    --canvas-bg: #0d0e11;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 30%);
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #121317;
+  --surface: #1a1c21;
+  --surface-2: #23262d;
+  --border: #2e323a;
+  --text: #e6e8ec;
+  --text-muted: #9097a3;
+  --accent: #6d97ef;
+  --accent-text: #0e1116;
+  --accent-soft: #1f2a40;
+  --canvas-bg: #0d0e11;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 30%);
+}
