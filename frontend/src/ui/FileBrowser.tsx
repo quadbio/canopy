@@ -106,12 +106,12 @@ function Details({ id }: { id: string }) {
     (chosenTable ? fp?.spatialdata?.tables?.[chosenTable]?.layers : fp?.anndata?.layers) ?? {},
   );
 
-  const open = async () => {
+  const open = async (only?: string) => {
     setBusy(true);
     setProblem(null);
     try {
       const meta = await queryClient.fetchQuery(metaQuery(d.id, chosenTable));
-      for (const t of viewTypes()) {
+      for (const t of viewTypes().filter((x) => !only || x.type === only)) {
         const defaults = t.create(meta);
         if (defaults) {
           // Continue with the settings this dataset had last time, if any.
@@ -204,9 +204,22 @@ function Details({ id }: { id: string }) {
           {d.state === 'unsupported' ? 'Not a supported dataset.' : `Could not be read (${d.reason}).`}
         </p>
       ) : (
-        <button className="primary" onClick={open} disabled={busy} data-testid="open-dataset">
-          {busy ? 'Opening…' : 'Open'}
-        </button>
+        <div className="open-row">
+          {d.kind === 'spatialdata_zarr' && d.conversion?.converted ? (
+            <>
+              <button className="primary" onClick={() => void open('spatial')} disabled={busy} data-testid="open-spatial">
+                {busy ? 'Opening…' : 'Open spatial view'}
+              </button>
+              <button className="ghost" onClick={() => void open('embedding')} disabled={busy} data-testid="open-dataset">
+                Open embedding
+              </button>
+            </>
+          ) : (
+            <button className="primary" onClick={() => void open()} disabled={busy} data-testid="open-dataset">
+              {busy ? 'Opening…' : 'Open'}
+            </button>
+          )}
+        </div>
       )}
       {problem && <p className="error small">{problem}</p>}
       {d.state === 'inspected' && <Conversion key={d.id} datasetId={d.id} layers={layers} />}

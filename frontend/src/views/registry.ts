@@ -79,6 +79,10 @@ export function panelsOf(out: ViewOutput | undefined): PanelOutput[] {
 export interface ViewType<P = Record<string, unknown>> {
   type: string;
   label: string;
+  /** Lower first when several view types can show a dataset (default 10). */
+  rank?: number;
+  /** The name of the "Open" button for this view type (default "Open"). */
+  openLabel?: string;
   /** Whether this view can show the dataset, and its default parameters if so. */
   create: (meta: DatasetMeta) => P | null;
   /** Saved parameters (from an older build, or edited by hand) made valid: defaults filled in,
@@ -100,6 +104,7 @@ export function viewType<P = Record<string, unknown>>(type: string): ViewType<P>
   return registry.get(type) as unknown as ViewType<P> | undefined;
 }
 
+/** All view types, the preferred ones first (`rank`). */
 export function viewTypes(): ViewType[] {
-  return [...registry.values()] as unknown as ViewType[];
+  return ([...registry.values()] as unknown as ViewType[]).sort((a, b) => (a.rank ?? 10) - (b.rank ?? 10));
 }

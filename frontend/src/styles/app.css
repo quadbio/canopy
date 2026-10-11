@@ -388,3 +388,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .progress { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .progress-bar { height: 100%; background: var(--accent); transition: width 0.4s ease; }
 .view-caption { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
+
+/* file details: open buttons */
+.open-row { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+
+/* spatial view settings: image channels and transcript genes */
+.channels { display: flex; flex-direction: column; gap: var(--space-1); margin: 0 0 var(--space-2); }
+.channel .check { display: flex; align-items: center; gap: 4px; }
+.gene-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: var(--space-1) 0; padding: 0; list-style: none; }
+.gene-chips li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 2px 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}

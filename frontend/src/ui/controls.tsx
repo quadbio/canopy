@@ -104,6 +104,49 @@ export function Slider({
   );
 }
 
+/** A slider with two thumbs, for a range (e.g. an image channel's contrast). */
+export function RangeSlider({
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  label,
+  format = (v) => String(v),
+}: {
+  value: [number, number];
+  onChange: (v: [number, number]) => void;
+  min: number;
+  max: number;
+  step: number;
+  label: string;
+  format?: (v: number) => string;
+}) {
+  return (
+    <div className="slider-row">
+      <RSlider.Root
+        className="slider"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        minStepsBetweenThumbs={1}
+        onValueChange={([lo, hi]) => onChange([lo, hi])}
+        aria-label={label}
+      >
+        <RSlider.Track className="slider-track">
+          <RSlider.Range className="slider-range" />
+        </RSlider.Track>
+        <RSlider.Thumb className="slider-thumb" aria-label={`${label}: lowest`} />
+        <RSlider.Thumb className="slider-thumb" aria-label={`${label}: highest`} />
+      </RSlider.Root>
+      <span className="slider-value">
+        {format(value[0])}–{format(value[1])}
+      </span>
+    </div>
+  );
+}
+
 /** A small "?" that explains a term: opens on click or tap (Escape or a click outside closes it). */
 export function Help({ children, label = 'What is this?' }: { children: ReactNode; label?: string }) {
   return (

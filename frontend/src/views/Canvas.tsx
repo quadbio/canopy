@@ -228,6 +228,13 @@ const ViewCell = memo(function ViewCell({
   );
 });
 
+/** The top-level layer a (sub-)layer belongs to. */
+function rootOf(layer: Layer): Layer {
+  let l = layer;
+  while (l.parent) l = l.parent as Layer;
+  return l;
+}
+
 const NO_PANELS: { key: string; title?: string; rect: Cell }[] = [];
 const panelCache = new WeakMap<Layout, { key: string; title?: string; rect: Cell }[]>();
 /** Stable per layout, so the memoised cell re-renders only when its panels change. */
@@ -398,7 +405,7 @@ export function Canvas() {
 
   const tooltip = (info: PickingInfo) => {
     if (dragging || !info.layer || info.index < 0) return null;
-    const { view, panel } = ownerOf(info.layer.id);
+    const { view, panel } = ownerOf(rootOf(info.layer).id);
     const text = panelsOf(outputs[view]).find((p) => p.id === panel)?.tooltip?.(info.index);
     return text ? { text, className: 'deck-tooltip' } : null;
   };
@@ -437,7 +444,8 @@ export function Canvas() {
           }}
           onInteractionStateChange={(s) => setDragging(!!s.isDragging)}
           layers={layers}
-          layerFilter={({ layer, viewport }) => layer.id.startsWith(`${viewport.id}:`)}
+          // by the top-level layer's id: sub-layers (e.g. Viv's image tiles) have their own ids
+          layerFilter={({ layer, viewport }) => rootOf(layer).id.startsWith(`${viewport.id}:`)}
           getTooltip={tooltip}
           onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
           onAfterRender={() => {

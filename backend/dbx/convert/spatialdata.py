@@ -184,6 +184,7 @@ def write_pyramid_lazy(group: zarr.Group, level0: Any, nearest: bool) -> list[li
             chunks=chunks,
             compressors=codecs(),
             overwrite=True,
+            config={"write_empty_chunks": True},  # no 404s for empty tiles in the browser
         )
         da.store(current.rechunk(chunks), a, lock=False)  # type: ignore[arg-type]
         shapes.append([*level0.shape[:-2], h, w])
@@ -222,7 +223,8 @@ def _write_image(
     channels: list[ChannelInfo] = []
     omero: list[dict[str, Any]] = []
     for i in range(n_c):
-        win = full if rgb and full else _window(smallest[i])
+        # from the data also for RGB-like images: 3 uint8 channels are often a dim stain
+        win = _window(smallest[i])
         lo, hi = full or (float(np.nanmin(smallest[i])), float(np.nanmax(smallest[i])))
         colour = CHANNEL_COLOURS[i % len(CHANNEL_COLOURS)]
         channels.append(ChannelInfo(name=names[i], window=win, color=f"#{colour.lower()}"))

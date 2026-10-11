@@ -30,6 +30,8 @@ port = $port
 [logging]
 dir = "logs"
 memory_sample_interval = 0
+[jobs]
+memory_gb = 1.0  # the example conversions need well under 1 GB; keeps the memory guard satisfied
 CONF
 echo "e2e server: logs in $tmp/logs" >&2
 exec dbx serve --config "$tmp/config.toml"

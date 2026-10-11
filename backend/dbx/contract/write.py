@@ -81,6 +81,8 @@ def array(
         shards=shards,
         compressors=codecs(),
         overwrite=True,
+        # every chunk is written, also all-zero ones: a missing chunk is a 404 in the browser
+        config={"write_empty_chunks": True},
     )
     if data.size:
         a[...] = data

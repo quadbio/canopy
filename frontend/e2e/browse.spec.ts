@@ -101,7 +101,7 @@ test('a broken saved workspace does not break the app', async ({ page }) => {
       JSON.stringify({
         state: {
           views: [
-            { id: 'a', type: 'spatial', datasetId: 'x', table: null, title: 'future view', params: {} },
+            { id: 'a', type: 'from-a-later-version', datasetId: 'x', table: null, title: 'future view', params: {} },
             { id: 'b', type: 'embedding', datasetId: 'nope', table: null, title: 'old', params: { embedding: 'X_umap' } },
           ],
           selected: 'a',
@@ -539,4 +539,54 @@ test('split by a column: one panel per category, linked zoom, one legend', async
   await page.getByRole('option', { name: /^None/ }).click();
   await expect(cell.getByTestId('panel')).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test('spatial view: convert a SpatialData store, see image, coloured cells and transcripts', async ({ page }) => {
+  test.setTimeout(180_000);
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await page.getByTestId('dataset-row').filter({ hasText: 'region_1' }).click();
+  await page.getByTestId('convert').click();
+  await expect(page.getByTestId('open-spatial')).toBeVisible({ timeout: 120_000 });
+  await page.getByTestId('open-spatial').click();
+  const cell = page.getByTestId('view-cell').first();
+  await expect(cell).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
+  await expect(page.getByTestId('view-caption')).toHaveText('6.1 k cells');
+  await expect(page.getByTestId('legend')).toBeVisible();
+  await page.waitForTimeout(1500);
+  // cells coloured by category: many colours on screen
+  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 }), 0.001).length).toBeGreaterThan(8);
+  // a hover on a cell names its category
+  const box = (await cell.boundingBox())!;
+  let tip: string | null = null;
+  for (let gx = 0.2; gx < 0.6 && !tip; gx += 0.03) {
+    for (let gy = 0.3; gy < 0.8 && !tip; gy += 0.03) {
+      await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
+      if (await page.locator('.deck-tooltip').isVisible({ timeout: 100 }).catch(() => false)) {
+        tip = await page.locator('.deck-tooltip').textContent();
+      }
+    }
+  }
+  expect(tip).toMatch(/^[\w.]+: .+/);
+  await page.screenshot({ path: 'test-results/screens/spatial-cells.png' });
+
+  // without cells, the image remains (not black)
+  await page.getByTestId('cells-select').click();
+  await page.getByRole('option', { name: /^None/ }).click();
+  await page.waitForTimeout(1500);
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.01);
+  await page.screenshot({ path: 'test-results/screens/spatial-image.png' });
+
+  // transcripts of a gene
+  await page.getByTestId('image-select').click();
+  await page.getByRole('option', { name: /^None/ }).click();
+  await page.getByTestId('transcript-search').fill('GAD1');
+  await page.getByTestId('transcript-search').press('Enter');
+  await expect(page.getByTestId('transcript-genes').locator('li')).toHaveCount(1);
+  await page.waitForTimeout(1500);
+  expect(await colourShare(page, cell, [255, 77, 77], 40, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.0005);
+  await page.screenshot({ path: 'test-results/screens/spatial-transcripts.png' });
+  // only Viv's two zarr-v2 probes may be missing (.zattrs, .zgroup per image opened)
+  expect(errors.filter((e) => !/404/.test(e))).toEqual([]);
+  expect(errors.filter((e) => /404/.test(e)).length).toBeLessThanOrEqual(2);
 });
