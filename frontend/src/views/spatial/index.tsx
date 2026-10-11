@@ -4,9 +4,11 @@
 // transcripts of chosen genes. Everything is read from the store (contract/SPEC.md §5–§8);
 // each element is placed with its affine for the chosen coordinate system.
 //
-// Reading: the image tile by tile (only what is on screen); cell outlines whole up to
-// MAX_VERTICES, else cell centres (outlines in view come in S6c); transcripts per gene: their
-// range of the gene-sorted store, or the even sample of genes above the store's cap.
+// Reading: the image tile by tile (only what is on screen). Cell outlines whole up to
+// MAX_VERTICES; for more, cell centres, and the outlines of the blocks in view once at most
+// OUTLINE_BUDGET cells are in view. Transcripts per gene: its range of the gene-sorted store; a
+// gene above the store's cap shows its even sample, and when zoomed in (at most IN_VIEW_POINTS
+// expected in view) the chunks of its range in view.
 
 import { type Layer } from '@deck.gl/core';
 import { PathLayer, ScatterplotLayer, type ScatterplotLayerProps, SolidPolygonLayer } from '@deck.gl/layers';
@@ -43,6 +45,7 @@ import {
   normaliseColourParams,
   useColouring,
 } from '../colouring';
+import { useLod } from '../lod';
 import { type Bounds, MAIN_PANEL, panelKey, panelLayerId, registerView, type ViewOutput } from '../registry';
 
 export interface ChannelSetting {
@@ -63,13 +66,55 @@ export interface SpatialParams extends ColourParams {
   pointSize: number;
 }
 
-// Cell outlines are read whole up to this many vertices (8 bytes each), else cell centres.
-export const MAX_VERTICES = 4_000_000;
+function override(name: string): number | null {
+  try {
+    const v = new URLSearchParams(window.location.search).get(name);
+    return v && /^\d+$/.test(v) ? Number(v) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Cell outlines are read whole up to this many vertices (8 bytes each), else by blocks in view
+// (`?outlines=<n>` in the page address changes it, for tests).
+export const MAX_VERTICES = override('outlines') ?? 4_000_000;
+// Outlines are drawn when at most this many cells are in view (else their centres;
+// `?cellsInView=<n>` changes it).
+export const OUTLINE_BUDGET = override('cellsInView') ?? 300_000;
+// A gene above the store's sample cap is read in full in view when about this many fit.
+export const IN_VIEW_POINTS = 1_500_000;
+const POLY_BLOCK = 4_096; // polygons per block (contract)
+const POINT_CHUNK = 16_384; // transcript rows per chunk (contract)
 export const MAX_GENES = 6;
 const MAX_CHANNELS = 6; // Viv's limit
 // Distinct colours for transcripts of up to MAX_GENES genes (bright on dark images).
 export const GENE_COLOURS = ['#ff4d4d', '#4dd2ff', '#ffd24d', '#7dff4d', '#ff4dff', '#ffffff'];
 const VALUE_COLOUR = new ValueColourExtension();
+
+/** The inverse of a 3×3 affine (row-major). */
+export function invert(a: Affine): Affine {
+  const [[p, q, x], [r, t, y]] = a;
+  const det = p * t - q * r || 1e-12;
+  const ip = t / det;
+  const iq = -q / det;
+  const ir = -r / det;
+  const it = p / det;
+  return [
+    [ip, iq, -(ip * x + iq * y)],
+    [ir, it, -(ir * x + it * y)],
+    [0, 0, 1],
+  ];
+}
+
+const meets = (a: ArrayLike<number>, k: number, r: Bounds) =>
+  a[4 * k] <= r[2] && a[4 * k + 2] >= r[0] && a[4 * k + 1] <= r[3] && a[4 * k + 3] >= r[1];
+
+/** Blocks (or chunks) whose boxes (rows of 4: x0, y0, x1, y1) meet `rect`. */
+export function boxesInView(boxes: ArrayLike<number>, rect: Bounds, from = 0, to = boxes.length / 4): number[] {
+  const out: number[] = [];
+  for (let k = from; k < to; k += 1) if (meets(boxes, k, rect)) out.push(k);
+  return out;
+}
 
 /** A 3×3 affine (row-major) as a deck.gl model matrix. */
 export function modelMatrix(a: Affine): Matrix4 {
@@ -224,6 +269,21 @@ function useCells(version: string | undefined, path: string | null, load: boolea
   });
 }
 
+async function readBlock(version: string, path: string, n: number, b: number): Promise<Polygons> {
+  const s0 = b * POLY_BLOCK;
+  const s1 = Math.min(n, s0 + POLY_BLOCK);
+  const starts = (await readArray(version, `${path}/starts`, [slice(s0, s1 + 1)])).data;
+  const v0 = Number(starts[0]);
+  const v1 = Number(starts[s1 - s0]);
+  const [verts, row] = await Promise.all([
+    readArray(version, `${path}/vertices`, [slice(v0, v1), null]),
+    readArray(version, `${path}/row`, [slice(s0, s1)]),
+  ]);
+  const local = new Uint32Array(s1 - s0 + 1);
+  for (let i = 0; i < local.length; i += 1) local[i] = Number(starts[i]) - v0;
+  return { starts: local, vertices: verts.data as Float32Array, row: row.data as Int32Array, box: [0, 0, 0, 0] };
+}
+
 /** Per-vertex colour values: each vertex takes its polygon's table row's value. */
 function vertexValues(p: Polygons, values: Float32Array | null): Float32Array {
   const out = new Float32Array(p.vertices.length / 2);
@@ -303,7 +363,33 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
   const shapes = m && el?.cells ? m.shapes[el.cells] : null;
   const whole = !!shapes && shapes.kind === 'polygons' && (shapes.n_vertices ?? 0) <= MAX_VERTICES;
   const polys = useCells(version, shapes?.path ?? null, whole);
-  const centroids = useStoreArray(version, shapes && !whole && shapes.kind === 'polygons' ? `${shapes.path}/centroid` : null);
+  const blocky = !!shapes && shapes.kind === 'polygons' && !whole;
+  const centroids = useStoreArray(version, blocky ? `${shapes!.path}/centroid` : null);
+  const blockBox = useStoreArray(version, blocky ? `${shapes!.path}/block_bbox` : null);
+  // the area in view, in the cells' own coordinates
+  const extent = useLod((s) => s.extent[spec.id]);
+  const affine = shapes && system ? shapes.transforms[system] : null;
+  const rect = useMemo(() => (extent && affine ? transformBox(invert(affine), extent) : null), [extent, affine]);
+  const centreXY = centroids.data?.data as Float32Array | undefined;
+  const blocksInView = useMemo(() => {
+    if (!blocky || !rect || !centreXY || !blockBox.data) return [];
+    let inView = 0;
+    for (let i = 0; i < centreXY.length; i += 2) {
+      const x = centreXY[i];
+      const y = centreXY[i + 1];
+      if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3] && ++inView > OUTLINE_BUDGET) return [];
+    }
+    return boxesInView(blockBox.data.data, rect);
+  }, [blocky, rect, centreXY, blockBox.data]);
+  const blocks = useQueries({
+    queries: blocksInView.map((b) => ({
+      queryKey: ['store-block', version, shapes?.path, b],
+      queryFn: () => readBlock(version!, shapes!.path, shapes!.n, b),
+      staleTime: Infinity,
+      gcTime: 30_000,
+      retry: false,
+    })),
+  });
   const centroidRows = useStoreArray(version, shapes && !whole ? `${shapes.path}/row` : null);
   const circles = useStoreArray(version, shapes?.kind === 'circles' ? `${shapes.path}/center` : null);
   const radius = useStoreArray(version, shapes?.kind === 'circles' ? `${shapes.path}/radius` : null);
@@ -314,32 +400,78 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     () => (polys.data ? { value: vertexValues(polys.data, values), size: 1 } : null),
     [polys.data, values],
   );
+  const blockAttrs = useMemo(
+    () => blocks.map((q) => (q.data ? { value: vertexValues(q.data, values), size: 1 } : null)),
+    [blocks.map((q) => q.dataUpdatedAt).join(','), values], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const outlinesReady = blocksInView.length > 0 && blocks.every((q) => q.data);
   const pointRows = centroidRows.data?.data as Int32Array | undefined;
   const pointAttr = useMemo(() => (pointRows ? { value: gatherByRow(pointRows, values), size: 1 } : null), [pointRows, values]);
 
   // ---- transcripts
   const points = m && el?.transcripts ? m.points[el.transcripts] : null;
   const features = useFeatures(version, points?.path ?? null);
+  const chunkBox = useStoreArray(version, points ? `${points.path}/chunk_bbox` : null);
+  const pAffine = points && system ? points.transforms[system] : null;
+  const pRect = useMemo(() => (extent && pAffine ? transformBox(invert(pAffine), extent) : null), [extent, pAffine]);
+  // the share of the transcripts' area in view (for "how many would be in view")
+  const pShare = useMemo(() => {
+    if (!pRect || !points) return 1;
+    const [x0, y0, x1, y1] = points.bbox;
+    const w = Math.max(0, Math.min(x1, pRect[2]) - Math.max(x0, pRect[0]));
+    const h = Math.max(0, Math.min(y1, pRect[3]) - Math.max(y0, pRect[1]));
+    return Math.min(1, (w * h) / Math.max((x1 - x0) * (y1 - y0), 1e-12));
+  }, [pRect, points]);
   const geneReads = useQueries({
-    queries: p.genes.map((g) => ({
-      queryKey: ['store-transcripts', version, points?.path, g],
-      queryFn: async () => {
-        const f = features.data!.names.indexOf(g);
-        if (f < 0) return null;
-        const t0 = performance.now();
-        const lo = Number(features.data!.offsets[f]);
-        const hi = Number(features.data!.offsets[f + 1]);
-        const sampled = hi - lo > points!.lod_cap;
-        const [a, b] = sampled ? [Number(features.data!.lod[f]), Number(features.data!.lod[f + 1])] : [lo, hi];
-        const xy = await readArray(version!, `${points!.path}/${sampled ? 'lod/xy' : 'xy'}`, [slice(a, b), null]);
-        event('transcripts_loaded', performance.now() - t0, { n: b - a, sampled: sampled ? 1 : 0 });
-        return { gene: g, xy: xy.data as Float32Array, n: hi - lo, sampled };
-      },
-      enabled: !!features.data && !!points,
-      staleTime: Infinity,
-      gcTime: 30_000,
-      retry: false,
-    })),
+    queries: p.genes.map((g) => {
+      const f = features.data ? features.data.names.indexOf(g) : -1;
+      const lo = f >= 0 ? Number(features.data!.offsets[f]) : 0;
+      const hi = f >= 0 ? Number(features.data!.offsets[f + 1]) : 0;
+      const big = !!points && hi - lo > points.lod_cap;
+      // a common gene zoomed in: its chunks in view (else its even sample)
+      const inView = big && !!pRect && !!chunkBox.data && (hi - lo) * pShare <= IN_VIEW_POINTS;
+      return {
+        queryKey: ['store-transcripts', version, points?.path, g, inView ? pRect : null],
+        queryFn: async () => {
+          if (f < 0) return null;
+          const t0 = performance.now();
+          let xy: Float32Array;
+          let mode: 'all' | 'sample' | 'in view';
+          if (inView) {
+            const parts = boxesInView(chunkBox.data!.data, pRect!, Math.floor(lo / POINT_CHUNK), Math.ceil(hi / POINT_CHUNK));
+            const reads = await Promise.all(
+              parts.map((k) =>
+                readArray(version!, `${points!.path}/xy`, [
+                  slice(Math.max(lo, k * POINT_CHUNK), Math.min(hi, (k + 1) * POINT_CHUNK)),
+                  null,
+                ]),
+              ),
+            );
+            xy = new Float32Array(reads.reduce((a, r) => a + r.data.length, 0));
+            let o = 0;
+            for (const r of reads) {
+              xy.set(r.data as Float32Array, o);
+              o += r.data.length;
+            }
+            mode = 'in view';
+          } else if (big) {
+            const [a, b] = [Number(features.data!.lod[f]), Number(features.data!.lod[f + 1])];
+            xy = (await readArray(version!, `${points!.path}/lod/xy`, [slice(a, b), null])).data as Float32Array;
+            mode = 'sample';
+          } else {
+            xy = (await readArray(version!, `${points!.path}/xy`, [slice(lo, hi), null])).data as Float32Array;
+            mode = 'all';
+          }
+          event('transcripts_loaded', performance.now() - t0, { n: xy.length / 2, mode });
+          return { gene: g, xy, n: hi - lo, mode };
+        },
+        placeholderData: (prev: unknown) => prev as never,
+        enabled: !!features.data && !!points,
+        staleTime: Infinity,
+        gcTime: 30_000,
+        retry: false,
+      };
+    }),
   });
 
   // ---- layers
@@ -366,16 +498,16 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     if (shapes && shapes.transforms[system]) {
       const mm = modelMatrix(shapes.transforms[system]);
       const vc = (colourCells ? valueColour : null) ?? CELL_BASE;
-      if (polys.data && vertexAttr) {
+      const outline = (name: string, poly: Polygons, attr: { value: Float32Array; size: number }) => {
         const data = {
-          length: polys.data.row.length,
-          startIndices: polys.data.starts,
-          attributes: { getPolygon: { value: polys.data.vertices, size: 2 }, getColourValue: vertexAttr },
+          length: poly.row.length,
+          startIndices: poly.starts,
+          attributes: { getPolygon: { value: poly.vertices, size: 2 }, getColourValue: attr },
         };
         if (p.cellStyle === 'fill') {
           out.push(
             new SolidPolygonLayer({
-              id: id('cells'),
+              id: id(name),
               data: data as never,
               _normalize: false,
               filled: true,
@@ -390,7 +522,7 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
         } else {
           out.push(
             new PathLayer({
-              id: id('cells'),
+              id: id(name),
               data: { ...data, attributes: { getPath: data.attributes.getPolygon, getColourValue: vertexAttr } } as never,
               _pathType: 'open',
               getColor: [...BASE_RGB, 255],
@@ -404,11 +536,13 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
             } as never),
           );
         }
-      } else if ((centroids.data || circles.data) && pointAttr) {
+      };
+      if (polys.data && vertexAttr) outline('cells', polys.data, vertexAttr);
+      else if ((centroids.data || circles.data) && pointAttr && !(outlinesReady && !circles.data)) {
         const pos = (circles.data ?? centroids.data)!.data as Float32Array;
         out.push(
           new ScatterplotLayer({
-            id: id('cells'),
+            id: id('cell-centres'),
             data: {
               length: pos.length / 2,
               attributes: {
@@ -428,6 +562,10 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
           } as ScatterplotLayerProps & { valueColour: ValueColour }),
         );
       }
+      blocks.forEach((q, k) => {
+        const attr = blockAttrs[k];
+        if (q.data && attr) outline(`cells-b${blocksInView[k]}`, q.data, attr);
+      });
     }
     if (points && points.transforms[system]) {
       const mm = modelMatrix(points.transforms[system]);
@@ -450,7 +588,7 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       });
     }
     return out;
-  }, [m, system, imageEntry, loader.data, JSON.stringify(shownChannels), shapes, polys.data, vertexAttr, centroids.data, circles.data, radius.data, pointAttr, p.cellStyle, p.cellOpacity, p.pointSize, colourCells, valueColour, points, geneReads.map((q) => q.dataUpdatedAt).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [m, system, imageEntry, loader.data, JSON.stringify(shownChannels), shapes, polys.data, vertexAttr, centroids.data, circles.data, radius.data, pointAttr, blockAttrs, outlinesReady, p.cellStyle, p.cellOpacity, p.pointSize, colourCells, valueColour, points, geneReads.map((q) => q.dataUpdatedAt).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- bounds: everything placed in the system
   const bounds = useMemo<Bounds | null>(() => {
@@ -461,14 +599,27 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       boxes.push(transformBox(imageEntry.transforms[system], [0, 0, w, h]));
     }
     if (shapes && polys.data) boxes.push(transformBox(shapes.transforms[system], polys.data.box));
+    const bb = blockBox.data?.data;
+    if (shapes && bb && bb.length) {
+      let box: Bounds = [bb[0], bb[1], bb[2], bb[3]];
+      for (let k = 4; k < bb.length; k += 4) {
+        box = [Math.min(box[0], bb[k]), Math.min(box[1], bb[k + 1]), Math.max(box[2], bb[k + 2]), Math.max(box[3], bb[k + 3])];
+      }
+      boxes.push(transformBox(shapes.transforms[system], box));
+    }
     if (points?.transforms[system]) boxes.push(transformBox(points.transforms[system], points.bbox));
     return union(boxes);
-  }, [m, system, imageEntry, shapes, polys.data, points]);
+  }, [m, system, imageEntry, shapes, polys.data, blockBox.data, points]);
 
-  const rows = polys.data?.row ?? pointRows;
+  const blockData = blocks.map((q) => q.data);
   const tooltip = useCallback(
-    (i: number) => (colourCells && rows && rows[i] >= 0 ? colouring.tooltip(rows[i]) : null),
-    [colourCells, rows, colouring],
+    (i: number, layer: string) => {
+      if (!colourCells) return null;
+      const name = layer.slice(layer.lastIndexOf(':') + 1);
+      const rows = name === 'cells' ? polys.data?.row : name === 'cell-centres' ? pointRows : name.startsWith('cells-b') ? blockData[blocksInView.indexOf(Number(name.slice(7)))]?.row : undefined;
+      return rows && rows[i] >= 0 ? colouring.tooltip(rows[i]) : null;
+    },
+    [colourCells, polys.data, pointRows, blockData.map((b) => (b ? 1 : 0)).join(''), blocksInView, colouring], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const loading = manifest.isLoading || loader.isLoading || polys.isLoading || features.isLoading;
   const fatal = meta.error ?? manifest.error;
@@ -486,7 +637,9 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     notice,
     problem: problem ? { message: `Part of the view failed: ${(problem as Error).message}`, retry: colouring.retry } : undefined,
     tooltip,
-    caption: shapes ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' ? '' : ' (centres)'}` : undefined,
+    caption: shapes
+      ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' || outlinesReady ? '' : ' (centres; zoom in for outlines)'}`
+      : undefined,
     n: shapes?.n ?? 0,
     legend: colourCells ? colouring.legend : undefined,
   };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { allowances, drawCount, representativeOrder, useLod, visibleShare, VERTEX_FACTOR } from './lod';
+import { allowances, drawCount, representativeOrder, useLod, visibleShare, VERTEX_FACTOR, snappedExtent } from './lod';
 
 describe('level of detail', () => {
   it('measures the share of the data on screen', () => {
@@ -45,5 +45,14 @@ describe('level of detail', () => {
     expect(new Set(order.slice(0, 3))).toEqual(new Set([1, 4, 7]));
     expect([...order].sort((x, y) => x - y)).toEqual([...Array(10).keys()]);
     expect([...representativeOrder(subset, 10)]).toEqual([...order]);
+  });
+});
+
+describe('snappedExtent', () => {
+  it('covers the view and changes only after a larger pan', () => {
+    const a = snappedExtent([100, 100, 0], 0, 400, 300);
+    expect(a[0]).toBeLessThanOrEqual(-100);
+    expect(a[2]).toBeGreaterThanOrEqual(300);
+    expect(snappedExtent([110, 105, 0], 0, 400, 300)).toEqual(a);
   });
 });

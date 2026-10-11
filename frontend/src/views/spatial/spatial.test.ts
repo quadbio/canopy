@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Manifest } from '../../api/store';
-import { channelSettings, modelMatrix, resolveElements, type SpatialParams, transformBox } from '.';
+import { boxesInView, channelSettings, invert, modelMatrix, resolveElements, type SpatialParams, transformBox } from '.';
 
 const I = [
   [1, 0, 0],
@@ -60,5 +60,15 @@ describe('spatial view helpers', () => {
 
   it('starts with the channels that have signal', () => {
     expect(channelSettings(params(), manifest, 'img').map((c) => c.on)).toEqual([false, true, true]);
+  });
+});
+
+describe('reading in view', () => {
+  it('inverts affines and finds the boxes in view', () => {
+    const inv = invert(ROT);
+    expect(transformBox(inv, transformBox(ROT, [0, 0, 2, 4]))).toEqual([0, 0, 2, 4]);
+    const boxes = [0, 0, 10, 10, 20, 20, 30, 30, 5, 5, 25, 25];
+    expect(boxesInView(boxes, [12, 12, 18, 18])).toEqual([2]);
+    expect(boxesInView(boxes, [0, 0, 100, 100], 1)).toEqual([1, 2]);
   });
 });

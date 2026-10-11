@@ -23,7 +23,8 @@ export interface PanelOutput {
   title?: string;
   layers: Layer[];
   bounds: Bounds | null;
-  tooltip?: (index: number) => string | null;
+  /** Text for item `index` of layer `layer` (the top-level layer's id). */
+  tooltip?: (index: number, layer: string) => string | null;
 }
 
 /** How the panels of a view follow each other: the same zoom, or the same zoom and the same
@@ -58,7 +59,8 @@ export interface ViewOutput {
   notice?: string;
   /** A part of the view failed (e.g. its colouring), the rest is still shown; with a retry. */
   problem?: { message: string; retry?: () => void };
-  tooltip?: (index: number) => string | null;
+  /** Text for item `index` of layer `layer` (the top-level layer's id). */
+  tooltip?: (index: number, layer: string) => string | null;
   /** A short note next to the title, e.g. "1 M of 3 M cells". */
   caption?: string;
   /** Number of items drawn, for telemetry. */

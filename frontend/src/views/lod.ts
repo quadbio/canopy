@@ -36,6 +36,10 @@ export const SUBSET_SIZE = 1_000_000;
 interface Lod {
   /** Share of the data's extent visible in each view (0..1], in steps of powers of two. */
   visible: Record<string, number>;
+  /** The area each view shows (view coordinates), snapped outwards to a coarse grid so it
+   * changes only every few hundred pixels of panning (views read data in view with it). */
+  extent: Record<string, [number, number, number, number]>;
+  setExtent: (id: string, e: [number, number, number, number]) => void;
   /** Points on screen each view may draw (its share of CANVAS_BUDGET). */
   allowance: Record<string, number>;
   setVisible: (id: string, share: number) => void;
@@ -45,7 +49,13 @@ interface Lod {
 
 export const useLod = create<Lod>()((set) => ({
   visible: {},
+  extent: {},
   allowance: {},
+  setExtent: (id, e) =>
+    set((s) => {
+      const old = s.extent[id];
+      return old && old.every((v, i) => v === e[i]) ? s : { extent: { ...s.extent, [id]: e } };
+    }),
   setVisible: (id, share) => {
     const step = Math.min(1, 2 ** Math.ceil(Math.log2(Math.max(share, 1e-9))));
     set((s) => (s.visible[id] === step ? s : { visible: { ...s.visible, [id]: step } }));
@@ -59,14 +69,16 @@ export const useLod = create<Lod>()((set) => ({
     }),
   forget: (ids) =>
     set((s) => {
-      if (!ids.some((id) => id in s.visible || id in s.allowance)) return s;
+      if (!ids.some((id) => id in s.visible || id in s.allowance || id in s.extent)) return s;
       const visible = { ...s.visible };
       const allowance = { ...s.allowance };
+      const extent = { ...s.extent };
       for (const id of ids) {
         delete visible[id];
         delete allowance[id];
+        delete extent[id];
       }
-      return { visible, allowance };
+      return { visible, allowance, extent };
     }),
 }));
 
@@ -81,6 +93,23 @@ export function visibleShare(
   const dw = Math.max(bounds[2] - bounds[0], 1e-12);
   const dh = Math.max(bounds[3] - bounds[1], 1e-12);
   return Math.min(1, width / scale / dw) * Math.min(1, height / scale / dh);
+}
+
+/** The area a `width` × `height` px view centred on `target` at `zoom` shows, grown to whole
+ * cells of a grid of 256 px at the nearest half zoom step (so small pans keep the same area). */
+export function snappedExtent(
+  target: [number, number, number],
+  zoom: number,
+  width: number,
+  height: number,
+): [number, number, number, number] {
+  const scale = 2 ** zoom;
+  const hw = width / 2 / scale;
+  const hh = height / 2 / scale;
+  const cell = 256 / 2 ** (Math.floor(zoom * 2) / 2);
+  const lo = (v: number) => Math.floor(v / cell) * cell;
+  const hi = (v: number) => Math.ceil(v / cell) * cell;
+  return [lo(target[0] - hw), lo(target[1] - hh), hi(target[0] + hw), hi(target[1] + hh)];
 }
 
 /** Each view's share of the canvas budget, by its cell count; Infinity when all fit. */

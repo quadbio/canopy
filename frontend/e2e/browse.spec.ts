@@ -545,12 +545,8 @@ test('spatial view: convert a SpatialData store, see image, coloured cells and t
   test.setTimeout(180_000);
   const errors = collectErrors(page);
   await freshPage(page);
-  await page.getByTestId('dataset-row').filter({ hasText: 'region_1' }).click();
-  await page.getByTestId('convert').click();
-  await expect(page.getByTestId('open-spatial')).toBeVisible({ timeout: 120_000 });
-  await page.getByTestId('open-spatial').click();
+  await openSpatial(page);
   const cell = page.getByTestId('view-cell').first();
-  await expect(cell).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
   await expect(page.getByTestId('view-caption')).toHaveText('6.1 k cells');
   await expect(page.getByTestId('legend')).toBeVisible();
   await page.waitForTimeout(1500);
@@ -589,4 +585,38 @@ test('spatial view: convert a SpatialData store, see image, coloured cells and t
   // only Viv's two zarr-v2 probes may be missing (.zattrs, .zgroup per image opened)
   expect(errors.filter((e) => !/404/.test(e))).toEqual([]);
   expect(errors.filter((e) => /404/.test(e)).length).toBeLessThanOrEqual(2);
+});
+
+/** Converts region_1 if needed (once per test server) and opens its spatial view. */
+async function openSpatial(page: Page) {
+  await page.getByTestId('dataset-row').filter({ hasText: 'region_1' }).click();
+  const open = page.getByTestId('open-spatial');
+  const convert = page.getByTestId('convert');
+  await expect(open.or(convert)).toBeVisible({ timeout: 20_000 });
+  if (await convert.isVisible()) await convert.click();
+  await expect(open).toBeVisible({ timeout: 120_000 });
+  await open.click();
+  await expect(page.getByTestId('view-cell').first()).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
+}
+
+test('spatial view of many cells: centres when zoomed out, outlines of the blocks in view', async ({ page }) => {
+  test.setTimeout(180_000);
+  // as if the cells were many: outlines are read by blocks, and drawn with at most 2,000 in view
+  await page.goto('/?outlines=1000&cellsInView=2000');
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await openSpatial(page);
+  const cell = page.getByTestId('view-cell').first();
+  await expect(page.getByTestId('view-caption')).toContainText('centres');
+  const box = (await cell.boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
+  // zoom in step by step until the outlines of the cells in view replace the centres
+  for (let i = 0; i < 20 && /centres/.test((await page.getByTestId('view-caption').textContent()) ?? ''); i += 1) {
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(400);
+  }
+  await expect(page.getByTestId('view-caption')).toHaveText('6.1 k cells', { timeout: 20_000 });
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: 'test-results/screens/spatial-blocks.png' });
+  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 }), 0.001).length).toBeGreaterThan(4);
 });

@@ -17,7 +17,7 @@ import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event, reportEnvironment } from '../telemetry/telemetry';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { type Cell, fitBounds, gridCells, type Insets, type OrthoState, resizeView } from './layout';
-import { allowances, useLod, visibleShare } from './lod';
+import { allowances, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { linkedStates, panelRects } from './panels';
 import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
@@ -379,6 +379,15 @@ export function Canvas() {
       if (share > 0) setVisible(v.id, share);
     });
   }, [views, layouts, viewStates, setVisible]);
+  // The area each view shows (its first panel), for views that read only data in view.
+  const setExtent = useLod((s) => s.setExtent);
+  useEffect(() => {
+    views.forEach((v, i) => {
+      const l = layouts[i];
+      const st = l && viewStates[l.keys[0]];
+      if (l && st) setExtent(v.id, snappedExtent(st.target, st.zoom, l.rects[0].width, l.rects[0].height));
+    });
+  }, [views, layouts, viewStates, setExtent]);
   // One point budget for the whole canvas, shared by the views in proportion to their cells.
   const totalsKey = views.map((v) => `${v.id}:${outputs[v.id]?.total ?? 0}`).join(',');
   useEffect(() => {
@@ -405,8 +414,9 @@ export function Canvas() {
 
   const tooltip = (info: PickingInfo) => {
     if (dragging || !info.layer || info.index < 0) return null;
-    const { view, panel } = ownerOf(rootOf(info.layer).id);
-    const text = panelsOf(outputs[view]).find((p) => p.id === panel)?.tooltip?.(info.index);
+    const root = rootOf(info.layer).id;
+    const { view, panel } = ownerOf(root);
+    const text = panelsOf(outputs[view]).find((p) => p.id === panel)?.tooltip?.(info.index, root);
     return text ? { text, className: 'deck-tooltip' } : null;
   };
 
