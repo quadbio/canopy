@@ -228,3 +228,16 @@ Resume rule: read this file, then continue with the first unchecked step.
   user: panels share the point budget and upload ~one copy. 51 panels: median frame 16.7 ms
   (same as 1 panel). 57 unit, 18 e2e.
   - Next: S6 spatial (SpatialData path, pyramids, polygons, transcripts, section grid on panels).
+- 2026-10-11 S6 DONE (ADR 0011), in parts: S6a SpatialData converter (tables via write_table
+  factored out of the AnnData converter; images tile by tile from dask; labels with lookup;
+  polygons/circles; transcripts by gene + Morton with cell link; affines per system; jobs +
+  serving of converted SpatialData tables). Shared colouring module (views/colouring.tsx).
+  S6b spatial view (Viv image with channels/colour/contrast, cells filled/outlined coloured on the
+  GPU, transcripts of up to 6 genes, coordinate systems; "Open spatial view"/"Open embedding").
+  S6c reading in view (canvas publishes view areas; outline blocks in view above 4 M vertices;
+  transcript chunks in view for genes above the cap). Section grid = embedding Split by (R3).
+  MERSCOPE region: 10 s, 1.7 GB; synthetic 200 k cells + 5 M transcripts + 8k² image: 12 s.
+  239 backend, 62 unit, 20 e2e. Demo: docs/demo/S6-demo-guide.md (+ feedback-S6.md).
+  - Open: z-plane filter (no example with z), labels colouring (stretch), scale bar (units
+    unknown), vectorised outline conversion if needed.
+  - Next: user demo S6; optional cold review round; then S7 (plot view first, user's choice).

@@ -84,6 +84,9 @@ dir = "logs"
 level = "info"
 privacy = "standard"
 memory_sample_interval = 30
+
+[jobs]
+memory_gb = 1.0  # enough for the examples; a job waits until 1.5 × this plus its tables is free
 CONF
 
 echo "3/3 Starting the server."

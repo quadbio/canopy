@@ -100,9 +100,11 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 ## Conversion and jobs
 
 - `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>"}` starts (or returns the
-  running) conversion of an h5ad / AnnData-zarr file into a dbx store in the cache; `GET
+  running) conversion of an h5ad, AnnData-zarr or SpatialData store into a dbx store in the cache; `GET
   /api/jobs?dataset=`, `GET /api/jobs/{job}`, `POST /api/jobs/{job}/cancel`. Once converted, the
-  dataset is served from the store (every gene a direct read). Design: ADR 0009.
+  dataset is served from the store (every gene a direct read). Design: ADR 0009; SpatialData
+  (images as zoom levels, cell outlines, transcripts by gene, one affine per coordinate system):
+  ADR 0011. The spatial view needs the converted copy.
 - Config `[jobs]`: `max_running` (1), `memory_gb` (2: working memory of one conversion; a job starts
   only with 1.5 × this free and is stopped beyond 2 × this + 1 GB), `tmp_dir` (spill files, about
   12 bytes per stored value; default `<cache>/tmp`).
@@ -118,10 +120,12 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 ## Frontend
 
 `frontend/src/`: `api/` (typed client, TanStack Query hooks; views never call fetch), `state/`
-(zustand workspace, kept per browser), `views/` (view registry, the single deck.gl canvas,
-`embedding/`), `ui/` (file browser, Radix-based controls), `colour/` (palettes and the colour
-Web Worker), `telemetry/`, `styles/` (design tokens, light/dark). A new view type is one module
-that calls `registerView` (see `views/registry.ts`).
+(zustand workspace, kept per browser), `views/` (view registry, the single deck.gl canvas with
+panels per view, `colouring.tsx` shared by the cell views, `embedding/`, `spatial/`), `ui/` (file
+browser, Radix-based controls), `colour/` (palettes, the GPU colour extension), `telemetry/`,
+`styles/` (design tokens, light/dark). A new view type is one module that calls `registerView`
+(see `views/registry.ts`; panels and linked zoom: ADR 0010). The spatial view reads the store
+directly (`api/store.ts`: manifest, zarrita range reads; images through Viv).
 
 ## Checks
 
