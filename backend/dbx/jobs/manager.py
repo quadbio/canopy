@@ -275,15 +275,16 @@ class JobManager:
 
 
 def table_bytes(job: Job) -> int:
-    """Estimated memory for the job's cell and gene tables (read whole by the converter)."""
-    from dbx.convert.anndata import table_memory_estimate
+    """Estimated memory the converter reads whole (tables; for SpatialData also points,
+    shapes and labels)."""
+    from dbx.convert.anndata import job_memory_estimate
     from dbx.inspect.models import Fingerprint
 
     try:
         fp = Fingerprint.model_validate_json(job.fingerprint)
     except ValueError:
         return 0
-    return table_memory_estimate(fp.anndata) if fp.anndata else 0
+    return job_memory_estimate(fp)
 
 
 def _size(path: Path) -> int:

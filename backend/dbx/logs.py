@@ -57,6 +57,7 @@ NAME_FIELDS = frozenset(
         "file",
         "element",
         "column",
+        "table",
         "gene",
         "gene_index",  # with the public gene list, an index names a gene
         "layer",

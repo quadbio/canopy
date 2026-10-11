@@ -21,6 +21,15 @@ const STAGES: [string, string][] = [
   ['write', 'Writing gene by gene'],
   ['finish', 'Checking and finishing'],
 ];
+// SpatialData stores: the tables (as above), then each kind of element.
+const SPATIAL_STAGES: [string, string][] = [
+  ['tables', 'Converting the tables'],
+  ['images', 'Building image zoom levels'],
+  ['labels', 'Copying segmentation masks'],
+  ['shapes', 'Sorting cell outlines'],
+  ['points', 'Sorting transcripts by gene'],
+  ['finish', 'Checking and finishing'],
+];
 
 const ERRORS: Record<string, string> = {
   cancelled: 'Cancelled.',
@@ -51,16 +60,17 @@ function elapsed(from: number | null): string {
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
 
-function Progress({ job, onCancel }: { job: Job; onCancel: () => void }) {
+function Progress({ job, onCancel, spatial }: { job: Job; onCancel: () => void; spatial: boolean }) {
   const pct = Math.round(job.progress * 100);
-  const step = STAGES.findIndex(([k]) => k === job.stage);
+  const stages = spatial ? SPATIAL_STAGES : STAGES;
+  const step = stages.findIndex(([k]) => k === job.stage);
   let line: string;
   if (job.stage === 'waiting_for_memory') {
     line = `Waiting for free memory on the server (needs ${gb(job.info?.need_bytes)}, ${gb(job.info?.available_bytes)} free)`;
   } else if (job.state === 'queued') {
     line = 'Queued…';
   } else if (step >= 0) {
-    line = `Step ${step + 1} of ${STAGES.length}: ${STAGES[step][1]} · ${pct}% · ${elapsed(job.started)}`;
+    line = `Step ${step + 1} of ${stages.length}: ${stages[step][1]} · ${pct}% · ${elapsed(job.started)}`;
   } else {
     line = `Starting… · ${elapsed(job.started)}`;
   }
@@ -119,9 +129,9 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
 
   if (!detail.data || !conv) return null;
   const kind = detail.data.kind;
-  if (kind !== 'h5ad' && kind !== 'anndata_zarr') return null;
+  if (kind !== 'h5ad' && kind !== 'anndata_zarr' && kind !== 'spatialdata_zarr') return null;
 
-  if (active && j) return <Progress job={j} onCancel={() => void cancel()} />;
+  if (active && j) return <Progress job={j} onCancel={() => void cancel()} spatial={kind === 'spatialdata_zarr'} />;
   if (conv.converted) {
     const from = conv.x_source && conv.x_source !== 'X' ? ` (values from ${conv.x_source.replace(/^layers\//, '')})` : '';
     return (
@@ -160,6 +170,12 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
             It runs in the background (minutes for large files); you can keep working, also on other datasets. The copy
             holds one expression matrix (X, or the layer you choose); the other layers stay available as before.
           </p>
+          {kind === 'spatialdata_zarr' && (
+            <p>
+              For spatial data it also prepares the images (zoom levels), cell outlines and transcripts, which the
+              spatial view needs.
+            </p>
+          )}
         </Help>
       </div>
       {problem && <p className="small error">{problem}</p>}

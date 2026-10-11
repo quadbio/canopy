@@ -226,7 +226,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
     except UnknownElementError as e:
         raise ApiError(404, "unknown_element", "No such table in this dataset.") from e
     source_info = info
-    info = _effective(request, fp, info)
+    info = _effective(request, fp, info, name)
 
     def describe(src: Source) -> tuple[str, list[ColumnMeta]]:
         return src.mode, [src.column_meta(c.name) for c in info.obs.columns]
@@ -244,7 +244,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
         mode=mode,
         obs=columns,
         embeddings=[Embedding(key=k, dims=d) for k, d in embedding_dims(info).items()],
-        matrices=_matrices(request, fp, source_info),
+        matrices=_matrices(request, fp, source_info, name),
         warnings=sorted({w.code for w in fp.warnings}),
     )
 
@@ -340,7 +340,7 @@ def subset(
     fixed seed)."""
     row, fp, path = _dataset(request, id)
     table, info = _table(fp, table)
-    info = _effective(request, fp, info)
+    info = _effective(request, fp, info, table)
     n = min(n, info.n_obs)
     etag = _etag([str(row.version), str(table), "subset", str(n)])
     if (r := _not_modified(request, etag)) is not None:
@@ -400,13 +400,13 @@ class Served:
 
 
 def _served(
-    request: Request, fp: Fingerprint, source: AnnDataInfo
+    request: Request, fp: Fingerprint, source: AnnDataInfo, table: str | None
 ) -> tuple[AnnDataInfo, dict[str, Served]]:
     """The table as served and its matrices. Once converted, the store holds one matrix (its X,
     named after what it was converted from); the source's other matrices stay available from
     the source file, as before the conversion."""
     _, cache = _state(request)
-    st = store_table(cache.cache_dir, fp)
+    st = store_table(cache.cache_dir, fp, table)
     src = genes.matrices(source)
     if st is None:
         return source, {k: Served(m, False, k) for k, m in src.items()}
@@ -418,10 +418,12 @@ def _served(
     return st.info, out
 
 
-def _matrices(request: Request, fp: Fingerprint, source: AnnDataInfo) -> list[Matrix]:
+def _matrices(
+    request: Request, fp: Fingerprint, source: AnnDataInfo, table: str | None
+) -> list[Matrix]:
     limit = _memory_limit(request)
     _, cache = _state(request)
-    converted = store_table(cache.cache_dir, fp) is not None
+    converted = store_table(cache.cache_dir, fp, table) is not None
     return [
         Matrix(
             name=k,
@@ -430,7 +432,7 @@ def _matrices(request: Request, fp: Fingerprint, source: AnnDataInfo) -> list[Ma
             access=genes.access(s.info, limit),
             converted=converted and not s.original,
         )
-        for k, s in _served(request, fp, source)[1].items()
+        for k, s in _served(request, fp, source, table)[1].items()
     ]
 
 
@@ -440,7 +442,7 @@ def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
     the matrices genes can be read from."""
     row, fp, path = _dataset(request, id)
     tname, source_info = _table(fp, table)
-    etag = _etag([str(row.version), str(tname), "genes", _store_mark(request, fp)])
+    etag = _etag([str(row.version), str(tname), "genes", _store_mark(request, fp, tname)])
     if (r := _not_modified(request, etag)) is not None:
         return r
     _, cache = _state(request)
@@ -463,7 +465,7 @@ def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
         symbols=found.symbols,
         symbol_column=found.symbol_column,
         duplicates=found.duplicates,
-        matrices=_matrices(request, fp, source_info),
+        matrices=_matrices(request, fp, source_info, tname),
     )
     return Response(
         content=reply.model_dump_json(),
@@ -487,11 +489,19 @@ def gene(
     row, fp, path = _dataset(request, id)
     tname, source_info = _table(fp, table)
     etag = _etag(
-        [str(row.version), str(tname), "gene", matrix, str(i), str(q), _store_mark(request, fp)]
+        [
+            str(row.version),
+            str(tname),
+            "gene",
+            matrix,
+            str(i),
+            str(q),
+            _store_mark(request, fp, tname),
+        ]
     )
     if (r := _not_modified(request, etag)) is not None:
         return r
-    info, served = _served(request, fp, source_info)
+    info, served = _served(request, fp, source_info, tname)
     sv = served.get(matrix)
     if sv is None:
         raise ApiError(404, "unknown_matrix", "No such matrix in this dataset.")
@@ -586,17 +596,19 @@ def _columns_bytes(copy: object) -> int:
     return int(c.data.nbytes + c.indices.nbytes + c.indptr.nbytes)
 
 
-def _effective(request: Request, fp: Fingerprint, info: AnnDataInfo) -> AnnDataInfo:
+def _effective(
+    request: Request, fp: Fingerprint, info: AnnDataInfo, table: str | None
+) -> AnnDataInfo:
     """The table as it is served: the converted store's, once the dataset was converted."""
     _, cache = _state(request)
-    st = store_table(cache.cache_dir, fp)
+    st = store_table(cache.cache_dir, fp, table)
     return st.info if st is not None else info
 
 
-def _store_mark(request: Request, fp: Fingerprint) -> str:
+def _store_mark(request: Request, fp: Fingerprint, table: str | None) -> str:
     """Part of ETags of replies that depend on the store (which build, from which matrix)."""
     _, cache = _state(request)
-    st = store_table(cache.cache_dir, fp)
+    st = store_table(cache.cache_dir, fp, table)
     return f"store:{st.x_source}:{st.built}" if st is not None else "source"
 
 

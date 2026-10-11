@@ -82,25 +82,24 @@ class StoreTable:
     built: str  # identifies this build of the store (for ETags)
 
 
-def store_table(cache_dir: Path, fp: Fingerprint) -> StoreTable | None:
-    """The converted store's table for this dataset version, if it was converted and its
-    contract major version is the one this server reads (AnnData sources; SpatialData stores
-    come in S6). Described once per store build (keyed by the manifest's modification time)."""
+def store_table(cache_dir: Path, fp: Fingerprint, table: str | None = None) -> StoreTable | None:
+    """The converted store's table for this dataset version (`table`: a SpatialData table's
+    source name, else the first), if it was converted and its contract major version is the one
+    this server reads. Described once per store build (keyed by the manifest's modification
+    time)."""
     from dbx.contract import MANIFEST
     from dbx.convert.anndata import store_dir
 
-    if fp.kind not in ("h5ad", "anndata_zarr"):
-        return None
     manifest = store_dir(cache_dir, fp.dataset_id) / MANIFEST
     try:
         mtime = manifest.stat().st_mtime_ns
     except OSError:
         return None
-    return _store_table(str(manifest), mtime)
+    return _store_table(str(manifest), mtime, table or "")
 
 
 @lru_cache(maxsize=256)
-def _store_table(manifest: str, mtime: int) -> StoreTable | None:
+def _store_table(manifest: str, mtime: int, table: str) -> StoreTable | None:
     from dbx.contract import CONTRACT_MAJOR, read_manifest
 
     try:
@@ -115,7 +114,15 @@ def _store_table(manifest: str, mtime: int) -> StoreTable | None:
         return None
     from dbx.inspect import inspect_path
 
-    name, t = next(iter(m.tables.items()))
+    if not m.tables:
+        return None
+    if table:
+        # stores name tables by their safe names, keeping the source's in `source_name`
+        t = next((e for n, e in m.tables.items() if (e.source_name or n) == table), None)
+        if t is None:
+            return None
+    else:
+        t = next(iter(m.tables.values()))
     path = Path(manifest).parent / t.path
     info = inspect_path(path).anndata
     return StoreTable(path, info, t.x_source, f"{m.converter.created}|{mtime}") if info else None
@@ -128,8 +135,8 @@ def open_source(
     small_file_bytes: int,
     cache_dir: Path | None = None,
 ) -> Source:
-    if cache_dir is not None and (st := store_table(cache_dir, fp)) is not None:
-        if table not in (None, ""):
+    if cache_dir is not None and (st := store_table(cache_dir, fp, table)) is not None:
+        if fp.anndata is not None and table not in (None, ""):
             raise UnknownElementError("table")
         src = LazySource(st.info, zarr.open_group(st.path, mode="r"))
         src.mode = "converted"
@@ -206,7 +213,7 @@ class DatasetCache:
         if hit is not None:
             if original:
                 return hit  # type: ignore[no-any-return]
-            st = store_table(self.cache_dir, fp)
+            st = store_table(self.cache_dir, fp, table)
             if (hit.mode == "converted") == (st is not None) and (
                 st is None or hit.info is st.info
             ):

@@ -121,11 +121,11 @@ def run(job_id: int, config_file: Path) -> int:
         return 0
     job = db.get(job_id)
     assert job is not None
-    from dbx.convert.anndata import table_memory_estimate
+    from dbx.convert.anndata import job_memory_estimate
     from dbx.inspect.models import Fingerprint
 
     fp = Fingerprint.model_validate_json(job.fingerprint)
-    tables = table_memory_estimate(fp.anndata) if fp.anndata else 0
+    tables = job_memory_estimate(fp)
     limit = int((2 * cfg.jobs.memory_gb + 1) * GB + 1.5 * tables)
     sampler = MemorySampler(cfg.logging.memory_sample_interval, cfg.cache_dir)
     sampler.start()
@@ -197,6 +197,7 @@ def _execute(cfg: Config, kind: str, job: Any, fp: Any, ctl: Control) -> dict[st
     if kind != "convert":
         raise ValueError(f"unknown job kind {kind}")
     from dbx.convert.anndata import ConvertOptions, convert_anndata
+    from dbx.convert.spatialdata import convert_spatialdata
 
     opts = ConvertOptions(
         x_source=str(job.options.get("x_source", "X")),
@@ -204,8 +205,16 @@ def _execute(cfg: Config, kind: str, job: Any, fp: Any, ctl: Control) -> dict[st
         tmp_dir=cfg.jobs.tmp_dir,
         job=job.id,
     )
-    r = convert_anndata(Path(job.source), fp, cfg.cache_dir, opts, ctl.progress)
-    t = next(iter(r.manifest.tables.values()))
+    convert = convert_spatialdata if fp.kind == "spatialdata_zarr" else convert_anndata
+    r = convert(Path(job.source), fp, cfg.cache_dir, opts, ctl.progress)
+    m = r.manifest
+    t = next(iter(m.tables.values()), None)
+    if t is None:
+        return {
+            "warnings": r.warnings,
+            "elements": {k: len(getattr(m, k)) for k in ("images", "labels", "shapes", "points")},
+            "seconds": m.converter.duration_s,
+        }
     return {
         "warnings": r.warnings,
         "n_obs": t.n_obs,

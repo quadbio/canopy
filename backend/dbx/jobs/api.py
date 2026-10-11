@@ -42,10 +42,8 @@ def convert(request: Request, id: str, body: ConvertRequest | None = None) -> di
         raise ApiError(404, "unknown_dataset", "No dataset with this id in the catalog.")
     if row.state != "inspected" or not row.fingerprint or not row.version:
         raise ApiError(409, f"state:{row.state}", f"The dataset is {row.state}.")
-    if row.kind not in ("h5ad", "anndata_zarr"):
-        raise ApiError(
-            409, "not_convertible", "Only h5ad and AnnData-zarr files can be converted so far."
-        )
+    if row.kind not in ("h5ad", "anndata_zarr", "spatialdata_zarr"):
+        raise ApiError(409, "not_convertible", "This kind of dataset cannot be converted.")
     try:
         path = catalog.resolve(row)
     except PathEscapeError as e:

@@ -84,6 +84,17 @@ def table_memory_estimate(info: AnnDataInfo) -> int:
     return frame(info.n_obs, info.obs.columns) + frame(info.n_vars, info.var.columns)
 
 
+def job_memory_estimate(fp: Fingerprint) -> int:
+    """Memory a conversion reads whole besides the matrix budget (for the memory guard)."""
+    if fp.anndata is not None:
+        return table_memory_estimate(fp.anndata)
+    if fp.spatialdata is not None:
+        from dbx.convert.spatialdata import spatial_memory_estimate
+
+        return spatial_memory_estimate(fp)
+    return 0
+
+
 def store_dir(cache_dir: Path, version: str) -> Path:
     return cache_dir / version / f"c{CONTRACT_MAJOR}"
 
@@ -93,16 +104,18 @@ def has_store(cache_dir: Path, version: str) -> bool:
 
 
 class StageProgress:
-    """Maps per-stage fractions to one overall fraction (STAGES weights)."""
+    """Maps per-stage fractions to one overall fraction (`stages` weights)."""
 
-    def __init__(self, report: Progress) -> None:
+    def __init__(self, report: Progress, stages: dict[str, float] = STAGES) -> None:
         self.report = report
+        self.stages = stages
         self.done = 0.0
 
     def __call__(self, stage: str, fraction: float) -> None:
-        names = list(STAGES)
-        before = sum(STAGES[n] for n in names[: names.index(stage)]) if stage in STAGES else 0.0
-        self.report(stage, min(1.0, before + STAGES.get(stage, 0.0) * fraction))
+        st = self.stages
+        names = list(st)
+        before = sum(st[n] for n in names[: names.index(stage)]) if stage in st else 0.0
+        self.report(stage, min(1.0, before + st.get(stage, 0.0) * fraction))
 
 
 def _open(path: Path, kind: str) -> tuple[Any, Any]:
@@ -164,65 +177,12 @@ def convert_anndata(
         tmp.mkdir(parents=True)
         store = zarr.open_group(tmp, mode="w")
         store.attrs["dbx"] = {"contract_version": CONTRACT_VERSION}
-        node, encoding, shape, from_raw = _matrix_node(root, info, opts.x_source)
-        with timed("convert/read_obs_var", version=version) as extra:
-            obs: pd.DataFrame = read_elem(root["obs"])
-            # raw/X has its own genes: always raw's var, also when the counts happen to match
-            var: pd.DataFrame = read_elem(root["raw"]["var"] if from_raw else root["var"])
-            extra.update(
-                n_obs=len(obs),
-                n_vars=len(var),
-                obs_columns=len(obs.columns),
-                estimate_bytes=table_memory_estimate(info),
-            )
-        if shape[1] != len(var):
-            raise ConversionError("matrix_shape", "the matrix does not have one column per gene")
-        uns = _colours(root, obs, warnings)
-        prog("read", 1.0)
-
-        # ---- the AnnData skeleton: obs, var, colours (X and obsm are written below)
-        tpath = tmp / "tables" / TABLE
         store.require_group("tables")
-        with timed("convert/write_obs_var", version=version):
-            # strings stay strings ("values are never changed, only re-laid-out")
-            ad.AnnData(obs=obs, var=var, uns=uns).write_zarr(
-                tpath, convert_strings_to_categoricals=False
-            )
-        tg = zarr.open_group(tpath, mode="a", use_consolidated=False)
-        with timed("convert/obsm", version=version) as extra:
-            embeddings, spatial = _obsm(root, info, tg, warnings, lambda f: prog("obsm", f))
-            extra.update(n_embeddings=len(embeddings) + len(spatial))
-
-        # ---- X as gene-major CSC, with gene statistics
-        with timed(
-            "convert/x", version=version, encoding=encoding, source_dtype=node_info.dtype
-        ) as extra:
-            writer = CscWriter(
-                node,
-                encoding,
-                (shape[0], shape[1]),
-                opts.memory_bytes,
-                work,
-                prog,
-                source_dtype=node_info.dtype,
-            )
-            if "X" in tg:
-                del tg["X"]
-            stats = writer.write(tg.create_group("X"))
-            nnz = writer.nnz
-            extra.update(nnz=nnz, **writer.facts)
-        warnings += stats.warnings
-        dbxg = anndata_dict_group(tg["uns"], "dbx")  # type: ignore[arg-type]
-        _gene_stats(dbxg, stats)
-        with timed("convert/downsample", version=version) as extra:
-            sizes = _downsample(dbxg, obs, uns)
-            extra.update(sizes=sizes)
+        entry = write_table(root, info, tmp, TABLE, opts, work, prog, warnings, version)
         prog("finish", 0.3)
 
         # ---- manifest, consolidation, validation, publish
-        consolidate(tpath)
         consolidate(tmp)
-        symbols = gene_list(var).symbol_column
         manifest = Manifest(
             dataset_id=fp.dataset_id,
             source=SourceInfo(
@@ -238,33 +198,7 @@ def convert_anndata(
                 duration_s=round(time.monotonic() - t0, 1),
                 warnings=warnings,
             ),
-            tables={
-                TABLE: TableEntry(
-                    path=f"tables/{TABLE}",
-                    n_obs=shape[0],
-                    n_vars=shape[1],
-                    nnz=nnz,
-                    x_source="raw/X" if from_raw else opts.x_source,
-                    embeddings=embeddings,
-                    spatial_keys=spatial,
-                    categorical={
-                        c: CategoricalInfo(
-                            n_categories=len(obs[c].cat.categories),
-                            has_colors=f"{c}_colors" in uns,
-                        )
-                        for c in obs.columns
-                        if isinstance(obs[c].dtype, pd.CategoricalDtype)
-                    },
-                    numeric=[
-                        c
-                        for c in obs.columns
-                        if pd.api.types.is_numeric_dtype(obs[c].dtype)
-                        and not pd.api.types.is_bool_dtype(obs[c].dtype)
-                    ],
-                    var_names_column=symbols,
-                    downsample=sizes,
-                ),
-            },
+            tables={TABLE: entry},
         )
         (tmp / MANIFEST).write_text(json.dumps(manifest.model_dump(mode="json"), indent=2))
         with timed("convert/validate", version=version) as extra:
@@ -287,6 +221,106 @@ def convert_anndata(
         shutil.rmtree(work, ignore_errors=True)
         if handle is not None:
             handle.close()
+
+
+def write_table(
+    root: Any,
+    info: AnnDataInfo,
+    store: Path,
+    name: str,
+    opts: ConvertOptions,
+    work: Path,
+    prog: StageProgress,
+    warnings: list[str],
+    version: str,
+    region: dict[str, Any] | None = None,
+) -> TableEntry:
+    """Write one AnnData table (`root`: its group in the source) to `store/tables/<name>`:
+    obs, var, colours, embeddings, X as gene-major CSC with gene statistics, and subsets.
+    `region`: SpatialData's region/region_key/instance_key for the manifest."""
+    node, encoding, shape, from_raw = _matrix_node(root, info, opts.x_source)
+    with timed("convert/read_obs_var", version=version, table=name) as extra:
+        obs: pd.DataFrame = read_elem(root["obs"])
+        # raw/X has its own genes: always raw's var, also when the counts happen to match
+        var: pd.DataFrame = read_elem(root["raw"]["var"] if from_raw else root["var"])
+        extra.update(
+            n_obs=len(obs),
+            n_vars=len(var),
+            obs_columns=len(obs.columns),
+            estimate_bytes=table_memory_estimate(info),
+        )
+    if shape[1] != len(var):
+        raise ConversionError("matrix_shape", "the matrix does not have one column per gene")
+    uns = _colours(root, obs, warnings)
+    prog("read", 1.0)
+
+    # ---- the AnnData skeleton: obs, var, colours (X and obsm are written below)
+    tpath = store / "tables" / name
+    with timed("convert/write_obs_var", version=version, table=name):
+        # strings stay strings ("values are never changed, only re-laid-out")
+        ad.AnnData(obs=obs, var=var, uns=uns).write_zarr(
+            tpath, convert_strings_to_categoricals=False
+        )
+    tg = zarr.open_group(tpath, mode="a", use_consolidated=False)
+    with timed("convert/obsm", version=version, table=name) as extra:
+        embeddings, spatial = _obsm(root, info, tg, warnings, lambda f: prog("obsm", f))
+        extra.update(n_embeddings=len(embeddings) + len(spatial))
+
+    # ---- X as gene-major CSC, with gene statistics
+    node_info = _matrix_info(info, opts.x_source)
+    with timed(
+        "convert/x", version=version, table=name, encoding=encoding, source_dtype=node_info.dtype
+    ) as extra:
+        writer = CscWriter(
+            node,
+            encoding,
+            (shape[0], shape[1]),
+            opts.memory_bytes,
+            work,
+            prog,
+            source_dtype=node_info.dtype,
+        )
+        if "X" in tg:
+            del tg["X"]
+        stats = writer.write(tg.create_group("X"))
+        nnz = writer.nnz
+        extra.update(nnz=nnz, **writer.facts)
+    warnings += stats.warnings
+    dbxg = anndata_dict_group(tg["uns"], "dbx")  # type: ignore[arg-type]
+    _gene_stats(dbxg, stats)
+    with timed("convert/downsample", version=version, table=name) as extra:
+        sizes = _downsample(dbxg, obs, uns)
+        extra.update(sizes=sizes)
+    consolidate(tpath)
+    region = region or {}
+    return TableEntry(
+        path=f"tables/{name}",
+        n_obs=shape[0],
+        n_vars=shape[1],
+        nnz=nnz,
+        x_source="raw/X" if from_raw else opts.x_source,
+        embeddings=embeddings,
+        spatial_keys=spatial,
+        categorical={
+            c: CategoricalInfo(
+                n_categories=len(obs[c].cat.categories),
+                has_colors=f"{c}_colors" in uns,
+            )
+            for c in obs.columns
+            if isinstance(obs[c].dtype, pd.CategoricalDtype)
+        },
+        numeric=[
+            c
+            for c in obs.columns
+            if pd.api.types.is_numeric_dtype(obs[c].dtype)
+            and not pd.api.types.is_bool_dtype(obs[c].dtype)
+        ],
+        var_names_column=gene_list(var).symbol_column,
+        downsample=sizes,
+        region=list(region.get("region", [])),
+        region_key=region.get("region_key"),
+        instance_key=region.get("instance_key"),
+    )
 
 
 def _publish(tmp: Path, final: Path) -> None:
