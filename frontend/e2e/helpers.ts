@@ -114,7 +114,7 @@ export async function freshPage(page: Page) {
 export async function openDataset(page: Page, name: string, table?: string) {
   await page.getByTestId('dataset-row').filter({ hasText: name }).first().click();
   await expect(page.getByTestId('details')).toContainText(name);
-  if (table) await page.getByTestId('details').locator('select').selectOption(table);
+  if (table) await page.getByTestId('details').getByLabel('Table', { exact: true }).selectOption(table);
   const before = await page.getByTestId('view-cell').count();
   await page.getByTestId('open-dataset').click();
   await expect(page.getByTestId('view-cell')).toHaveCount(before + 1);

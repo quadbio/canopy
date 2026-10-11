@@ -27,7 +27,7 @@ test('dataset details explain tables and storage notes in plain words', async ({
   await page.getByTestId('dataset-row').filter({ hasText: 'region_1' }).click();
   const details = page.getByTestId('details');
   await expect(details).toContainText('one per object in boundaries_cells');
-  await details.locator('select').selectOption('table_tiles');
+  await details.getByLabel('Table', { exact: true }).selectOption('table_tiles');
   await expect(details).toContainText('one per object in boundaries_tiles');
   await page.getByLabel('About “Table”').click(); // a click (or tap) opens the help
   await expect(page.getByRole('dialog')).toContainText('one row per object');
