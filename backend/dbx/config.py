@@ -86,6 +86,18 @@ class MemoryConfig(_Strict):
         return self
 
 
+class JobsConfig(_Strict):
+    # Conversions run one at a time by default, each in its own worker process.
+    max_running: int = Field(default=1, ge=1, le=16)
+    # Working memory of one conversion (the converter sizes its blocks to it), in GB. A job
+    # starts only when the host has 1.5 times this available; it is stopped if its process
+    # grows beyond twice this (plus 1 GB for the interpreter and libraries).
+    memory_gb: float = Field(default=2.0, gt=0)
+    # Temporary files of conversions (about the size of the expression matrix); default
+    # <cache_dir>/tmp.
+    tmp_dir: Path | None = None
+
+
 class Config(_Strict):
     data_roots: list[DataRoot] = Field(default_factory=list)
     cache_dir: Path = Path("cache")
@@ -93,6 +105,7 @@ class Config(_Strict):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     catalog: CatalogConfig = Field(default_factory=CatalogConfig)
+    jobs: JobsConfig = Field(default_factory=JobsConfig)
 
     @model_validator(mode="after")
     def _unique_root_names(self) -> Config:

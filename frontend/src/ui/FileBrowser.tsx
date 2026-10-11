@@ -11,6 +11,7 @@ import { MAX_VIEWS, rememberKey, useWorkspace } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { viewTypes } from '../views/registry';
 import { formatBytes, formatCount, Help } from './controls';
+import { Conversion } from './Conversion';
 import { DatasetNotes, type Notice } from './notes';
 
 const KIND_LABEL: Record<string, string> = { h5ad: 'h5ad', anndata_zarr: 'zarr', spatialdata_zarr: 'spatial' };
@@ -92,6 +93,7 @@ function Details({ id }: { id: string }) {
   const s = d.summary;
   const fp = d.fingerprint as {
     warnings?: Notice[];
+    anndata?: { layers?: Record<string, unknown> };
     spatialdata?: {
       tables?: Record<string, { n_obs?: number }>;
       table_refs?: Record<string, { region?: string[] }>;
@@ -201,6 +203,7 @@ function Details({ id }: { id: string }) {
         </button>
       )}
       {problem && <p className="error small">{problem}</p>}
+      {d.state === 'inspected' && <Conversion datasetId={d.id} layers={Object.keys(fp?.anndata?.layers ?? {})} />}
       <DatasetNotes notices={fp?.warnings ?? []} />
     </div>
   );

@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -73,7 +74,39 @@ def table_info(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataI
     return name, tables[name]
 
 
-def open_source(fp: Fingerprint, path: Path, table: str | None, small_file_bytes: int) -> Source:
+def store_table(cache_dir: Path, fp: Fingerprint) -> tuple[Path, AnnDataInfo] | None:
+    """The converted store's table for this dataset version, if it was converted (AnnData
+    sources; SpatialData stores come in S6)."""
+    from dbx.convert.anndata import TABLE, has_store, store_dir
+
+    if fp.kind not in ("h5ad", "anndata_zarr") or not has_store(cache_dir, fp.dataset_id):
+        return None
+    path = store_dir(cache_dir, fp.dataset_id) / "tables" / TABLE
+    info = _store_info(str(path))
+    return (path, info) if info is not None else None
+
+
+@lru_cache(maxsize=256)
+def _store_info(path: str) -> AnnDataInfo | None:
+    from dbx.inspect import inspect_path
+
+    return inspect_path(Path(path)).anndata
+
+
+def open_source(
+    fp: Fingerprint,
+    path: Path,
+    table: str | None,
+    small_file_bytes: int,
+    cache_dir: Path | None = None,
+) -> Source:
+    if cache_dir is not None and (st := store_table(cache_dir, fp)) is not None:
+        if table not in (None, ""):
+            raise UnknownElementError("table")
+        store_path, store_info = st
+        src = LazySource(store_info, zarr.open_group(store_path, mode="r"))
+        src.mode = "converted"
+        return src
     name, info = table_info(fp, table)
     if info.layout != "current":
         # Only anndata's whole-file reader understands pre-0.8 layouts.
@@ -97,6 +130,7 @@ class DatasetCache:
         self.budget = int(cfg.memory.cache_gb * 2**30)
         self.total_budget = int(cfg.memory.budget_gb * 2**30)
         self.small_file = int(cfg.memory.small_file_gb * 2**30)
+        self.cache_dir = cfg.cache_dir
         self._inflight: dict[tuple[Any, ...], Future[Any]] = {}
         self._reserved = 0
         self.idle = cfg.memory.idle_minutes * 60
@@ -113,6 +147,16 @@ class DatasetCache:
             if e is not None and getattr(e.value, "closed", False):
                 del self._lru[key]
 
+    def drop_version(self, version: str) -> None:
+        """Forget everything of a dataset version (e.g. after it was converted: the next request
+        reads the store)."""
+        with self._lock:
+            items = [(k, e) for k, e in self._lru.items() if len(k) > 1 and k[1] == version]
+            for k, _ in items:
+                del self._lru[k]
+        for k, e in items:
+            self._close(k, e, "converted")
+
     def has_source(self, version: str, table: str | None) -> bool:
         with self._lock:
             return ("source", version, table or "") in self._lru
@@ -123,9 +167,11 @@ class DatasetCache:
         key = ("source", version, table or "")
         hit = self._get(key)
         if hit is not None:
-            return hit  # type: ignore[no-any-return]
+            if hit.mode == "converted" or store_table(self.cache_dir, fp) is None:
+                return hit  # type: ignore[no-any-return]
+            self.drop_version(version)  # converted since it was opened: read the store now
         with timed("open_dataset", kind=fp.kind, dataset_id=dataset) as extra:
-            src = open_source(fp, path, table, self.small_file)
+            src = open_source(fp, path, table, self.small_file, self.cache_dir)
             nbytes = estimate_memory_bytes(src.info) if src.mode == "memory" else 0
             extra.update(mode=src.mode, nbytes=nbytes)
         return self._put(key, src, nbytes, is_source=True)  # type: ignore[no-any-return]

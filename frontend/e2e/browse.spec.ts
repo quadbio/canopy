@@ -378,3 +378,22 @@ test('a slow or failing gene keeps the plot on screen; Retry recovers', async ({
   await expect(page.getByTestId('legend')).toContainText('Plek');
   await expect(page.getByTestId('view-problem')).toHaveCount(0);
 });
+
+test('convert a dataset: progress, then genes from the converted copy', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await page.getByTestId('dataset-row').filter({ hasText: 'dissociated.h5ad' }).click();
+  const conv = page.getByTestId('details').getByTestId('conversion');
+  await conv.getByTestId('convert').click();
+  await expect(conv.getByRole('progressbar').or(conv.getByText('Converted'))).toBeVisible();
+  await expect(conv).toContainText('Converted', { timeout: 90_000 });
+  await page.screenshot({ path: 'test-results/screens/converted.png' });
+  await openDataset(page, 'dissociated.h5ad');
+  await expect(page.locator('.panel')).toContainText('converted copy');
+  await page.getByTestId('gene-search').fill('a');
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(page.getByTestId('view-cell').first()).toHaveAttribute('data-status', 'ready');
+  await expect(page.getByTestId('legend').locator('.colourbar')).toBeVisible();
+  expect(errors).toEqual([]);
+});

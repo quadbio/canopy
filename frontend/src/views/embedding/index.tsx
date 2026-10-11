@@ -35,6 +35,7 @@ import { isMissing } from '../../colour/missing';
 import { assignSlots } from '../../colour/slots';
 import { event } from '../../telemetry/telemetry';
 import { Field, type OptionGroup, Select, Slider } from '../../ui/controls';
+import { Conversion } from '../../ui/Conversion';
 import { GeneSearch } from '../../ui/GeneSearch';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
 import { type Bounds, registerView, type ViewOutput } from '../registry';
@@ -589,10 +590,13 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
         }
       >
         {readable.length === 0 ? (
-          <p className="muted small" data-testid="genes-need-conversion">
-            Gene expression in this dataset needs a one-time conversion first: its matrix is stored cell by cell and
-            is too large to load whole. Conversion is not available in this version yet.
-          </p>
+          <div data-testid="genes-need-conversion">
+            <p className="muted small">
+              Gene expression in this dataset needs a one-time conversion first: its matrix is stored cell by cell and
+              is too large to load whole.
+            </p>
+            <Conversion datasetId={spec.datasetId} compact />
+          </div>
         ) : genes.data ? (
           <GeneSearch genes={genes.data} onPick={pickGene} testId="gene-search" />
         ) : (
@@ -688,7 +692,7 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
       </Field>
       <p className="muted small">
         {m.n_obs.toLocaleString()} cells · {m.n_vars.toLocaleString()} genes ·{' '}
-        {m.mode === 'memory' ? 'loaded in memory' : 'read on demand'}
+        {m.mode === 'memory' ? 'loaded in memory' : m.mode === 'converted' ? 'converted copy' : 'read on demand'}
       </p>
     </div>
   );

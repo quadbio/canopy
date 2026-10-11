@@ -1,0 +1,86 @@
+"""Job API: start a conversion, list and follow jobs, cancel.
+
+- `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>"}` → the job (an active
+  job for the same dataset version and options is returned instead of a new one);
+- `GET /api/jobs?dataset=` → recent jobs, newest first; `GET /api/jobs/{job}`;
+- `POST /api/jobs/{job}/cancel`.
+Jobs never show paths.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, Field
+
+from dbx.catalog import PathEscapeError
+from dbx.convert.anndata import has_store
+from dbx.errors import ApiError
+from dbx.jobs.manager import JobManager
+
+router = APIRouter(tags=["jobs"])
+
+
+class ConvertRequest(BaseModel):
+    x_source: str = Field(default="X", max_length=512, pattern=r"^(X|raw/X|layers/.+)$")
+
+
+def _jobs(request: Request) -> JobManager:
+    return request.app.state.jobs  # type: ignore[no-any-return]
+
+
+@router.post("/api/datasets/{id}/convert")
+def convert(request: Request, id: str, body: ConvertRequest | None = None) -> dict[str, Any]:
+    body = body or ConvertRequest()
+    catalog = request.app.state.catalog
+    row = catalog.get(id)
+    if row is None:
+        raise ApiError(404, "unknown_dataset", "No dataset with this id in the catalog.")
+    if row.state != "inspected" or not row.fingerprint or not row.version:
+        raise ApiError(409, f"state:{row.state}", f"The dataset is {row.state}.")
+    if row.kind not in ("h5ad", "anndata_zarr"):
+        raise ApiError(
+            409, "not_convertible", "Only h5ad and AnnData-zarr files can be converted so far."
+        )
+    try:
+        path = catalog.resolve(row)
+    except PathEscapeError as e:
+        raise ApiError(403, "path_escape", "The dataset path leaves its data root.") from e
+    except FileNotFoundError as e:
+        raise ApiError(410, "vanished", "The dataset no longer exists.") from e
+    options = {"x_source": body.x_source}
+    job = _jobs(request).submit("convert", row.id, row.version, options, path, row.fingerprint)
+    return job.public()
+
+
+@router.get("/api/jobs")
+def list_jobs(request: Request, dataset: str | None = None) -> list[dict[str, Any]]:
+    return [j.public() for j in _jobs(request).db.find(dataset=dataset)[:50]]
+
+
+@router.get("/api/jobs/{job}")
+def get_job(request: Request, job: int) -> dict[str, Any]:
+    j = _jobs(request).db.get(job)
+    if j is None:
+        raise ApiError(404, "unknown_job", "No such job.")
+    return j.public()
+
+
+@router.post("/api/jobs/{job}/cancel")
+def cancel_job(request: Request, job: int) -> dict[str, Any]:
+    j = _jobs(request).cancel(job)
+    if j is None:
+        raise ApiError(404, "unknown_job", "No such job.")
+    return j.public()
+
+
+def conversion_state(request: Request, dataset: str, version: str | None) -> dict[str, Any]:
+    """For the catalog's dataset details: converted or not, and the latest job."""
+    cfg = request.app.state.config
+    jobs = _jobs(request).db.find(dataset=dataset)
+    latest = next((j for j in jobs if j.version == version), None)
+    return {
+        "converted": bool(version) and has_store(cfg.cache_dir, str(version)),
+        "job": latest.public() if latest else None,
+    }

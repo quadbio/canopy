@@ -1,10 +1,11 @@
 // One function per backend endpoint.
 
 import { getBinary, getGene, getJson, postJson, url } from './client';
-import type { CatalogStatus, DatasetEntry, DatasetMeta, FolderListing, GeneList, RootEntry } from './types';
+import type { CatalogStatus, Conversion, DatasetEntry, DatasetMeta, FolderListing, GeneList, Job, RootEntry } from './types';
 
 export interface DatasetDetail extends DatasetEntry {
   fingerprint: Record<string, unknown> | null;
+  conversion: Conversion | null;
 }
 
 export const catalog = {
@@ -36,4 +37,11 @@ export const datasets = {
    * finer than the 256 colours of a colour map. */
   gene: (id: string, table: string | null, i: number, matrix: string, signal?: AbortSignal) =>
     getGene(url(`/api/datasets/${encodeURIComponent(id)}/gene`, { i, matrix, q: 16, table }), { signal }),
+};
+
+export const jobs = {
+  convert: (id: string, xSource = 'X') =>
+    postJson<Job>(`/api/datasets/${encodeURIComponent(id)}/convert`, { x_source: xSource }) as Promise<Job>,
+  get: (job: number) => getJson<Job>(`/api/jobs/${job}`),
+  cancel: (job: number) => postJson<Job>(`/api/jobs/${job}/cancel`, {}) as Promise<Job>,
 };

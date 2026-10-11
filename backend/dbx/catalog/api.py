@@ -35,6 +35,8 @@ class DatasetEntry(BaseModel):
 class DatasetDetail(DatasetEntry):
     # The fingerprint, with `path` relative to the root (host paths are not sent to browsers).
     fingerprint: dict[str, Any] | None
+    # Converted or not, and the latest conversion job of this version (see dbx.jobs.api).
+    conversion: dict[str, Any] | None = None
 
 
 class FolderEntry(BaseModel):
@@ -144,7 +146,15 @@ def dataset(request: Request, id: str) -> DatasetDetail:
     fp = json.loads(row.fingerprint) if row.fingerprint else None
     if fp is not None:
         fp["path"] = row.relpath
-    return DatasetDetail(**_entry(row).model_dump(), fingerprint=fp)
+    from dbx.jobs.api import conversion_state  # the jobs API sits on top of the catalog
+
+    return DatasetDetail(
+        **_entry(row).model_dump(),
+        fingerprint=fp,
+        conversion=conversion_state(request, row.id, row.version)
+        if hasattr(request.app.state, "jobs")
+        else None,
+    )
 
 
 @router.get("/status")

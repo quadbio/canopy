@@ -18,14 +18,21 @@ class PathEscapeError(LookupError):
     """A dataset's path no longer resolves inside its data root (e.g. a symlink was changed)."""
 
 
+def use_wal(cfg: Config) -> bool:
+    """SQLite write-ahead log for the cache's databases: on known local file systems only, unless
+    `catalog.sqlite_wal` says otherwise."""
+    wal = cfg.catalog.sqlite_wal
+    if wal is None:
+        wal = filesystem(cfg.cache_dir).get("fstype") in LOCAL_FS
+    return bool(wal)
+
+
 class Catalog:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.roots = {r.name: r for r in cfg.data_roots}
-        wal = cfg.catalog.sqlite_wal
-        if wal is None:
-            wal = filesystem(cfg.cache_dir).get("fstype") in LOCAL_FS
-        self.db = CatalogDB(cfg.cache_dir / DB_FILE, wal=wal)
+        self.wal = use_wal(cfg)
+        self.db = CatalogDB(cfg.cache_dir / DB_FILE, wal=self.wal)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()

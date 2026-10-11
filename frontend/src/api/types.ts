@@ -113,7 +113,7 @@ export interface DatasetMeta {
   tables: string[];
   n_obs: number;
   n_vars: number;
-  mode: 'lazy' | 'memory';
+  mode: 'lazy' | 'memory' | 'converted';
   obs: ColumnMeta[];
   matrices: MatrixInfo[];
   embeddings: { key: string; dims: number }[];
@@ -127,4 +127,27 @@ export interface BinaryArray<T extends TypedArray = TypedArray> {
   shape: number[];
   dtype: string;
   kind: string | null;
+}
+
+export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+
+export interface Job {
+  id: number;
+  kind: string;
+  dataset: string;
+  version: string;
+  options: Record<string, unknown>;
+  state: JobState;
+  stage: string | null; // count | reorder | write | finish | waiting_for_memory | …
+  progress: number; // 0..1
+  created: number;
+  started: number | null;
+  finished: number | null;
+  error: string | null;
+  result: Record<string, unknown> | null;
+}
+
+export interface Conversion {
+  converted: boolean;
+  job: Job | null;
 }

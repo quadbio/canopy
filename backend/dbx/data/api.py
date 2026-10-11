@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from dbx.catalog import Catalog, PathEscapeError
 from dbx.catalog.db import Row
 from dbx.data import genes
-from dbx.data.cache import DatasetCache, MemoryBusyError, table_info
+from dbx.data.cache import DatasetCache, MemoryBusyError, store_table, table_info
 from dbx.data.reader import (
     ColumnMeta,
     InvalidDimsError,
@@ -66,7 +66,7 @@ class DatasetMeta(BaseModel):
     tables: list[str]
     n_obs: int
     n_vars: int
-    mode: str  # lazy | memory
+    mode: str  # lazy | memory | converted
     obs: list[ColumnMeta]
     matrices: list[Matrix]
     embeddings: list[Embedding]
@@ -221,6 +221,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
         raise ApiError(409, f"needs_conversion:{e.code}", "This dataset has no table.") from e
     except UnknownElementError as e:
         raise ApiError(404, "unknown_element", "No such table in this dataset.") from e
+    info = _effective(request, fp, info)
 
     def describe(src: Source) -> tuple[str, list[ColumnMeta]]:
         return src.mode, [src.column_meta(c.name) for c in info.obs.columns]
@@ -345,7 +346,8 @@ def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
     the matrices genes can be read from."""
     row, fp, path = _dataset(request, id)
     tname, info = _table(fp, table)
-    etag = _etag([str(row.version), str(tname), "genes"])
+    info = _effective(request, fp, info)
+    etag = _etag([str(row.version), str(tname), "genes", _store_mark(request, fp)])
     if (r := _not_modified(request, etag)) is not None:
         return r
     _, cache = _state(request)
@@ -391,7 +393,10 @@ def gene(
         raise ApiError(400, "invalid_q", "q must be 0 or 16.")
     row, fp, path = _dataset(request, id)
     tname, info = _table(fp, table)
-    etag = _etag([str(row.version), str(tname), "gene", matrix, str(i), str(q)])
+    info = _effective(request, fp, info)
+    etag = _etag(
+        [str(row.version), str(tname), "gene", matrix, str(i), str(q), _store_mark(request, fp)]
+    )
     if (r := _not_modified(request, etag)) is not None:
         return r
     m = genes.matrices(info).get(matrix)
@@ -484,6 +489,19 @@ def _columns_bytes(copy: object) -> int:
         return int(copy.nbytes)
     c: Any = copy
     return int(c.data.nbytes + c.indices.nbytes + c.indptr.nbytes)
+
+
+def _effective(request: Request, fp: Fingerprint, info: AnnDataInfo) -> AnnDataInfo:
+    """The table as it is served: the converted store's, once the dataset was converted."""
+    _, cache = _state(request)
+    st = store_table(cache.cache_dir, fp)
+    return st[1] if st is not None else info
+
+
+def _store_mark(request: Request, fp: Fingerprint) -> str:
+    """Part of ETags of replies whose encoding depends on the source (e.g. which matrices)."""
+    _, cache = _state(request)
+    return "store" if store_table(cache.cache_dir, fp) is not None else "source"
 
 
 def _table(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataInfo]:

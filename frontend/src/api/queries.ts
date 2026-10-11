@@ -2,7 +2,8 @@
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
-import { catalog, datasets } from './endpoints';
+import { catalog, datasets, jobs } from './endpoints';
+import type { Job } from './types';
 import { timeAsync } from '../telemetry/telemetry';
 
 const MINUTE = 60_000;
@@ -111,4 +112,16 @@ export const useGene = (
     staleTime: Infinity,
     gcTime: GENE_GC_MS,
     retry: false,
+  });
+
+const ACTIVE = new Set(['queued', 'running']);
+
+/** A job, followed every second while it is queued or running. */
+export const useJob = (id: number | null, initial?: Job | null) =>
+  useQuery({
+    queryKey: ['job', id],
+    queryFn: () => jobs.get(id!),
+    enabled: id !== null,
+    initialData: initial ?? undefined,
+    refetchInterval: (q) => (q.state.data && ACTIVE.has(q.state.data.state) ? 1000 : false),
   });

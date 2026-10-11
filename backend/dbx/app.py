@@ -10,6 +10,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request, Response
@@ -27,6 +28,8 @@ from dbx.data.api import router as datasets_router
 from dbx.data.cache import DatasetCache
 from dbx.environment import environment_snapshot
 from dbx.errors import error_response, install_error_handlers
+from dbx.jobs.api import router as jobs_router
+from dbx.jobs.manager import JobManager
 from dbx.logs import MemorySampler, get_logger, memory_snapshot, set_rollover_hook
 from dbx.stores import router as stores_router
 from dbx.telemetry import router as telemetry_router
@@ -157,6 +160,13 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     cfg.cache_dir.mkdir(parents=True, exist_ok=True)
     catalog = Catalog(cfg)
     datasets = DatasetCache(cfg)
+
+    def converted(job: Any) -> None:
+        # the next request on this dataset reads the converted store
+        datasets.drop_version(job.version)
+        log.info("dataset_converted", dataset_id=job.dataset, job=job.id)
+
+    jobs = JobManager(cfg, wal=catalog.wal, on_done=converted)
     inflight = InFlight()
     housekeeper = Housekeeper(inflight, datasets, cfg.server.slow_request_s)
     allowed = {h.lower() for h in cfg.server.allowed_hosts}
@@ -179,7 +189,9 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         housekeeper.start()
         if background:
             catalog.start()
+            jobs.start()
         yield
+        jobs.stop()
         catalog.stop()
         housekeeper.stop()
         datasets.clear()
@@ -191,10 +203,12 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     app.state.config = cfg
     app.state.catalog = catalog
     app.state.datasets = datasets
+    app.state.jobs = jobs
     app.include_router(catalog_router)
     app.include_router(datasets_router)
     app.include_router(stores_router)
     app.include_router(telemetry_router)
+    app.include_router(jobs_router)
     install_error_handlers(app)
     app.add_middleware(ApiGZip)
 

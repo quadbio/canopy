@@ -185,3 +185,13 @@ Resume rule: read this file, then continue with the first unchecked step.
   (with /obs/labels); unusable lists logged as uns_colors_ignored with the reason. All example
   datasets' colour lists (15 columns) are used. 208 backend tests, 14 e2e.
   - Note for the converter (S5): SPEC 4.3 copies `<col>_colors`; apply the same rules there.
+- 2026-10-11 S5 converter + jobs + memory guard (IN PROGRESS, committed, all tests pass: 222 backend,
+  15 e2e). dbx.convert (out-of-core CSR/CSC/dense -> contract CSC via per-gene-bucket spill files,
+  gene stats, stratified downsample, colours, validate, atomic publish), dbx.jobs (SQLite jobs,
+  worker processes, cancel via SIGTERM, interrupted on restart, memory guard 1.5x jobs.memory_gb
+  free, RSS watchdog), API /api/datasets/{id}/convert, /api/jobs; converted stores served
+  (mode "converted", genes direct); UI Convert button + progress + cancel/retry.
+  - Measured (M2): 3 M x 300 CSR (18 M values) 12 s, peak 1.32 GB; 300 k x 20 k CSR (120 M values)
+    44 s, peak 2.02 GB with a 1 GB budget -> peak exceeds budget ~2x: tune block sizing (TODO).
+  - TODO next: fix peak vs budget, ADR 0009 + README/guide docs, jobs config in demo, then subset
+    drawing (B-M4); then S5 review round if wanted.
