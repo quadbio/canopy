@@ -27,6 +27,7 @@ from dbx.contract.models import INDPTR_CHUNK, X_CHUNK
 from dbx.contract.write import array, codecs
 
 Progress = Callable[[str, float], None]  # (stage, fraction 0..1 of this stage)
+BYTES_PER_ENTRY = 72
 
 
 class ConversionError(Exception):
@@ -78,8 +79,9 @@ class CscWriter:
         self.node = node
         self.encoding = encoding
         self.n_obs, self.n_vars = shape
-        # ~40 bytes of working memory per entry in flight (values, indices, sort keys, order).
-        self.budget_values = max(100_000, budget_bytes // 40)
+        # Working memory per entry in flight, measured: the entry itself plus the sort keys, the
+        # order and the reordered copies (300 k x 20 k, 120 M values: peak within the budget).
+        self.budget_values = max(100_000, budget_bytes // BYTES_PER_ENTRY)
         self.tmp_dir = tmp_dir
         self.progress = progress
         self.idx_dtype = np.int32 if self.n_obs < 2**31 else np.int64
@@ -123,8 +125,14 @@ class CscWriter:
             lo, hi = int(indptr[a]), int(indptr[b])
             if len(rows) != hi - lo:
                 raise ConversionError("inconsistent_matrix", "entry counts changed between passes")
-            order = np.argsort(cols, kind="stable")  # rows stay ascending within a gene
-            rows, cols, vals = rows[order], cols[order], vals[order]
+            # Group by gene, rows staying ascending within one: a stable sort on the gene's position
+            # in the bucket (16 bits when it fits: numpy then uses a linear-time radix sort).
+            local = (cols - a).astype(np.uint16 if b - a <= 2**16 else np.int32)
+            del cols
+            order = np.argsort(local, kind="stable")
+            rows, vals = rows[order], vals[order]
+            cols = local[order].astype(np.int64) + a
+            del order, local
             self._check_canonical(rows, cols, a)
             if hi > lo:
                 indices[lo:hi] = rows.astype(self.idx_dtype, copy=False)
@@ -175,7 +183,7 @@ class CscWriter:
 
     # -------------------------------------------------------------------- spill (CSR / dense)
     def _spill(self, buckets: list[tuple[int, int]]) -> _Spill:
-        spill = _Spill(self.tmp_dir, buckets)
+        spill = _Spill(self.tmp_dir, buckets, self.n_obs)
         starts = np.array([a for a, _ in buckets], dtype=np.int64)
         if self.encoding == "csr":
             ip = self._indptr
@@ -195,9 +203,12 @@ class CscWriter:
                 vals = blk[r, cols].astype(np.float32)
                 rows = r.astype(np.int64) + a
                 cols = cols.astype(np.int64)
-            which = np.searchsorted(starts, cols, side="right") - 1
+            which = (np.searchsorted(starts, cols, side="right") - 1).astype(
+                np.uint16 if len(buckets) <= 2**16 else np.int32
+            )
             order = np.argsort(which, kind="stable")  # keeps the cell order within a bucket
             which, rows, cols, vals = which[order], rows[order], cols[order], vals[order]
+            del order
             bounds = np.searchsorted(which, np.arange(len(buckets) + 1))
             for q in range(len(buckets)):
                 s, e = int(bounds[q]), int(bounds[q + 1])
@@ -252,11 +263,15 @@ class CscWriter:
 class _Spill:
     """Per-bucket temporary files of (row, gene, value) entries, appended in cell order."""
 
-    def __init__(self, tmp_dir: Path, buckets: list[tuple[int, int]]) -> None:
+    def __init__(self, tmp_dir: Path, buckets: list[tuple[int, int]], n_obs: int) -> None:
         tmp_dir.mkdir(parents=True, exist_ok=True)
         self.dir = tmp_dir
         self.paths = [tmp_dir / f"bucket-{q:05d}" for q in range(len(buckets))]
         self.index = {a: q for q, (a, _) in enumerate(buckets)}
+        # 12 bytes per entry on disk while fewer than 2^31 cells (16 above)
+        self.dtype = np.dtype(
+            [("r", "<i4" if n_obs < 2**31 else "<i8"), ("c", "<i4"), ("v", "<f4")]
+        )
         self.files: dict[int, Any] = {}
         self.counts = [0] * len(buckets)
         self.bytes = 0
@@ -268,7 +283,7 @@ class _Spill:
                 old = next(iter(self.files))
                 self.files.pop(old).close()
             f = self.files[q] = open(self.paths[q], "ab")  # noqa: SIM115
-        rec = np.empty(len(rows), dtype=[("r", "<i8"), ("c", "<i4"), ("v", "<f4")])
+        rec = np.empty(len(rows), dtype=self.dtype)
         rec["r"], rec["c"], rec["v"] = rows, cols, vals
         f.write(rec.tobytes())
         self.counts[q] += len(rows)
@@ -284,9 +299,11 @@ class _Spill:
         if not path.exists():
             empty = np.zeros(0, np.int64)
             return empty, empty, np.zeros(0, np.float32)
-        rec = np.fromfile(path, dtype=[("r", "<i8"), ("c", "<i4"), ("v", "<f4")])
+        rec = np.fromfile(path, dtype=self.dtype)
         os.remove(path)  # free the disk space as soon as the bucket is written
-        return rec["r"].copy(), rec["c"].astype(np.int64), rec["v"].copy()
+        rows, cols, vals = rec["r"].copy(), rec["c"].copy(), rec["v"].copy()
+        del rec
+        return rows, cols, vals
 
     def close(self) -> None:
         self.flush()

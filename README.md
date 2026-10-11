@@ -93,6 +93,17 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   admin); the store folder itself must lie inside its data root.
 - `POST /api/telemetry`: the browser's timing marks and GPU facts, logged as `client_event`.
 
+## Conversion and jobs
+
+- `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>"}` starts (or returns the
+  running) conversion of an h5ad / AnnData-zarr file into a dbx store in the cache; `GET
+  /api/jobs?dataset=`, `GET /api/jobs/{job}`, `POST /api/jobs/{job}/cancel`. Once converted, the
+  dataset is served from the store (every gene a direct read). Design: ADR 0009.
+- Config `[jobs]`: `max_running` (1), `memory_gb` (2: working memory of one conversion; a job starts
+  only with 1.5 × this free and is stopped beyond 2 × this + 1 GB), `tmp_dir` (spill files, about
+  12 bytes per stored value; default `<cache>/tmp`).
+- Each job runs in its own process and logs to `dbx-worker-<pid>.jsonl` next to the server's log.
+
 ## Frontend
 
 `frontend/src/`: `api/` (typed client, TanStack Query hooks; views never call fetch), `state/`

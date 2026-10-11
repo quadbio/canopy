@@ -17,6 +17,17 @@ with file size, and 5 GB fixtures take proportionally longer (~5 min).
 
 ## Results
 
+### 2026-10-11 · conversion (`dbx.convert`) · MacBook Pro M2, 16 GB, local SSD · S5
+
+| source | values | budget | time | peak RSS |
+|---|---|---|---|---|
+| 3 M × 300 CSR (demo `synthetic_3M_cells.h5ad`) | 18 M | 1 GB | 12 s | 1.32 GB |
+| 300 k × 20 k CSR (`--density 0.02`, 0.44 GB gzip) | 120 M | 1 GB | 22 s | 1.43 GB |
+| same | 120 M | 0.5 GB | 21 s | 1.21 GB |
+
+Stages for the 120 M-value file: counting 3 s, reordering into gene buckets 7 s, writing gene by
+gene 11 s, deep validation 1 s.
+
 ### 2026-10-11 · gene requests (`bench/genes.py`) · MacBook Pro M2, 16 GB, local SSD · S5 R4
 
 Fixtures: `dbx synth anndata <f> --n-obs 300000 --n-vars 20000 --density 0.02` (120 M values,
