@@ -4,27 +4,54 @@
 // GPU uploads: positions and colours are separate binary attributes with stable identities, so
 // a colour change uploads only colours, and point size and opacity (uniforms) upload nothing.
 
-import { ScatterplotLayer } from '@deck.gl/layers';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { ScatterplotLayer, type ScatterplotLayerProps } from '@deck.gl/layers';
+import { useEffect, useMemo, useRef } from 'react';
 
 import { useEmbedding, useMeta, useObs, useObsLabels } from '../../api/queries';
 import type { ColumnMeta, DatasetMeta } from '../../api/types';
-import { computeColoursAsync } from '../../colour/client';
-import type { ColourSpec } from '../../colour/compute';
-import { categoryColors, colormapLut, type ColormapName, coloursRepeat, type RGB } from '../../colour/palettes';
+import {
+  categoryColouring,
+  constantColouring,
+  displayRange,
+  numberColouring,
+  robustRange,
+} from '../../colour/colouring';
+import { gpuValues, type ValueColour, ValueColourExtension } from '../../colour/gpu';
+import {
+  categoryColours,
+  COLORMAP_LABELS,
+  colormapGradient,
+  type ColormapName,
+  COLORMAPS,
+  coloursRepeat,
+  PALETTE_LABELS,
+  type PaletteName,
+  PALETTES,
+  paletteSize,
+  resolvePalette,
+  type RGB,
+} from '../../colour/palettes';
+import { assignSlots } from '../../colour/slots';
 import { event } from '../../telemetry/telemetry';
 import { Field, type OptionGroup, Select, Slider } from '../../ui/controls';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
 import { type Bounds, registerView, type ViewOutput } from '../registry';
 
+/** What the points are coloured by: an obs column, or (later in S5) a gene. */
+export interface ColourBy {
+  kind: 'obs' | 'gene';
+  name: string;
+}
+
 export interface EmbeddingParams {
   embedding: string;
   dims: [number, number];
-  colorBy: string | null;
+  colorBy: ColourBy | null;
   pointSize: number;
   opacity: number;
   hidden: string[]; // hidden category names of the current colorBy column
-  colormap: ColormapName;
+  palette: PaletteName; // categories
+  colormap: ColormapName; // numbers
   legendCollapsed?: boolean;
   [key: string]: unknown;
 }
@@ -34,7 +61,7 @@ const BASE_RGB: RGB = [80, 110, 160];
 const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 // Columns with more categories than this are listed but not chosen by default.
 const DEFAULT_MAX_CATEGORIES = 60;
-const COLORMAPS: ColormapName[] = ['viridis', 'magma'];
+const VALUE_COLOUR = new ValueColourExtension();
 
 function colourable(c: ColumnMeta): boolean {
   if (c.kind === 'numeric' || c.kind === 'boolean' || c.kind === 'string') return true;
@@ -58,9 +85,24 @@ export function defaultColumn(meta: DatasetMeta): string | null {
   return [...cats].sort((a, b) => rank(a) - rank(b))[0]?.name ?? null;
 }
 
+function defaultColourBy(meta: DatasetMeta): ColourBy | null {
+  const name = defaultColumn(meta);
+  return name ? { kind: 'obs', name } : null;
+}
+
 /** Smaller points for more cells: they stay distinct, and drawing cost grows with point area. */
 export function defaultPointSize(n: number): number {
   return n < 20_000 ? 3 : n < 200_000 ? 2 : n < 1_000_000 ? 1.2 : 0.8;
+}
+
+/** `colorBy` from saved settings: a column name (older builds) or `{kind, name}`. */
+function normaliseColourBy(v: unknown): ColourBy | null {
+  if (typeof v === 'string' && v) return { kind: 'obs', name: v };
+  if (v && typeof v === 'object') {
+    const c = v as Partial<ColourBy>;
+    if ((c.kind === 'obs' || c.kind === 'gene') && typeof c.name === 'string' && c.name) return { kind: c.kind, name: c.name };
+  }
+  return null;
 }
 
 /** Saved parameters made valid (older builds, hand edits); null if unusable. */
@@ -78,10 +120,11 @@ export function normaliseParams(raw: unknown): EmbeddingParams | null {
   return {
     embedding: r.embedding,
     dims: dimsOk ? (r.dims as [number, number]) : [0, 1],
-    colorBy: typeof r.colorBy === 'string' ? r.colorBy : null,
+    colorBy: normaliseColourBy(r.colorBy),
     pointSize: num(r.pointSize, 0.5, 10, 2),
     opacity: num(r.opacity, 0.05, 1, 0.85),
     hidden: Array.isArray(r.hidden) ? r.hidden.filter((h): h is string => typeof h === 'string') : [],
+    palette: PALETTES.includes(r.palette as PaletteName) ? (r.palette as PaletteName) : 'auto',
     colormap: COLORMAPS.includes(r.colormap as ColormapName) ? (r.colormap as ColormapName) : 'viridis',
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
   };
@@ -131,8 +174,11 @@ export function effectiveParams(
   } else if (emb && Math.max(...p.dims) >= emb.dims) {
     out = { ...out, dims: [0, 1] };
   }
-  if (p.colorBy && !meta.obs.some((c) => c.name === p.colorBy)) {
-    notes.push(`column “${p.colorBy}” not found`);
+  if (p.colorBy?.kind === 'gene') {
+    notes.push(`colouring by gene “${p.colorBy.name}” is not available yet`);
+    out = { ...out, colorBy: null, hidden: [] };
+  } else if (p.colorBy && !meta.obs.some((c) => c.name === p.colorBy!.name)) {
+    notes.push(`column “${p.colorBy.name}” not found`);
     out = { ...out, colorBy: null, hidden: [] };
   }
   return { p: out, notice: notes.length ? `Saved settings changed: ${notes.join('; ')}.` : undefined };
@@ -146,7 +192,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   const emb = useEmbedding(spec.datasetId, spec.table, p.embedding, p.dims, version);
   const positions = emb.data?.data as Float32Array | undefined;
   const n = positions ? positions.length / 2 : null;
-  const column = meta.data?.obs.find((c) => c.name === p.colorBy) ?? null;
+  const column = (p.colorBy?.kind === 'obs' && meta.data?.obs.find((c) => c.name === p.colorBy!.name)) || null;
   const obs = useObs(spec.datasetId, spec.table, column ? column.name : null, version);
   const labelsQ = useObsLabels(spec.datasetId, spec.table, column?.kind === 'string' ? column.name : null, version);
   const values = obs.data && obs.data.data.length === n ? obs.data : undefined;
@@ -156,56 +202,73 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     if (notice) update(spec.id, p);
   }, [notice]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Values for the GPU and the range of numbers: once per loaded column.
+  const prepared = useMemo(() => {
+    if (!values) return null;
+    const t0 = performance.now();
+    const gpu = gpuValues(values.data, values.kind === 'numeric');
+    const range = values.kind === 'numeric' ? robustRange(values.data) : null;
+    event('colour_values_prepared', performance.now() - t0, { n: gpu.length });
+    return { attr: { value: gpu, size: 1 }, range };
+  }, [values]);
+
   const labels = useMemo<string[] | null>(() => {
     if (!column || !values || values.kind === 'numeric') return null;
     if (values.kind === 'boolean') return ['false', 'true'];
     if (column.kind === 'string') return labelsQ.data?.categories ?? null;
     return column.categories;
   }, [column, values, labelsQ.data]);
-  const palette = useMemo(
-    () => (labels ? categoryColors(labels.length, column?.kind === 'categorical' ? column.colors : null) : null),
-    [labels, column],
+  const order = useMemo(
+    () => (labels ? labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b])) : null),
+    [labels],
   );
-  const hiddenKey = p.hidden.join('\u0000');
 
-  // Colours (in the worker). Opacity is a layer property, so it is not part of this.
-  const colourSpec = useMemo<ColourSpec | null>(() => {
-    if (n === null) return null;
-    if (!column) return { kind: 'constant', n, rgb: BASE_RGB };
-    if (!values) return null;
-    if (values.kind === 'numeric') {
-      return { kind: 'continuous', values: values.data as Float32Array, colormap: p.colormap, range: null };
-    }
-    if (!labels || !palette) return null;
-    const hidden = new Set(hiddenKey ? hiddenKey.split('\u0000') : []);
-    return { kind: 'categorical', codes: values.data as Int8Array, colors: palette, hidden: labels.map((c) => hidden.has(c)) };
-  }, [n, column, values, labels, palette, p.colormap, hiddenKey]);
-  const [colours, setColours] = useState<{ rgba: Uint8Array; range: [number, number] | null } | null>(null);
+  // Category colours: by name (slots shared by all views), or the dataset's own.
+  const given = column?.kind === 'categorical' ? column.colors : null;
+  const palette = labels ? resolvePalette(p.palette, labels.length, given) : null;
+  const slotTable = useWorkspace((s) => s.labelSlots);
+  const addLabelSlots = useWorkspace((s) => s.addLabelSlots);
+  const known = useMemo(() => new Map(slotTable), [slotTable]);
+  const assigned = useMemo(
+    () =>
+      labels && order && palette && palette !== 'dataset'
+        ? assignSlots(labels, order, known, paletteSize(palette))
+        : null,
+    [labels, order, palette, known],
+  );
   useEffect(() => {
-    if (!colourSpec) return;
-    let live = true;
-    computeColoursAsync(colourSpec).then((r) => live && setColours(r));
-    return () => {
-      live = false;
-    };
-  }, [colourSpec]);
+    if (assigned?.added.length) addLabelSlots(assigned.added);
+  }, [assigned, addLabelSlots]);
+  const colours = useMemo(
+    () => (labels && palette ? categoryColours(palette, assigned?.slots ?? [], given) : null),
+    [labels, palette, assigned, given],
+  );
+
+  const hiddenKey = p.hidden.join('\u0000');
+  const valueColour = useMemo<ValueColour | null>(() => {
+    if (!column) return constantColouring(BASE_RGB);
+    if (!prepared) return null;
+    if (prepared.range) return numberColouring(p.colormap, prepared.range);
+    if (!labels || !colours) return null;
+    const hidden = new Set(hiddenKey ? hiddenKey.split('\u0000') : []);
+    return categoryColouring(colours, labels.map((l) => hidden.has(l)));
+  }, [column, prepared, labels, colours, p.colormap, hiddenKey]);
 
   const bounds = useMemo(() => (positions ? computeBounds(positions) : null), [positions]);
   // Stable attribute objects: deck.gl uploads an attribute only when its object changes.
   const posAttr = useMemo(() => (positions ? { value: positions, size: 2 } : null), [positions]);
-  const rgba = colours && n !== null && colours.rgba.length === n * 4 ? colours.rgba : null;
-  const colAttr = useMemo(() => (rgba ? { value: rgba, size: 4, normalized: true } : null), [rgba]);
+  const valueAttr = column && prepared ? prepared.attr : null;
   const data = useMemo(
     () =>
       posAttr && n !== null
-        ? { length: n, attributes: { getPosition: posAttr, ...(colAttr ? { getFillColor: colAttr } : {}) } }
+        ? { length: n, attributes: { getPosition: posAttr, ...(valueAttr ? { getColourValue: valueAttr } : {}) } }
         : null,
-    [posAttr, colAttr, n],
+    [posAttr, valueAttr, n],
   );
 
   const layers = useMemo(
     () =>
-      data
+      data && valueColour
         ? [
             new ScatterplotLayer({
               id: `${spec.id}:points`,
@@ -217,35 +280,38 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
               opacity: p.opacity,
               stroked: false,
               pickable: true,
-            }),
+              extensions: [VALUE_COLOUR],
+              valueColour,
+            } as ScatterplotLayerProps & { valueColour: ValueColour }),
           ]
         : [],
-    [spec.id, data, p.pointSize, p.opacity],
+    [spec.id, data, valueColour, p.pointSize, p.opacity],
   );
 
   const legend = useMemo<EmbeddingLegendData | undefined>(() => {
     if (!column || !values) return undefined;
     if (values.kind === 'numeric') {
-      return colours?.range ? { kind: 'numeric', name: column.name, range: colours.range, colormap: p.colormap } : undefined;
+      return prepared?.range
+        ? { kind: 'numeric', name: column.name, range: displayRange(prepared.range, p.colormap), colormap: p.colormap }
+        : undefined;
     }
-    if (!labels || !palette) return undefined;
+    if (!labels || !colours || !order || !palette) return undefined;
     const counts = new Array<number>(labels.length).fill(0);
     for (const v of values.data) if (v >= 0 && v < counts.length) counts[v] += 1;
-    const order = labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b]));
-    const given = column.kind === 'categorical' ? column.colors : null;
     return {
       kind: 'categories',
       name: column.name,
       labels,
-      colours: palette,
+      colours,
       counts,
       order,
-      repeats: coloursRepeat(labels.length, given),
+      repeats: coloursRepeat(palette, labels.length),
     };
-  }, [column, values, labels, palette, colours?.range, p.colormap]);
+  }, [column, values, labels, colours, order, palette, prepared, p.colormap]);
 
   const error = meta.error ?? emb.error ?? obs.error ?? labelsQ.error;
-  const status: ViewOutput['status'] = error ? 'error' : positions && rgba ? 'ready' : 'loading';
+  const drawable = !!positions && !!valueColour && (!column || !!valueAttr);
+  const status: ViewOutput['status'] = error ? 'error' : drawable ? 'ready' : 'loading';
   const t0 = useRef(performance.now());
   const reported = useRef(false);
   useEffect(() => {
@@ -266,7 +332,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   };
 
   return {
-    layers,
+    layers: drawable ? layers : [],
     bounds,
     status,
     error: error ? String((error as Error).message) : undefined,
@@ -291,14 +357,23 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
       options: m.obs
         .filter((c) => colourable(c) && c.kind !== 'numeric')
         .map((c) => ({
-          value: c.name,
+          value: `obs:${c.name}`,
           label: c.name,
           hint: c.kind === 'boolean' ? 'yes/no' : c.kind === 'string' ? 'text' : `${c.categories?.length}`,
         })),
     },
-    { label: 'Numbers', options: m.obs.filter((c) => c.kind === 'numeric').map((c) => ({ value: c.name, label: c.name })) },
+    {
+      label: 'Numbers',
+      options: m.obs.filter((c) => c.kind === 'numeric').map((c) => ({ value: `obs:${c.name}`, label: c.name })),
+    },
   ].filter((g) => g.options.length);
-  const colorColumn = m.obs.find((c) => c.name === p.colorBy);
+  const colorColumn = p.colorBy?.kind === 'obs' ? m.obs.find((c) => c.name === p.colorBy!.name) : undefined;
+  const hasOwnColours = !!colorColumn?.colors && colorColumn.colors.length === colorColumn.categories?.length;
+  const paletteOptions = PALETTES.filter((x) => x !== 'dataset' || hasOwnColours).map((x) => ({
+    value: x,
+    label: PALETTE_LABELS[x],
+    hint: x === 'auto' ? (hasOwnColours ? 'dataset’s own' : 'default') : undefined,
+  }));
 
   return (
     <div className="panel-fields">
@@ -343,9 +418,9 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
         <Select
           label="Colour by"
           testId="colour-select"
-          value={p.colorBy}
+          value={p.colorBy ? `${p.colorBy.kind}:${p.colorBy.name}` : null}
           allowNone="None"
-          onChange={(v) => update(spec.id, { colorBy: v, hidden: [] })}
+          onChange={(v) => update(spec.id, { colorBy: v ? { kind: 'obs', name: v.slice(4) } : null, hidden: [] })}
           groups={colourGroups}
         />
       </Field>
@@ -355,7 +430,30 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
             label="Colour map"
             value={p.colormap}
             onChange={(v) => v && update(spec.id, { colormap: v })}
-            groups={[{ label: 'maps', options: COLORMAPS.map((c) => ({ value: c, label: c })) }]}
+            testId="colormap-select"
+            groups={[{ label: 'maps', options: COLORMAPS.map((c) => ({ value: c, label: COLORMAP_LABELS[c] })) }]}
+          />
+        </Field>
+      )}
+      {colorColumn && colorColumn.kind !== 'numeric' && (
+        <Field
+          label="Palette"
+          help={
+            <>
+              <p>
+                Colours follow the category <em>name</em>: a cell type keeps its colour in every view and dataset that uses
+                the same palette.
+              </p>
+              <p>“From the dataset” uses the colours saved with the data (e.g. by scanpy), when there is one per category.</p>
+            </>
+          }
+        >
+          <Select
+            label="Palette"
+            testId="palette-select"
+            value={p.palette === 'dataset' && !hasOwnColours ? 'auto' : p.palette}
+            onChange={(v) => v && update(spec.id, { palette: v })}
+            groups={[{ label: 'palettes', options: paletteOptions }]}
           />
         </Field>
       )}
@@ -390,16 +488,12 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
 }
 
 function ColourBar({ colormap, range }: { colormap: ColormapName; range: [number, number] }) {
-  const lut = useMemo(() => colormapLut(colormap), [colormap]);
-  const stops = Array.from({ length: 11 }, (_, i) => {
-    const k = Math.round((i / 10) * 255) * 3;
-    return `rgb(${lut[k]},${lut[k + 1]},${lut[k + 2]}) ${i * 10}%`;
-  });
+  const gradient = useMemo(() => colormapGradient(colormap), [colormap]);
   const fmt = (v: number) =>
     Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(1) : v.toPrecision(3);
   return (
     <div className="colourbar">
-      <div className="colourbar-ramp" style={{ background: `linear-gradient(to right, ${stops.join(',')})` }} />
+      <div className="colourbar-ramp" style={{ background: gradient }} />
       <div className="colourbar-labels">
         <span>{fmt(range[0])}</span>
         <span>{fmt(range[1])}</span>
@@ -490,10 +584,11 @@ registerView<EmbeddingParams>({
     return {
       embedding: first.key,
       dims: [0, 1],
-      colorBy: defaultColumn(meta),
+      colorBy: defaultColourBy(meta),
       pointSize: defaultPointSize(meta.n_obs),
       opacity: 0.85,
       hidden: [],
+      palette: 'auto',
       colormap: 'viridis',
     };
   },

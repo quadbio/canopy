@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { collectErrors, drawnFraction, freshPage, openDataset } from './helpers';
+import { collectErrors, drawnColours, drawnFraction, freshPage, mainColours, openDataset } from './helpers';
 
 // The S4 demo path: find a dataset, open it, see its embedding coloured by cell type.
 
@@ -40,6 +40,8 @@ test('open spatial.h5ad and colour its UMAP by cell type', async ({ page }) => {
   await expect(page.getByTestId('legend')).toContainText('celltype');
   await expect(page.getByTestId('embedding-select')).toContainText('X_umap');
   expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.03); // points drawn
+  // each point has its own colour: many cell types on screen, not one colour for all
+  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 })).length).toBeGreaterThan(8);
   await page.screenshot({ path: 'test-results/screens/spatial-umap.png' });
 
   await page.getByTestId('legend').locator('.legend-item').first().click();
@@ -48,6 +50,8 @@ test('open spatial.h5ad and colour its UMAP by cell type', async ({ page }) => {
   await page.getByRole('option', { name: /^total_counts/ }).click();
   await expect(page.getByTestId('legend')).toContainText('total_counts');
   await expect(page.getByTestId('legend').locator('.colourbar')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 })).length).toBeGreaterThan(4); // a gradient
   await page.screenshot({ path: 'test-results/screens/spatial-umap-total-counts.png' });
   expect(errors).toEqual([]);
 });
@@ -194,4 +198,55 @@ test('reopening a dataset continues with its last settings; reset goes back to d
   await page.getByLabel('Close view').click();
   await openDataset(page, 'spatial.h5ad');
   await expect(page.getByTestId('legend')).toContainText('celltype');
+});
+
+test('palettes: colours follow the label name across datasets; changes send no point data', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __uploaded: number };
+    w.__uploaded = 0;
+    const proto = WebGL2RenderingContext.prototype;
+    const sub = proto.bufferSubData as (...a: unknown[]) => void;
+    proto.bufferSubData = function (this: unknown, ...a: unknown[]) {
+      w.__uploaded += (a[2] as ArrayBufferView | undefined)?.byteLength ?? 0;
+      return sub.apply(this, a);
+    } as typeof proto.bufferSubData;
+    const data = proto.bufferData as (...a: unknown[]) => void;
+    proto.bufferData = function (this: unknown, ...a: unknown[]) {
+      const src = a[1];
+      w.__uploaded += typeof src === 'number' ? 0 : ((src as ArrayBufferView | null)?.byteLength ?? 0);
+      return data.apply(this, a);
+    } as typeof proto.bufferData;
+  });
+  await freshPage(page);
+  await openDataset(page, 'region_1', 'table_cells');
+  const legends = page.getByTestId('legend');
+  const swatch = async (view: number, label: string) => {
+    const lg = legends.nth(view);
+    const toggle = lg.locator('.legend-toggle');
+    if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click(); // small views start folded
+    const item = lg.locator('.legend-item').filter({ has: page.locator('.legend-name', { hasText: new RegExp(`^${label}$`) }) });
+    return item.locator('.swatch').evaluate((e) => getComputedStyle(e).backgroundColor);
+  };
+  // region_1 brings its own colours; the default palette is chosen explicitly to share colours by name
+  await page.getByTestId('palette-select').click();
+  await page.getByRole('option', { name: /^Default/ }).click();
+  const first = await swatch(0, '1');
+  await openDataset(page, 'region_3', 'table_cells');
+  await page.getByTestId('palette-select').click();
+  await page.getByRole('option', { name: /^Default/ }).click();
+  expect(await swatch(1, '1')).toBe(first); // cluster "1" has the same colour in both datasets
+
+  const cell = page.getByTestId('view-cell').nth(1);
+  const uploaded = () => page.evaluate(() => (window as unknown as { __uploaded: number }).__uploaded);
+  await page.waitForTimeout(300);
+  const before = await uploaded();
+  const coloursBefore = mainColours(await drawnColours(page, cell));
+  await page.getByTestId('palette-select').click();
+  await page.getByRole('option', { name: /^Colour-blind/ }).click();
+  await legends.nth(1).locator('.legend-item').first().click(); // hide one category
+  await page.waitForTimeout(300);
+  const coloursAfter = mainColours(await drawnColours(page, cell));
+  expect(coloursAfter.join()).not.toBe(coloursBefore.join());
+  // 7.8 k cells: positions are 62 KB, values 31 KB. Only the colour table and uniforms may move.
+  expect((await uploaded()) - before).toBeLessThan(10_000);
 });

@@ -149,3 +149,12 @@ Resume rule: read this file, then continue with the first unchecked step.
   in the settings panel; default point size 0.8 px above 1 M cells (user: bigger points are
   slower, as expected from fill cost). Storage falls back to memory when localStorage is missing.
   23 frontend unit tests, 9 e2e tests. Next: S5, starting with R2.
+- 2026-10-11 S5 started. R2 DONE (ADR 0007): GPU colouring (ValueColourExtension: one float per
+  point + RGBA lookup texture; palette/map/range/hidden change no point data), colour worker
+  removed; colours by name (workspace labelSlots, slots.ts); palettes auto/dataset/default/
+  colour-blind/many and 8 colour maps (d3-scale-chromatic, diverging centred on 0); colorBy is
+  {kind, name}. Found and fixed: extension attribute needed stepMode 'dynamic' (all points read
+  the first values); e2e now counts colours on screen. 30 frontend unit tests, 10 e2e tests.
+  3M cells: ready 0.67 s, switch to numbers 0.4 s.
+  - Next in S5: F7 gene endpoint (CSC direct, quantised) + gene colouring; then converter/jobs/
+    memory guard; subset drawing when zoomed out.

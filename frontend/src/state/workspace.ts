@@ -12,6 +12,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+import { mergeSlots } from '../colour/slots';
 import { viewType } from '../views/registry';
 
 export interface ViewSpec<P = Record<string, unknown>> {
@@ -32,6 +33,9 @@ export interface Workspace {
   views: ViewSpec[];
   /** Last settings by `rememberKey`; at most MAX_REMEMBERED, oldest dropped. */
   remembered: Record<string, Remembered>;
+  /** Colours by name: category label -> palette slot, oldest first (colour/slots.ts). */
+  labelSlots: [string, number][];
+  addLabelSlots: (added: [string, number][]) => void;
   selected: string | null;
   browserSelection: string | null; // dataset highlighted in the file browser
   /** Adds a view; returns its id, or null when the canvas is full (MAX_VIEWS). */
@@ -64,6 +68,18 @@ function remember(all: Record<string, Remembered>, v: ViewSpec): Record<string, 
   keys.sort((a, b) => next[a].at - next[b].at);
   for (const k of keys.slice(0, keys.length - MAX_REMEMBERED)) delete next[k];
   return next;
+}
+
+/** Saved label slots, keeping only [string, non-negative integer] pairs. */
+export function restoreSlots(raw: unknown): [string, number][] {
+  if (!Array.isArray(raw)) return [];
+  return mergeSlots(
+    [],
+    raw.filter(
+      (e): e is [string, number] =>
+        Array.isArray(e) && typeof e[0] === 'string' && Number.isInteger(e[1]) && (e[1] as number) >= 0,
+    ),
+  );
 }
 
 /** Saved remembered settings, keeping only well-formed entries (params are validated on use). */
@@ -126,6 +142,10 @@ export const useWorkspace = create<Workspace>()(
     (set, get) => ({
       views: [],
       remembered: {},
+      labelSlots: [],
+      addLabelSlots: (added) => {
+        if (added.length) set((s) => ({ labelSlots: mergeSlots(s.labelSlots, added) }));
+      },
       selected: null,
       browserSelection: null,
       addView: (v) => {
@@ -164,14 +184,20 @@ export const useWorkspace = create<Workspace>()(
       version: VERSION,
       storage,
       skipHydration: true,
-      partialize: (s) => ({ views: s.views, selected: s.selected, remembered: s.remembered }),
+      partialize: (s) => ({ views: s.views, selected: s.selected, remembered: s.remembered, labelSlots: s.labelSlots }),
       // Older saved versions: keep what can be kept; `merge` validates every view anyway.
       migrate: (persisted) => persisted as Partial<Workspace>,
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<Workspace>;
         const views = restoreViews(p.views);
         const selected = views.some((v) => v.id === p.selected) ? (p.selected ?? null) : (views.at(-1)?.id ?? null);
-        return { ...current, views, selected, remembered: restoreRemembered(p.remembered) };
+        return {
+          ...current,
+          views,
+          selected,
+          remembered: restoreRemembered(p.remembered),
+          labelSlots: restoreSlots(p.labelSlots),
+        };
       },
     },
   ),
