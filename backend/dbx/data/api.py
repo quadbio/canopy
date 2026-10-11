@@ -39,6 +39,7 @@ from dbx.data.reader import (
     UnknownElementError,
     block_bytes,
     embedding_dims,
+    valid_colors,
 )
 from dbx.errors import ApiError
 from dbx.inspect.core import version_stamp
@@ -90,6 +91,9 @@ class GeneListReply(BaseModel):
 class Labels(BaseModel):
     kind: str
     categories: list[str] | None
+    # The dataset's own colours for these labels (`uns['<col>_colors']`), e.g. for a text column
+    # that scanpy turned into categories (alphabetical, as here) when plotting.
+    colors: list[str] | None = None
 
 
 def _state(request: Request) -> tuple[Catalog, DatasetCache]:
@@ -277,7 +281,12 @@ def obs_labels(request: Request, id: str, column: NameQ, table: TableQ = None) -
     row, fp, path = _dataset(request, id)
     table, _ = _table(fp, table)
     values = _obs_values(request, row, fp, path, table, column)
-    return Labels(kind=values.kind, categories=values.categories)
+    colors = None
+    if values.categories and values.kind in ("categorical", "string"):
+        raw = _with_source(request, row, fp, path, table, lambda src: src.uns_colors(column))
+        if raw is not None:
+            colors = valid_colors(raw, len(values.categories), column)
+    return Labels(kind=values.kind, categories=values.categories, colors=colors)
 
 
 @router.get("/{id}/obsm")

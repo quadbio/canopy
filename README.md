@@ -60,7 +60,9 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 ## Dataset API and stores
 
 - `GET /api/datasets/{id}/meta?table=`: cells, genes, obs columns (kind, categories, colours
-  from `uns[<col>_colors]`), embeddings. `table` picks a SpatialData table.
+  from `uns[<col>_colors]`: hex or matplotlib colour names, as `#rrggbb`; a longer list is cut to
+  the categories, a shorter one is not used and logged as `uns_colors_ignored`), embeddings,
+  matrices. `table` picks a SpatialData table.
 - `GET /api/datasets/{id}/obs?column=` and `/obsm?key=&dims=0,1`: binary little-endian arrays
   (`x-dbx-dtype`, `x-dbx-shape`, `x-dbx-kind` headers; weak ETag, 304 before any read). Category
   and boolean codes are int8/16/32 with -1 for missing; numbers float32 (NaN for missing; integers

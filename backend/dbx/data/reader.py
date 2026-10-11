@@ -26,12 +26,14 @@ from scipy import sparse
 
 from dbx.data.genes import GeneValues, from_column, from_dense, matrices
 from dbx.inspect.models import AnnDataInfo, MatrixInfo
+from dbx.logs import get_logger
 
 # Categories beyond this are not sent (and the column cannot be coloured by category).
 MAX_CATEGORIES = 10_000
 _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")
 
 ObsKind = Literal["categorical", "numeric", "boolean", "string", "other"]
+_log = get_logger("dbx.data")
 
 
 class UnknownElementError(LookupError):
@@ -122,14 +124,51 @@ def to_obs_values(raw: Any) -> ObsValues:
     raise NeedsConversionError("unsupported_column")
 
 
-def valid_colors(raw: Any, n: int) -> list[str] | None:
-    """`uns['<col>_colors']` if it is one hex colour per category, else None."""
+def to_hex(colour: str) -> str | None:
+    """A colour as `#rrggbb` (alpha dropped): hex (`#rgb`, `#rrggbb`, `#rrggbbaa`) or any name
+    matplotlib understands (`red`, `lightgray`, `tab:blue`, `C0`, …); None if not a colour."""
+    c = colour.strip()
+    if _HEX.fullmatch(c):
+        return c[:7]  # as written (the dataset author's spelling)
+    if re.fullmatch(r"#[0-9a-fA-F]{3}", c):
+        return "#" + "".join(ch * 2 for ch in c[1:]).lower()
+    try:
+        from matplotlib.colors import to_hex as mpl_to_hex
+    except ImportError:  # matplotlib comes with the data stack; without it, hex only
+        return None
+    try:
+        return str(mpl_to_hex(c, keep_alpha=False))
+    except ValueError:
+        return None
+
+
+def parse_colors(raw: Any, n: int) -> tuple[list[str] | None, str | None]:
+    """`uns['<col>_colors']` as one `#rrggbb` per category, or (None, why not). Like scanpy, a
+    longer list is used for its first `n` colours; a shorter one cannot be used."""
     try:
         cols = [c.decode() if isinstance(c, bytes) else str(c) for c in np.asarray(raw).ravel()]
     except (TypeError, ValueError):
-        return None
-    if len(cols) != n or not all(_HEX.fullmatch(c) for c in cols):
-        return None
+        return None, "unreadable"
+    if len(cols) < n:
+        return None, "too_few"
+    out = [to_hex(c) for c in cols[:n]]
+    if any(h is None for h in out):
+        return None, "not_a_colour"
+    return [h for h in out if h is not None], None
+
+
+def valid_colors(raw: Any, n: int, column: str = "") -> list[str] | None:
+    """The dataset's own colours for a column (see `parse_colors`); a list that cannot be used
+    is logged with the reason, since the browser then makes up a palette instead."""
+    cols, why = parse_colors(raw, n)
+    if why is not None:
+        _log.info(
+            "uns_colors_ignored",
+            column=column,
+            reason=why,
+            n_categories=n,
+            n_colors=int(np.asarray(raw).size),
+        )
     return cols
 
 
@@ -188,6 +227,10 @@ class Source:
 
     def var(self) -> pd.DataFrame:
         """The var table (gene names and annotations)."""
+        raise NotImplementedError
+
+    def uns_colors(self, name: str) -> Any:
+        """`uns['<name>_colors']` as stored, or None."""
         raise NotImplementedError
 
     def gene(self, matrix: str, i: int) -> GeneValues:
@@ -329,7 +372,9 @@ class LazySource(Source):
         if cats is not None:
             meta.categories = [str(c) for c in np.asarray(cats)]
             meta.n_categories = len(meta.categories)
-            meta.colors = valid_colors(colors, meta.n_categories) if colors is not None else None
+            meta.colors = (
+                valid_colors(colors, meta.n_categories, name) if colors is not None else None
+            )
         return meta
 
     def var(self) -> pd.DataFrame:
@@ -376,6 +421,9 @@ class LazySource(Source):
             return self._read(get)  # type: ignore[no-any-return]
 
         return csr_to_csc_blocks(indptr, n_vars, read)
+
+    def uns_colors(self, name: str) -> Any:
+        return self._read(lambda: self._uns_colors(name))
 
     def _uns_colors(self, name: str) -> Any:
         uns = self.group.get("uns")
@@ -426,12 +474,15 @@ class MemorySource(Source):
                 meta.categories = [str(c) for c in s.cat.categories]
                 colors = self.adata.uns.get(f"{name}_colors")
                 meta.colors = (
-                    valid_colors(colors, meta.n_categories) if colors is not None else None
+                    valid_colors(colors, meta.n_categories, name) if colors is not None else None
                 )
         return meta
 
     def var(self) -> pd.DataFrame:
         return self.adata.var
+
+    def uns_colors(self, name: str) -> Any:
+        return self.adata.uns.get(f"{name}_colors")
 
     def _matrix(self, matrix: str) -> Any:
         return self.adata.X if matrix == "X" else self.adata.layers[matrix]

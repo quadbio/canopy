@@ -431,7 +431,11 @@ def test_string_and_nullable_boolean_columns(cfg: Config) -> None:
     meta = {col["name"]: col for col in c.get(f"/api/datasets/{id}/meta").json()["obs"]}
     assert meta["label"]["kind"] == "string"
     labels = c.get(f"/api/datasets/{id}/obs/labels", params={"column": "label"}).json()
-    assert labels == {"kind": "string", "categories": ["s0", "s1", "s2", "s3", "s4"]}
+    assert labels == {
+        "kind": "string",
+        "categories": ["s0", "s1", "s2", "s3", "s4"],
+        "colors": None,
+    }
     codes = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "label"}))
     assert [labels["categories"][i] for i in codes[:6]] == ["s0", "s1", "s2", "s3", "s4", "s0"]
     r = c.get(f"/api/datasets/{id}/obs", params={"column": "maybe"})
@@ -508,3 +512,51 @@ def test_idle_entries_are_swept(cfg: Config) -> None:
     cache.sweep()
     assert cache.stats()["entries"] == 0
     assert any(e["event"] == "cache_evict" and e["reason"] == "idle" for e in log_events())
+
+
+# ---------------------------------------------------------------- dataset colours (uns)
+
+
+def test_parse_colors_accepts_what_scanpy_and_matplotlib_accept() -> None:
+    from dbx.data.reader import parse_colors
+
+    assert parse_colors(["#FF0000", "#00ff0080", "#abc"], 3) == (
+        ["#FF0000", "#00ff00", "#aabbcc"],
+        None,
+    )
+    assert parse_colors(["red", "lightgray", "tab:blue", "C1"], 4)[0] == [
+        "#ff0000",
+        "#d3d3d3",
+        "#1f77b4",
+        "#ff7f0e",
+    ]
+    assert parse_colors([b"#123456", b"#654321", b"#000000"], 2) == (["#123456", "#654321"], None)
+    assert parse_colors(["#123456"], 2) == (None, "too_few")
+    assert parse_colors(["#123456", "not-a-colour"], 2) == (None, "not_a_colour")
+
+
+def test_dataset_colours_are_the_default_whenever_usable(cfg: Config) -> None:
+    rng = np.random.default_rng(0)
+    n = 60
+    a = ad.AnnData(X=np.zeros((n, 2), np.float32))
+    a.obs["named"] = pd.Categorical(rng.choice(["x", "y"], n), categories=["x", "y"])
+    a.uns["named_colors"] = ["red", "tab:green"]
+    a.obs["longer"] = pd.Categorical(rng.choice(["p", "q"], n), categories=["p", "q"])
+    a.uns["longer_colors"] = ["#111111", "#222222", "#333333"]  # scanpy uses the first two
+    a.obs["short"] = pd.Categorical(rng.choice(["s", "t", "u"], n), categories=["s", "t", "u"])
+    a.uns["short_colors"] = ["#111111"]
+    a.obs["text"] = [["beta", "alpha"][i % 2] for i in range(n)]  # a plain string column
+    a.uns["text_colors"] = ["#0000ff", "#ff0000"]  # scanpy's order: alphabetical
+    a.obsm["X_umap"] = np.zeros((n, 2), np.float32)
+    path = cfg.data_roots[0].path / "colours.h5ad"
+    a.write_h5ad(path)
+    c = client_for(cfg)
+    id = entry_id("data", "colours.h5ad")
+    cols = {col["name"]: col for col in c.get(f"/api/datasets/{id}/meta").json()["obs"]}
+    assert cols["named"]["colors"] == ["#ff0000", "#2ca02c"]
+    assert cols["longer"]["colors"] == ["#111111", "#222222"]
+    assert cols["short"]["colors"] is None  # too few: the browser makes up a palette
+    labels = c.get(f"/api/datasets/{id}/obs/labels", params={"column": "text"}).json()
+    assert labels["categories"] == ["alpha", "beta"] and labels["colors"] == ["#0000ff", "#ff0000"]
+    ignored = [e for e in log_events() if e["event"] == "uns_colors_ignored"]
+    assert any(e["column"] == "short" and e["reason"] == "too_few" for e in ignored)

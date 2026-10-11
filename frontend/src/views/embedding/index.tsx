@@ -286,7 +286,10 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
 
   // Category colours: by name (a stable hash of the label, see colour/slots.ts), or the
   // dataset's own.
-  const given = column?.kind === 'categorical' ? column.colors : null;
+  // The dataset's own colours (uns['<col>_colors']) are the default whenever it has them; for a
+  // text column they come with its labels.
+  const given =
+    column?.kind === 'categorical' ? column.colors : column?.kind === 'string' ? (labelsQ.data?.colors ?? null) : null;
   const palette = labels ? resolvePalette(p.palette, labels.length, given) : null;
   const slots = useMemo(
     () => (labels && order && palette && palette !== 'dataset' ? assignSlots(labels, order, paletteSize(palette)) : []),
@@ -475,6 +478,9 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
   const p = spec.params;
   const readable = meta.data?.matrices.filter((x) => x.access !== 'needs_conversion') ?? [];
   const genes = useGenes(spec.datasetId, spec.table, meta.data?.version, readable.length > 0);
+  const textColumn =
+    p.colorBy?.kind === 'obs' && meta.data?.obs.find((c) => c.name === p.colorBy!.name && c.kind === 'string');
+  const textLabels = useObsLabels(spec.datasetId, spec.table, textColumn ? textColumn.name : null, meta.data?.version);
   if (!meta.data) return <p className="muted">{meta.error ? String(meta.error.message) : 'Loading…'}</p>;
   const m = meta.data;
   const geneChoice = p.colorBy?.kind === 'gene' ? p.colorBy : null;
@@ -512,7 +518,9 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
   };
   const matrixName = geneChoice?.matrix ?? 'X';
   const colorColumn = p.colorBy?.kind === 'obs' ? m.obs.find((c) => c.name === p.colorBy!.name) : undefined;
-  const hasOwnColours = !!colorColumn?.colors && colorColumn.colors.length === colorColumn.categories?.length;
+  const ownColours = colorColumn?.kind === 'string' ? textLabels.data?.colors : colorColumn?.colors;
+  const nCategories = colorColumn?.kind === 'string' ? textLabels.data?.categories?.length : colorColumn?.categories?.length;
+  const hasOwnColours = !!ownColours && ownColours.length === nCategories;
   const paletteOptions = PALETTES.filter((x) => x !== 'dataset' || hasOwnColours).map((x) => ({
     value: x,
     label: PALETTE_LABELS[x],

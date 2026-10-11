@@ -179,3 +179,9 @@ Resume rule: read this file, then continue with the first unchecked step.
   - Deferred: subset drawing (S5 next), shared colour state (R3), colour range + zero grey (S7).
   - Next: S5 converter + jobs + memory guard (reuse block-wise build and reservation), then
     subset drawing.
+- 2026-10-11 User rule: a column's uns['<col>_colors'] is the default palette whenever present.
+  Already the "Automatic" behaviour; widened what counts as usable: colour names and #rgb via
+  matplotlib, longer lists cut to the categories (as scanpy), colours for plain text columns
+  (with /obs/labels); unusable lists logged as uns_colors_ignored with the reason. All example
+  datasets' colour lists (15 columns) are used. 208 backend tests, 14 e2e.
+  - Note for the converter (S5): SPEC 4.3 copies `<col>_colors`; apply the same rules there.

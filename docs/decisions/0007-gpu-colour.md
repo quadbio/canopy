@@ -24,8 +24,8 @@ feedback asked for a choice of palettes for categories and more colour maps for 
   nothing is stored. (The first version assigned slots in first-seen order and stored them, which
   made colours depend on history.) "Automatic" still uses a dataset's own `uns` colours when it
   has a full set: those are per dataset, and the Palette help says so.
-- **Palettes** for categories: automatic (the dataset's own `uns` colours when there is one per
-  category, else the 54-colour default, else 256 colours), from the dataset, default (54),
+- **Palettes** for categories: automatic (the dataset's own `uns['<col>_colors']` whenever they
+  are usable, else the 54-colour default, else 256 colours), from the dataset, default (54),
   colour-blind safe (Okabe–Ito, 7), many (256, OKLCH hues by the golden angle). **Colour maps**
   for numbers from d3-scale-chromatic (the matplotlib maps exactly): viridis, magma, plasma,
   inferno, cividis, turbo, greys, blue–red (diverging, range made symmetric around 0).
@@ -38,6 +38,14 @@ feedback asked for a choice of palettes for categories and more colour maps for 
   a WGSL version of the module.
 - `colorBy` is `{kind: 'obs' | 'gene', name}`; saved strings from older builds are read as
   `obs`. Gene colouring is added later in S5.
+
+- **The dataset's own colours come first** (user request, 2026-10-11): a column's
+  `uns['<col>_colors']` is the default palette whenever it can be used, and a palette is made up
+  only when it cannot. Usable means what scanpy and matplotlib accept: hex (`#rgb`, `#rrggbb`,
+  `#rrggbbaa`, alpha dropped) or colour names (`red`, `lightgray`, `tab:blue`, `C0`); a longer
+  list is used for its first colours (as scanpy does); a shorter one, or one with a non-colour,
+  is not used and the server logs `uns_colors_ignored` with the reason. Plain text columns get
+  their colours too (with their labels, in scanpy's alphabetical order).
 
 ## Evidence
 - e2e (strengthened in R4 after review S5a B-M5): a gradient shows both ends of the colour map on

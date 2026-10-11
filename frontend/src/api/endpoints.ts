@@ -23,7 +23,7 @@ export const datasets = {
   obs: (id: string, table: string | null, column: string, signal?: AbortSignal) =>
     getBinary(url(`/api/datasets/${encodeURIComponent(id)}/obs`, { column, table }), fetch, { signal }),
   labels: (id: string, table: string | null, column: string) =>
-    getJson<{ kind: string; categories: string[] | null }>(
+    getJson<{ kind: string; categories: string[] | null; colors?: string[] | null }>(
       url(`/api/datasets/${encodeURIComponent(id)}/obs/labels`, { column, table }),
     ),
   obsm: (id: string, table: string | null, key: string, dims: number[], signal?: AbortSignal) =>
