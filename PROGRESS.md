@@ -211,3 +211,12 @@ Resume rule: read this file, then continue with the first unchecked step.
   order with a canvas budget (3M: 18 ms zoomed out; 4 views 21 ms vs 72). 234 backend, 46 unit,
   16 e2e.
   - Next: user tries the S5 demo; then R3 (multi-panel view contract) and S6.
+- 2026-10-11 S5 demo feedback (docs/demo/feedback-S5.md): 9/10 steps worked, no scientific issue,
+  smooth. Batch F3 DONE (triage docs/demo/S5-feedback-triage.md): palettes extended by OKLCH
+  midpoints instead of repeating (no duplicate colours); colours picked by hand in the legend
+  (per column/category, remembered, reset); generated example_with_layers.h5ad (counts layer + log
+  X, marker genes, 80-category column; `dbx synth demo`, new root "generated" in demo + e2e);
+  Layers row in details. 235 backend, 49 unit, 17 e2e.
+  - Proposed (awaiting user choice): Plot view for two features (scatter/density, violin, stacked
+    bars; server-side summaries), ~4-6 days; recommended after S6 as start of S7.
+  - Next: user's choice on plots; then R3 (multi-panel view contract, allowing non-map views) and S6.

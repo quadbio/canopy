@@ -173,6 +173,19 @@ def synth_anndata(
     typer.echo(str(write_anndata(spec, out)))
 
 
+@synth_app.command("demo")
+def synth_demo(
+    out: Annotated[Path, typer.Argument(help="Output .h5ad")],
+    n_obs: Annotated[int, typer.Option()] = 8_000,
+    config: ConfigOpt = None,
+) -> None:
+    """Write the small example with layers (counts + normalised X, marker genes)."""
+    from dbx.synth import write_demo
+
+    _cli_logging(config)
+    typer.echo(str(write_demo(out, n_obs=n_obs)))
+
+
 @synth_app.command("mock")
 def synth_mock(
     fingerprint: Annotated[Path, typer.Argument(exists=True, help="Fingerprint JSON")],

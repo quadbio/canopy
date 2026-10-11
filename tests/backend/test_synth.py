@@ -8,7 +8,7 @@ import pytest
 
 from dbx.config import Config
 from dbx.inspect import inspect_path
-from dbx.synth import SynthMatrix, structure_signature, write_anndata, write_mock
+from dbx.synth import SynthMatrix, structure_signature, write_anndata, write_demo, write_mock
 from dbx.synth.spec import AnnDataSpec, ColumnSpec, MatrixSpec
 
 
@@ -97,3 +97,17 @@ def test_dense_matrix_larger_than_one_block(
     a = ad.read_zarr(path) if suffix == ".zarr" else ad.read_h5ad(path)
     x = np.asarray(a.X)
     assert x.shape == (230, 10) and np.count_nonzero(x[200:]) > 0  # the last block was written
+
+
+def test_demo_example_matrices_belong_together(tmp_path: Path) -> None:
+    """X is log1p(counts / total × 10 000) of the counts layer; markers mark their type."""
+    path = write_demo(tmp_path / "demo.h5ad", n_obs=600, n_vars=120)
+    a = ad.read_h5ad(path)
+    counts = a.layers["counts"].toarray()
+    total = counts.sum(axis=1, keepdims=True).clip(min=1)
+    np.testing.assert_allclose(a.X.toarray(), np.log1p(counts / total * 1e4), rtol=1e-6)
+    assert np.issubdtype(counts.dtype, np.integer)
+    t = a.obs["cell_type"] == "Monocyte"
+    assert counts[t.to_numpy(), list(a.var_names).index("Monocyte_m1")].mean() > 2
+    assert a.obs["sample"].cat.categories.size > 54
+    assert len(a.uns["cell_type_colors"]) == a.obs["cell_type"].cat.categories.size

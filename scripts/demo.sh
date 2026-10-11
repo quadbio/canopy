@@ -21,7 +21,7 @@ if curl -s -o /dev/null "http://127.0.0.1:$port/api/health"; then
   exit 1
 fi
 
-echo "1/3 Unpacking the example SpatialData archives (first run only)…"
+echo "1/3 Unpacking the example SpatialData archives and writing the generated example (first run only)…"
 python - "$examples" "$extracted" <<'PY'
 import sys, tarfile
 from pathlib import Path
@@ -34,6 +34,13 @@ for archive in sorted(src.glob("*.zarr.tar.gz")):
     with tarfile.open(archive) as tar:
         tar.extractall(dst, filter="data")
 PY
+
+# A small generated example with layers (counts + normalised X) and an 80-category column.
+generated="$repo/.cache/generated"
+mkdir -p "$generated"
+if [ ! -f "$generated/example_with_layers.h5ad" ] || [ "$repo/backend/dbx/synth/demo.py" -nt "$generated/example_with_layers.h5ad" ]; then
+  dbx synth demo "$repo/.cache/generated-part.h5ad" >/dev/null && mv "$repo/.cache/generated-part.h5ad" "$generated/example_with_layers.h5ad"
+fi
 
 large="$repo/.cache/demo-large"
 if [ "${DBX_DEMO_LARGE:-0}" = "1" ]; then
@@ -61,6 +68,10 @@ path = "$examples"
 [[data_roots]]
 name = "extracted"
 path = "$extracted"
+
+[[data_roots]]
+name = "generated"
+path = "$generated"
 
 $( [ "${DBX_DEMO_LARGE:-0}" = "1" ] && printf '[[data_roots]]\nname = "synthetic"\npath = "%s"\n' "$large" )
 

@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import { categoryColouring, displayRange, lookup, numberColouring, robustRange } from './colouring';
 import { gpuValues, MISSING_VALUE } from './gpu';
-import { categoryColours, colormapLut, coloursRepeat, hexToRgb, PALETTES, resolvePalette } from './palettes';
+import {
+  categoryColours,
+  colormapLut,
+  coloursExtended,
+  hexToRgb,
+  midColour,
+  paletteSize,
+  PALETTES,
+  resolvePalette,
+  rgbToHex,
+  slotColours,
+} from './palettes';
 import { assignSlots, hashLabel } from './slots';
 
 describe('colouring (CPU reference of the shader)', () => {
@@ -52,15 +63,36 @@ describe('palettes', () => {
     expect(PALETTES).toContain('colourblind');
   });
 
-  it('colours by slot, and says when colours repeat', () => {
+  it('colours by slot, and says when colours are interpolated', () => {
     expect(categoryColours('dataset', [0, 1], ['#000000', '#ffffff'])).toEqual([
       [0, 0, 0],
       [255, 255, 255],
     ]);
     expect(categoryColours('colourblind', [0, 7], null)[1]).toEqual(categoryColours('colourblind', [0], null)[0]);
-    expect(coloursRepeat('default', 54)).toBe(false);
-    expect(coloursRepeat('default', 60)).toBe(true);
-    expect(coloursRepeat('many', 200)).toBe(false);
+    expect(coloursExtended('default', 54)).toBe(false);
+    expect(coloursExtended('default', 60)).toBe(true);
+    expect(coloursExtended('many', 200)).toBe(false);
+  });
+
+  it('adds in-between colours instead of repeating them (feedback S5)', () => {
+    expect(paletteSize('colourblind', 5)).toBe(7);
+    expect(paletteSize('colourblind', 20)).toBe(28);
+    expect(paletteSize('default', 60)).toBe(108);
+    const list = slotColours('colourblind', 28);
+    expect(new Set(list.map(rgbToHex)).size).toBe(28);
+    // the palette's own colours stay, at every 4th place
+    expect(list.filter((_, i) => i % 4 === 0)).toEqual(slotColours('colourblind', 7));
+    // 20 categories with 7 colours: all different
+    const labels = Array.from({ length: 20 }, (_, i) => `c${i}`);
+    const order = labels.map((_, i) => i);
+    const cols = categoryColours('colourblind', assignSlots(labels, order, paletteSize('colourblind', 20)), null);
+    expect(new Set(cols.map(rgbToHex)).size).toBe(20);
+  });
+
+  it('mixes two vivid colours into a vivid one, not grey', () => {
+    const [r, g, b] = midColour(hexToRgb('#1f77b4'), hexToRgb('#ff7f0e'));
+    expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeGreaterThan(60);
+    expect(midColour(hexToRgb('#ff0000'), hexToRgb('#ff0000'))).toEqual([255, 0, 0]);
   });
 
   it('has no black and no greys in the default and many palettes', () => {

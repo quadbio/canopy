@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ColumnMeta, DatasetMeta } from '../../api/types';
-import { defaultColumn } from '.';
+import { defaultColumn, normaliseParams } from '.';
 
 const col = (name: string, n: number, colors = false): ColumnMeta => ({
   name,
@@ -24,5 +24,16 @@ describe('defaultColumn', () => {
 
   it('skips single-category and huge columns', () => {
     expect(defaultColumn(meta([col('one', 1), col('barcode', 5000)]))).toBeNull();
+  });
+});
+
+describe('hand-picked colours in saved settings', () => {
+  it('keeps well-formed colours only', () => {
+    const p = normaliseParams({
+      embedding: 'X_umap',
+      customColours: { cell_type: { 'T cell': '#FF0000', B: 'red', C: 3 }, bad: 'x', empty: {} },
+    });
+    expect(p?.customColours).toEqual({ cell_type: { 'T cell': '#ff0000' } });
+    expect(normaliseParams({ embedding: 'X_umap' })?.customColours).toEqual({});
   });
 });

@@ -106,8 +106,63 @@ export function resolvePalette(
   return n > TAB54.length ? 'many' : 'default';
 }
 
-export function paletteSize(p: 'default' | 'colourblind' | 'many'): number {
-  return SLOT_PALETTES[p].length;
+type SlotPalette = 'default' | 'colourblind' | 'many';
+
+/** Number of colour slots for `n` categories: the palette's size, doubled until every category
+ * gets its own colour (so the slots stay the same for all columns of a similar size). */
+export function paletteSize(p: SlotPalette, n = 0): number {
+  let size = SLOT_PALETTES[p].length;
+  while (size < n) size *= 2;
+  return size;
+}
+
+function rgbToOklch([r, g, b]: RGB): [number, number, number] {
+  const lin = [r, g, b].map((v) => {
+    const x = v / 255;
+    return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  });
+  const l_ = Math.cbrt(0.4122214708 * lin[0] + 0.5363325363 * lin[1] + 0.0514459929 * lin[2]);
+  const m_ = Math.cbrt(0.2119034982 * lin[0] + 0.6806995451 * lin[1] + 0.1073969566 * lin[2]);
+  const s_ = Math.cbrt(0.0883024619 * lin[0] + 0.2817188376 * lin[1] + 0.6299787005 * lin[2]);
+  const l = 0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_;
+  const a = 1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_;
+  const bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_;
+  return [l, Math.hypot(a, bb), ((Math.atan2(bb, a) * 180) / Math.PI + 360) % 360];
+}
+
+/** The colour halfway between two, in OKLCH along the shorter hue arc (so the mix of two vivid
+ * colours stays vivid instead of turning grey). */
+export function midColour(x: RGB, y: RGB): RGB {
+  const [l1, c1, h1] = rgbToOklch(x);
+  const [l2, c2, h2] = rgbToOklch(y);
+  let h: number;
+  if (c1 < 0.02) h = h2;
+  else if (c2 < 0.02) h = h1;
+  else {
+    const d = ((h2 - h1 + 540) % 360) - 180;
+    h = (h1 + d / 2 + 360) % 360;
+  }
+  return oklchToRgb((l1 + l2) / 2, (c1 + c2) / 2, h);
+}
+
+const extendedCache = new Map<string, RGB[]>();
+
+/** A palette with `size` colours (paletteSize): the palette's own colours, with a colour
+ * interpolated between each neighbouring pair for every doubling. No colour repeats, though
+ * neighbours can look alike. */
+export function slotColours(p: SlotPalette, size: number): RGB[] {
+  const base = SLOT_PALETTES[p];
+  if (size <= base.length) return base;
+  const key = `${p}:${size}`;
+  const hit = extendedCache.get(key);
+  if (hit) return hit;
+  let list = base;
+  while (list.length < size) {
+    const prev = list;
+    list = prev.flatMap((c, i) => [c, midColour(c, prev[(i + 1) % prev.length])]);
+  }
+  extendedCache.set(key, list);
+  return list;
 }
 
 /** Colour of each category: by its slot, or (for "dataset") by its position. */
@@ -117,13 +172,23 @@ export function categoryColours(
   given: string[] | null,
 ): RGB[] {
   if (palette === 'dataset' && given) return given.map(hexToRgb);
-  const list = SLOT_PALETTES[palette === 'dataset' ? 'default' : palette];
+  const p = palette === 'dataset' ? 'default' : palette;
+  const list = slotColours(p, paletteSize(p, slots.length));
   return slots.map((s) => list[s % list.length]);
 }
 
-/** True when the palette has to repeat colours for this many categories. */
-export function coloursRepeat(palette: 'dataset' | 'default' | 'colourblind' | 'many', n: number): boolean {
+/** True when the palette needs interpolated colours for this many categories. */
+export function coloursExtended(palette: 'dataset' | 'default' | 'colourblind' | 'many', n: number): boolean {
   return palette !== 'dataset' && n > SLOT_PALETTES[palette].length;
+}
+
+export function rgbToHex(c: RGB): string {
+  return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** A valid "#rrggbb" colour (lowercase), or null. */
+export function normaliseHex(v: unknown): string | null {
+  return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null;
 }
 
 // --- continuous --------------------------------------------------------------------------------

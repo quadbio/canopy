@@ -29,6 +29,16 @@ feedback asked for a choice of palettes for categories and more colour maps for 
   colour-blind safe (Okabe–Ito, 7), many (256, OKLCH hues by the golden angle). **Colour maps**
   for numbers from d3-scale-chromatic (the matplotlib maps exactly): viridis, magma, plasma,
   inferno, cividis, turbo, greys, blue–red (diverging, range made symmetric around 0).
+- **More categories than colours** (S5 feedback, batch F3): a palette is extended by doubling,
+  inserting the OKLCH midpoint (shorter hue arc, so mixes stay vivid) between neighbours, until
+  every category has its own slot (`paletteSize(p, n)`, `slotColours`). The palette's own colours
+  keep their places; no colour repeats. Slots are then hashed over the extended size, so colours
+  by name agree across columns of a similar size (the same number of doublings), not with columns
+  that fit the plain palette. The colour-blind safe palette is no longer fully safe once extended
+  (the Palette help says so).
+- **Colours picked by hand** (F3): clicking a legend dot opens the browser's colour picker; the
+  colour is stored in the view's settings (`customColours[column][category]`, remembered per
+  dataset) and replaces the palette's colour for that category. Only the lookup table changes.
 - **Depth:** the canvas draws without depth testing by default; only the points layer turns it
   on, when "Higher values on top" is chosen (numbers and genes, default on). So no layer drawn
   later (outlines, transcripts, highlights in S6–S8) is ever hidden by it. *(R4, B-M3)*

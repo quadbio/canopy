@@ -239,8 +239,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   cursor: pointer;
 }
 .legend-item:hover { background: var(--surface-2); }
-.legend-item.off { opacity: 0.35; }
+.legend-row { display: flex; align-items: center; gap: 2px; }
+.legend-item.off, .legend-row.off .swatch { opacity: 0.35; }
 .swatch { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+/* the swatch opens the browser's colour picker */
+.swatch-pick { position: relative; display: flex; padding: 3px; border-radius: var(--radius-sm); cursor: pointer; }
+.swatch-pick:hover { background: var(--surface-2); }
+.swatch-pick:focus-within { box-shadow: var(--focus); }
+.swatch-pick input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.swatch.custom { box-shadow: 0 0 0 1.5px var(--surface), 0 0 0 2.5px var(--text-muted); }
 .legend-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .legend-count { color: var(--text-muted); font-size: var(--text-xs); }
 .colourbar-ramp { height: 10px; border-radius: 2px; }

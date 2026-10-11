@@ -23,13 +23,16 @@ import {
   colormapGradient,
   type ColormapName,
   COLORMAPS,
-  coloursRepeat,
+  coloursExtended,
+  hexToRgb,
   PALETTE_LABELS,
   type PaletteName,
   PALETTES,
+  normaliseHex,
   paletteSize,
   resolvePalette,
   type RGB,
+  rgbToHex,
 } from '../../colour/palettes';
 import { isMissing } from '../../colour/missing';
 import { assignSlots } from '../../colour/slots';
@@ -57,6 +60,8 @@ export interface EmbeddingParams {
   opacity: number;
   hidden: string[]; // hidden category names of the current colorBy column
   palette: PaletteName; // categories
+  // Colours chosen by hand: column name → category name → "#rrggbb" (over the palette).
+  customColours: Record<string, Record<string, string>>;
   colormap: ColormapName; // numbers
   sortByValue: boolean; // numbers: draw higher values on top
   allCells: boolean; // large datasets: always draw every cell (else a subset when zoomed out)
@@ -121,6 +126,22 @@ function normaliseColourBy(v: unknown): ColourBy | null {
   return null;
 }
 
+/** Hand-picked colours from saved settings: only well-formed entries. */
+function normaliseCustom(v: unknown): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const [col, m] of Object.entries(v as Record<string, unknown>)) {
+    if (!m || typeof m !== 'object') continue;
+    const ok: Record<string, string> = {};
+    for (const [label, hex] of Object.entries(m as Record<string, unknown>)) {
+      const h = normaliseHex(hex);
+      if (h) ok[label] = h;
+    }
+    if (Object.keys(ok).length) out[col] = ok;
+  }
+  return out;
+}
+
 /** Saved parameters made valid (older builds, hand edits); null if unusable. */
 export function normaliseParams(raw: unknown): EmbeddingParams | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -141,6 +162,7 @@ export function normaliseParams(raw: unknown): EmbeddingParams | null {
     opacity: num(r.opacity, 0.05, 1, 0.85),
     hidden: Array.isArray(r.hidden) ? r.hidden.filter((h): h is string => typeof h === 'string') : [],
     palette: PALETTES.includes(r.palette as PaletteName) ? (r.palette as PaletteName) : 'auto',
+    customColours: normaliseCustom(r.customColours),
     sortByValue: typeof r.sortByValue === 'boolean' ? r.sortByValue : true,
     allCells: typeof r.allCells === 'boolean' ? r.allCells : false,
     colormap: COLORMAPS.includes(r.colormap as ColormapName) ? (r.colormap as ColormapName) : 'viridis',
@@ -173,7 +195,8 @@ export type EmbeddingLegendData =
       colours: RGB[];
       counts: number[];
       order: number[]; // natural order of the labels
-      repeats: boolean;
+      extended: boolean; // more categories than palette colours: interpolated colours added
+      custom: boolean[]; // colour chosen by hand
     }
   | { kind: 'numeric'; name: string; range: [number, number]; colormap: ColormapName };
 
@@ -300,13 +323,18 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
         : null;
   const palette = labels ? resolvePalette(p.palette, labels.length, given) : null;
   const slots = useMemo(
-    () => (labels && order && palette && palette !== 'dataset' ? assignSlots(labels, order, paletteSize(palette)) : []),
+    () => (labels && order && palette && palette !== 'dataset' ? assignSlots(labels, order, paletteSize(palette, labels.length)) : []),
     [labels, order, palette],
   );
-  const colours = useMemo(
-    () => (labels && palette ? categoryColours(palette, slots, given) : null),
-    [labels, palette, slots, given],
-  );
+  // Colours picked by hand (in the legend) replace the palette's, per column and category.
+  const custom = column ? p.customColours[column.name] : undefined;
+  const customKey = custom ? JSON.stringify(custom) : '';
+  const colours = useMemo(() => {
+    if (!labels || !palette) return null;
+    const base = categoryColours(palette, slots, given);
+    const picked: Record<string, string> = customKey ? JSON.parse(customKey) : {};
+    return base.map((c, i) => (picked[labels[i]] ? hexToRgb(picked[labels[i]]) : c));
+  }, [labels, palette, slots, given, customKey]);
 
   const hiddenKey = p.hidden.join('\u0000');
   const coloured = !!column || geneIndex !== null;
@@ -353,9 +381,10 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       colours,
       counts: countCodes(values.data, labels.length),
       order,
-      repeats: coloursRepeat(palette, labels.length),
+      extended: coloursExtended(palette, labels.length),
+      custom: labels.map((l) => !!custom?.[l]),
     };
-  }, [gene, colourName, column, values, labels, colours, order, palette, prepared, p.colormap]);
+  }, [gene, colourName, column, values, labels, colours, order, palette, prepared, p.colormap, custom]);
 
   const hiddenSet = useMemo(() => new Set(p.hidden), [p.hidden]);
   const tooltip = useCallback((i: number): string | null => {
@@ -657,10 +686,18 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
       <Field
         label="Gene"
         help={
+          <>
           <p>
             Colour the cells by a gene’s expression. Type part of a gene symbol or id. Cells with higher values are drawn
             on top; the colour scale ends at the 99th percentile of the cells that express the gene.
           </p>
+          {m.matrices.length > 1 && (
+            <p>
+              Values come from <code>X</code>; once a gene is chosen, “Values from” switches to one of the dataset’s
+              layers ({m.matrices.filter((x) => x.name !== 'X').map((x) => x.name).join(', ')}).
+            </p>
+          )}
+          </>
         }
       >
         {readable.length === 0 ? (
@@ -730,6 +767,11 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
                 “From the dataset” (the automatic choice when the data brings colours, e.g. from scanpy) uses the
                 colours saved with <em>this</em> dataset; choose Default to compare datasets by name.
               </p>
+              <p>
+                With more categories than the palette has colours, colours in between are added, so no two categories
+                share a colour (some look alike; the colour-blind safe palette is then no longer fully safe).
+              </p>
+              <p>Click a colour in the legend to choose your own; it is remembered for this dataset.</p>
             </>
           }
         >
@@ -837,17 +879,32 @@ function EmbeddingLegend({
   const hidden = new Set(p.hidden);
   const toggle = (c: string) =>
     update(spec.id, { hidden: hidden.has(c) ? p.hidden.filter((h) => h !== c) : [...p.hidden, c] });
+  const picked = p.customColours[data.name] ?? {};
+  const pick = (c: string, hex: string) =>
+    update(spec.id, { customColours: { ...p.customColours, [data.name]: { ...picked, [c]: hex } } });
+  const resetColours = () => {
+    const rest = { ...p.customColours };
+    delete rest[data.name];
+    update(spec.id, { customColours: rest });
+  };
   return (
     <div className={`legend${collapsed ? ' collapsed' : ''}`} data-testid="legend">
       <div className="legend-title">
         {title}
+        {!collapsed && data.custom.some(Boolean) && (
+          <button className="link" onClick={resetColours} data-testid="reset-colours" title="Back to the palette’s colours">
+            reset colours
+          </button>
+        )}
         {!collapsed && (
           <button className="link" onClick={() => update(spec.id, { hidden: hidden.size ? [] : data.labels })}>
             {hidden.size ? 'show all' : 'hide all'}
           </button>
         )}
       </div>
-      {!collapsed && data.repeats && <p className="legend-note">More categories than colours: some colours repeat.</p>}
+      {!collapsed && data.extended && (
+        <p className="legend-note">More categories than colours: in-between colours added.</p>
+      )}
       {!collapsed && (
         <ul className="legend-list">
           {data.order
@@ -855,14 +912,25 @@ function EmbeddingLegend({
             .map((i) => {
               const c = data.labels[i];
               return (
-                <li key={c}>
+                <li key={c} className={`legend-row${hidden.has(c) ? ' off' : ''}`}>
+                  <label className="swatch-pick" title={`Change the colour of ${c}`}>
+                    <input
+                      type="color"
+                      aria-label={`Colour of ${c}`}
+                      value={rgbToHex(data.colours[i])}
+                      onChange={(e) => pick(c, e.target.value)}
+                    />
+                    <span
+                      className={`swatch${data.custom[i] ? ' custom' : ''}`}
+                      style={{ background: `rgb(${data.colours[i].join(',')})` }}
+                    />
+                  </label>
                   <button
                     className={`legend-item${hidden.has(c) ? ' off' : ''}`}
                     onClick={() => toggle(c)}
                     aria-pressed={!hidden.has(c)}
                     title={hidden.has(c) ? 'Show' : 'Hide'}
                   >
-                    <span className="swatch" style={{ background: `rgb(${data.colours[i].join(',')})` }} />
                     <span className="legend-name">{c}</span>
                     <span className="legend-count">{data.counts[i].toLocaleString()}</span>
                   </button>
@@ -889,6 +957,7 @@ registerView<EmbeddingParams>({
       opacity: 0.85,
       hidden: [],
       palette: 'auto',
+      customColours: {},
       colormap: 'viridis',
       sortByValue: true,
       allCells: false,

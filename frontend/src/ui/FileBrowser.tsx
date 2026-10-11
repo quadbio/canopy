@@ -95,12 +95,16 @@ function Details({ id }: { id: string }) {
     warnings?: Notice[];
     anndata?: { layers?: Record<string, unknown> };
     spatialdata?: {
-      tables?: Record<string, { n_obs?: number }>;
+      tables?: Record<string, { n_obs?: number; layers?: Record<string, unknown> }>;
       table_refs?: Record<string, { region?: string[] }>;
     };
   } | null;
   const tables = Object.keys(fp?.spatialdata?.tables ?? {});
   const chosenTable = d.kind === 'spatialdata_zarr' ? (table ?? tables[0] ?? null) : null;
+  // Matrices besides X (gene values can be read from them: "Values from" after picking a gene).
+  const layers = Object.keys(
+    (chosenTable ? fp?.spatialdata?.tables?.[chosenTable]?.layers : fp?.anndata?.layers) ?? {},
+  );
 
   const open = async () => {
     setBusy(true);
@@ -154,6 +158,8 @@ function Details({ id }: { id: string }) {
             </dd>
             <dt>Matrix</dt>
             <dd>{s.x_encoding ?? '–'}</dd>
+            <dt>Layers</dt>
+            <dd data-testid="layers">{layers.length ? layers.join(', ') : 'none'}</dd>
             <dt>Embeddings</dt>
             <dd>{s.embeddings?.length ? s.embeddings.join(', ') : 'none'}</dd>
           </>
@@ -203,7 +209,7 @@ function Details({ id }: { id: string }) {
         </button>
       )}
       {problem && <p className="error small">{problem}</p>}
-      {d.state === 'inspected' && <Conversion key={d.id} datasetId={d.id} layers={Object.keys(fp?.anndata?.layers ?? {})} />}
+      {d.state === 'inspected' && <Conversion key={d.id} datasetId={d.id} layers={layers} />}
       <DatasetNotes notices={fp?.warnings ?? []} />
     </div>
   );

@@ -15,9 +15,9 @@ import {
 
 test('file browser lists the example datasets', async ({ page }) => {
   await freshPage(page);
-  await expect(page.getByTestId('dataset-row')).toHaveCount(4); // data roots start expanded
+  await expect(page.getByTestId('dataset-row')).toHaveCount(5); // data roots start expanded
   await page.getByRole('treeitem', { name: /extracted \d+$/ }).click(); // collapse
-  await expect(page.getByTestId('dataset-row')).toHaveCount(2);
+  await expect(page.getByTestId('dataset-row')).toHaveCount(3);
   await page.getByLabel('Search datasets').fill('region_1');
   await expect(page.getByTestId('dataset-row')).toHaveCount(1);
 });
@@ -232,7 +232,7 @@ async function legendSwatch(page: Page, view: number, label: string): Promise<st
   const lg = page.getByTestId('legend').nth(view);
   const toggle = lg.locator('.legend-toggle');
   if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click(); // small views start folded
-  const item = lg.locator('.legend-item').filter({ has: page.locator('.legend-name', { hasText: new RegExp(`^${label}$`) }) });
+  const item = lg.locator('.legend-row').filter({ has: page.locator('.legend-name', { hasText: new RegExp(`^${label}$`) }) });
   return item.locator('.swatch').evaluate((e) => getComputedStyle(e).backgroundColor);
 }
 
@@ -283,6 +283,51 @@ test('hiding a category and changing the palette send no point data', async ({ p
   expect(mainColours(await drawnColours(page, cell)).join()).not.toBe(coloursBefore.join());
   // 52 k cells: positions are 414 KB, values 207 KB. Only the colour table and uniforms may move.
   expect((await uploaded()) - before).toBeLessThan(10_000);
+});
+
+test('more categories than palette colours: no repeats; colours picked by hand are kept', async ({ page }) => {
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await openDataset(page, 'example_with_layers.h5ad');
+  await expect(page.getByTestId('layers')).toHaveText('counts'); // listed before any gene is picked
+  // 80 samples with the 7 colour-blind safe colours: interpolated, all different
+  await colourBy(page, 0, 'sample', /^Colour-blind/);
+  const legend = page.getByTestId('legend');
+  await expect(legend).toContainText('in-between colours added');
+  const swatches = await legend
+    .locator('.swatch')
+    .evaluateAll((els) => els.map((e) => getComputedStyle(e).backgroundColor));
+  expect(swatches.length).toBe(80);
+  expect(new Set(swatches).size).toBe(80);
+
+  // pick a colour for one cell type: legend and plot follow, and it is remembered
+  await colourBy(page, 0, 'cell_type');
+  const cell = page.getByTestId('view-cell').first();
+  await legend.getByLabel('Colour of Monocyte').fill('#00ff00');
+  await expect.poll(() => legendSwatch(page, 0, 'Monocyte')).toBe('rgb(0, 255, 0)');
+  await page.waitForTimeout(300);
+  expect(await colourShare(page, cell, [0, 255, 0], 20)).toBeGreaterThan(0.002);
+  await page.getByRole('button', { name: 'Close all' }).click();
+  await openDataset(page, 'example_with_layers.h5ad');
+  expect(await legendSwatch(page, 0, 'Monocyte')).toBe('rgb(0, 255, 0)');
+  await page.screenshot({ path: 'test-results/screens/custom-colour.png' });
+  await page.getByTestId('reset-colours').click();
+  await expect.poll(() => legendSwatch(page, 0, 'Monocyte')).not.toBe('rgb(0, 255, 0)');
+  await expect(page.getByTestId('reset-colours')).toHaveCount(0);
+
+  // values from the counts layer: whole numbers, a larger range than the log-normalised X
+  await page.getByTestId('gene-search').fill('Monocyte_m1');
+  await expect(page.getByRole('option', { name: /^Monocyte_m1/ })).toBeVisible();
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(legend).toContainText('Monocyte_m1');
+  const xMax = Number(await legend.locator('.colourbar-labels span').last().textContent());
+  await page.getByTestId('matrix-select').click();
+  await page.getByRole('option', { name: /^counts/ }).click();
+  await expect(legend).toContainText('Monocyte_m1 (counts)');
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  const countsMax = Number(await legend.locator('.colourbar-labels span').last().textContent());
+  expect(countsMax).toBeGreaterThan(xMax);
+  expect(errors).toEqual([]);
 });
 
 test('colour by a gene: search, gradient, tooltip, values from a layer', async ({ page }) => {
