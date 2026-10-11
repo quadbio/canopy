@@ -322,6 +322,54 @@ def obsm(
     return _binary(arr, etag)
 
 
+@router.get("/{id}/subset")
+def subset(
+    request: Request,
+    id: str,
+    n: Annotated[int, Query(ge=1_000, le=10_000_000)] = 1_000_000,
+    table: TableQ = None,
+) -> Response:
+    """`n` cell indices (sorted, int32) for drawing large datasets when zoomed out: a converted
+    store's precomputed subset, else one computed once and cached, stratified by the first
+    categorical column with colours (every category keeps at least one cell; fixed seed)."""
+    row, fp, path = _dataset(request, id)
+    table, info = _table(fp, table)
+    info = _effective(request, fp, info)
+    n = min(n, info.n_obs)
+    etag = _etag([str(row.version), str(table), "subset", str(n)])
+    if (r := _not_modified(request, etag)) is not None:
+        return r
+    _, cache = _state(request)
+
+    def load(src: Source) -> np.ndarray:
+        from dbx.convert.anndata import downsample_indices
+
+        stored = src.stored_subset(n)
+        if stored is not None:
+            return stored.astype(np.int32)
+        by = next(
+            (c.name for c in info.obs.columns if c.kind == "categorical" and c.has_colors), None
+        )
+        groups = src.obs(by).values if by else None
+        return downsample_indices(info.n_obs, n, groups).astype(np.int32)
+
+    idx = _with_source(
+        request,
+        row,
+        fp,
+        path,
+        table,
+        lambda src: cache.array(
+            (str(row.version), str(table), "subset", n),
+            lambda: load(src),
+            lambda a: int(a.nbytes),
+            what="subset",
+            dataset_id=row.id,
+        ),
+    )
+    return _binary(idx, etag)
+
+
 # ---------------------------------------------------------------- genes
 
 

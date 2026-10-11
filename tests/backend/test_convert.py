@@ -242,3 +242,45 @@ def test_a_failing_job_records_its_reason(cfg: Config) -> None:
     assert worker_logs
     events = [json.loads(line) for f in worker_logs for line in f.read_text().splitlines()]
     assert any(e["event"] == "job_failed" and e["code"] == "duplicate_entries" for e in events)
+
+
+def test_subset_endpoint_is_stratified_cached_and_sorted(cfg: Config) -> None:
+    rng = np.random.default_rng(0)
+    n = 5000
+    a = ad.AnnData(X=sparse.csr_matrix((n, 3), dtype=np.float32))
+    a.obs["type"] = pd.Categorical(np.where(np.arange(n) < 4990, "common", "rare"))
+    a.uns["type_colors"] = ["#111111", "#222222"]
+    a.obsm["X_umap"] = rng.random((n, 2), dtype=np.float32)
+    a.write_h5ad(cfg.data_roots[0].path / "s.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "s.h5ad")
+    r = c.get(f"/api/datasets/{id}/subset", params={"n": 1000})
+    idx = np.frombuffer(r.content, dtype="<i4")
+    assert r.headers["x-dbx-dtype"] == "int32" and len(idx) == 1000
+    assert np.all(np.diff(idx) > 0) and idx[-1] < n
+    assert (idx >= 4990).any()  # the 10 rare cells keep at least one
+    again = c.get(
+        f"/api/datasets/{id}/subset",
+        params={"n": 1000},
+        headers={"if-none-match": r.headers["etag"]},
+    )
+    assert again.status_code == 304
+    assert (
+        len(np.frombuffer(c.get(f"/api/datasets/{id}/subset", params={"n": 9000}).content, "<i4"))
+        == n
+    )
+
+
+def test_a_store_subset_is_read_from_the_store(tmp_path: Path) -> None:
+    import zarr
+
+    from dbx.data.reader import LazySource
+
+    g = zarr.open_group(tmp_path / "t.zarr", mode="w")
+    g.require_group("uns").require_group("dbx").require_group("downsample").create_array(
+        "1000", data=np.arange(0, 2000, 2, dtype=np.int32)
+    )
+    src = LazySource(inspect_path, g)  # type: ignore[arg-type]  # info is not used here
+    got = src.stored_subset(1000)
+    assert got is not None and got[1] == 2
+    assert src.stored_subset(5) is None

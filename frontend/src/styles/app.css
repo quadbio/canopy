@@ -367,3 +367,4 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .conversion-row { display: flex; align-items: center; gap: var(--space-2); }
 .progress { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .progress-bar { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.view-caption { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }

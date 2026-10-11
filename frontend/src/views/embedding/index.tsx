@@ -7,7 +7,7 @@
 import { ScatterplotLayer, type ScatterplotLayerProps } from '@deck.gl/layers';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { useEmbedding, useGene, useGenes, useMeta, useObs, useObsLabels } from '../../api/queries';
+import { useEmbedding, useGene, useGenes, useMeta, useObs, useObsLabels, useSubset } from '../../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList, GeneVector } from '../../api/types';
 import {
   categoryColouring,
@@ -34,7 +34,8 @@ import {
 import { isMissing } from '../../colour/missing';
 import { assignSlots } from '../../colour/slots';
 import { event } from '../../telemetry/telemetry';
-import { Field, type OptionGroup, Select, Slider } from '../../ui/controls';
+import { Field, formatCount, Help, type OptionGroup, Select, Slider } from '../../ui/controls';
+import { FULL_LIMIT, SUBSET_SIZE, useSubsetNow } from '../lod';
 import { Conversion } from '../../ui/Conversion';
 import { GeneSearch } from '../../ui/GeneSearch';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
@@ -58,6 +59,7 @@ export interface EmbeddingParams {
   palette: PaletteName; // categories
   colormap: ColormapName; // numbers
   sortByValue: boolean; // numbers: draw higher values on top
+  allCells: boolean; // large datasets: always draw every cell (else a subset when zoomed out)
   legendCollapsed?: boolean;
   [key: string]: unknown;
 }
@@ -140,6 +142,7 @@ export function normaliseParams(raw: unknown): EmbeddingParams | null {
     hidden: Array.isArray(r.hidden) ? r.hidden.filter((h): h is string => typeof h === 'string') : [],
     palette: PALETTES.includes(r.palette as PaletteName) ? (r.palette as PaletteName) : 'auto',
     sortByValue: typeof r.sortByValue === 'boolean' ? r.sortByValue : true,
+    allCells: typeof r.allCells === 'boolean' ? r.allCells : false,
     colormap: COLORMAPS.includes(r.colormap as ColormapName) ? (r.colormap as ColormapName) : 'viridis',
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
   };
@@ -380,13 +383,22 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     (lastGood.current && lastGood.current.n === n ? lastGood.current : null) ??
     (baseData ? { data: baseData, valueColour: BASE_COLOURING, legend: undefined, tooltip: () => null, n: n! } : null);
 
+  // Large datasets: representative cells while many cells are on screen (views/lod.ts). The
+  // subset is fetched ahead, so zooming out switches without waiting.
+  const total = n ?? 0;
+  const large = total > FULL_LIMIT && !p.allCells;
+  const sub = useSubset(spec.datasetId, spec.table, large ? SUBSET_SIZE : null, version);
+  const subsetNow = useSubsetNow(spec.id, total, p.allCells);
+  const idx = subsetNow ? (sub.data?.data as Int32Array | undefined) : undefined;
+  const drawData = useMemo(() => (shown && idx ? subsetOf(shown.data as PointData, idx) : shown?.data), [shown?.data, idx]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const layers = useMemo(
     () =>
       shown
         ? [
             new ScatterplotLayer({
               id: `${spec.id}:points`,
-              data: shown.data,
+              data: drawData,
               getFillColor: [...BASE_RGB, 255],
               getRadius: 1,
               radiusScale: p.pointSize,
@@ -404,7 +416,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
             } as ScatterplotLayerProps & { valueColour: ValueColour }),
           ]
         : [],
-    [spec.id, shown?.data, shown?.valueColour, p.pointSize, p.opacity], // eslint-disable-line react-hooks/exhaustive-deps
+    [spec.id, drawData, shown?.valueColour, p.pointSize, p.opacity], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const status: ViewOutput['status'] = fatal ? 'error' : current || (colourError && shown) ? 'ready' : 'loading';
@@ -443,10 +455,40 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     problem: colourError
       ? { message: `Colouring failed: ${(colourError as Error).message}`, retry }
       : undefined,
-    tooltip: shown?.tooltip ?? (() => null),
+    tooltip: shown ? (idx ? (i: number) => shown.tooltip(idx[i]) : shown.tooltip) : () => null,
+    caption: idx ? `${formatCount(idx.length)} of ${formatCount(total)} cells` : undefined,
     n: n ?? 0,
     legend: shown?.legend,
   };
+}
+
+interface PointData {
+  length: number;
+  attributes: Record<string, { value: Float32Array; size: number }>;
+}
+
+// Gathered copies per (source array, subset): stable objects, so the GPU upload happens once.
+const gathered = new WeakMap<Float32Array, WeakMap<Int32Array, { value: Float32Array; size: number }>>();
+
+function gather(attr: { value: Float32Array; size: number }, idx: Int32Array) {
+  let byIdx = gathered.get(attr.value);
+  if (!byIdx) gathered.set(attr.value, (byIdx = new WeakMap()));
+  let out = byIdx.get(idx);
+  if (!out) {
+    const { value, size } = attr;
+    const v = new Float32Array(idx.length * size);
+    for (let k = 0; k < idx.length; k += 1) for (let d = 0; d < size; d += 1) v[k * size + d] = value[idx[k] * size + d];
+    out = { value: v, size };
+    byIdx.set(idx, out);
+  }
+  return out;
+}
+
+/** The same point data for the cells in `idx` only. */
+function subsetOf(data: PointData, idx: Int32Array): PointData {
+  const attributes: PointData['attributes'] = {};
+  for (const [k, a] of Object.entries(data.attributes)) attributes[k] = gather(a, idx);
+  return { length: idx.length, attributes };
 }
 
 interface Shown {
@@ -690,6 +732,19 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
           format={(v) => `${Math.round(v * 100)}%`}
         />
       </Field>
+      {m.n_obs > FULL_LIMIT && (
+        <label className="check" data-testid="all-cells">
+          <input type="checkbox" checked={p.allCells} onChange={(e) => update(spec.id, { allCells: e.target.checked })} />
+          Show all cells
+          <Help label="About “Show all cells”">
+            <p>
+              With more than {formatCount(FULL_LIMIT)} cells, the view shows {formatCount(SUBSET_SIZE)} representative cells
+              (every cell type included) while you look at the whole dataset, and all cells once you zoom in. This keeps
+              panning and zooming smooth. Tick this to always draw every cell.
+            </p>
+          </Help>
+        </label>
+      )}
       <p className="muted small">
         {m.n_obs.toLocaleString()} cells · {m.n_vars.toLocaleString()} genes ·{' '}
         {m.mode === 'memory' ? 'loaded in memory' : m.mode === 'converted' ? 'converted copy' : 'read on demand'}
@@ -802,6 +857,7 @@ registerView<EmbeddingParams>({
       palette: 'auto',
       colormap: 'viridis',
       sortByValue: true,
+      allCells: false,
     };
   },
   normalise: normaliseParams,

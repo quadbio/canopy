@@ -93,6 +93,10 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   admin); the store folder itself must lie inside its data root.
 - `POST /api/telemetry`: the browser's timing marks and GPU facts, logged as `client_event`.
 
+- `GET /api/datasets/{id}/subset?n=1000000`: sorted int32 indices of representative cells for
+  drawing large datasets zoomed out (a converted store's subset, else computed once, stratified
+  by the first coloured categorical column).
+
 ## Conversion and jobs
 
 - `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>"}` starts (or returns the

@@ -195,3 +195,10 @@ Resume rule: read this file, then continue with the first unchecked step.
     44 s, peak 2.02 GB with a 1 GB budget -> peak exceeds budget ~2x: tune block sizing (TODO).
   - TODO next: fix peak vs budget, ADR 0009 + README/guide docs, jobs config in demo, then subset
     drawing (B-M4); then S5 review round if wanted.
+- 2026-10-11 S5 DONE. Converter memory fixed (radix sort, 12-byte spill records; 300k x 20k CSR
+  in 22 s, peak 1.43 GB at 1 GB budget). ADR 0009 (converter, jobs, memory guard). Level of detail
+  (B-M4): /subset endpoint, views/lod.ts, >1.5 M cells draw 1 M representative cells zoomed out
+  (3 M: 18 ms/frame vs 56-66 before), "Show all cells". Demo guide docs/demo/S5-demo-guide.md +
+  feedback-S5.md. 224 backend, 43 frontend unit, 15 e2e.
+  - Next: user tries the S5 demo; optional review round on S5 part 2 (converter/jobs/LOD); then
+    R3 (multi-panel view contract) and S6 (spatial).

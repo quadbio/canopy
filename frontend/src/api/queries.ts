@@ -125,3 +125,13 @@ export const useJob = (id: number | null, initial?: Job | null) =>
     initialData: initial ?? undefined,
     refetchInterval: (q) => (q.state.data && ACTIVE.has(q.state.data.state) ? 1000 : false),
   });
+
+/** Representative cells of a large dataset (sorted int32 indices). */
+export const useSubset = (id: string, table: string | null, n: number | null, version: string | undefined) =>
+  useQuery({
+    queryKey: ['subset', id, version, table, n],
+    queryFn: ({ signal }) => timeAsync('subset_loaded', () => datasets.subset(id, table, n!, signal), (a) => ({ n: a.data.length })),
+    enabled: n !== null && !!version,
+    staleTime: Infinity,
+    retry: false,
+  });

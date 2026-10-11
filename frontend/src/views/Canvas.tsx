@@ -14,6 +14,7 @@ import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event, reportEnvironment } from '../telemetry/telemetry';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { type Cell, fitBounds, gridCells, type OrthoState, resizeView } from './layout';
+import { useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { type Bounds, type ViewOutput, viewType } from './registry';
 
@@ -28,7 +29,7 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
   useEffect(
     () => publish(spec.id, out),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.problem?.message, out.legend],
+    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.problem?.message, out.legend, out.caption],
   );
   return null;
 });
@@ -89,6 +90,11 @@ const ViewCell = memo(function ViewCell({
         <button className="view-title" onClick={() => select(spec.id)} title={spec.title}>
           {spec.title}
         </button>
+        {output?.caption && (
+          <span className="view-caption" data-testid="view-caption">
+            {output.caption}
+          </span>
+        )}
         {output?.status === 'loading' && <span className="spinner" aria-label="Loading" />}
         <span className="view-header-actions">
           <button className="icon-button" onClick={() => onFit(spec.id)} aria-label="Fit to data" title="Fit to data">
@@ -220,6 +226,18 @@ export function Canvas() {
       if (outputs[v.id]?.status === 'ready' && readyAt.current[v.id] === undefined) readyAt.current[v.id] = performance.now();
     }
   }, [views, outputs]);
+
+  // How much of each view's data is on screen, for level of detail (views/lod.ts).
+  const setVisible = useLod((s) => s.setVisible);
+  const forgetLod = useLod((s) => s.forget);
+  useEffect(() => {
+    views.forEach((v, i) => {
+      const b = outputs[v.id]?.bounds;
+      const st = viewStates[v.id];
+      if (b && st && cells[i]) setVisible(v.id, visibleShare(b, cells[i].width, cells[i].height, st.zoom));
+    });
+  }, [views, outputs, viewStates, cells, setVisible]);
+  useEffect(() => () => views.forEach((v) => forgetLod(v.id)), [views, forgetLod]);
 
   // The current zoom of each view as a data attribute (for tests and debugging; no re-render).
   useEffect(() => {

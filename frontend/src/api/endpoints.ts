@@ -31,6 +31,8 @@ export const datasets = {
     getBinary(url(`/api/datasets/${encodeURIComponent(id)}/obsm`, { key, dims: dims.join(','), table }), fetch, {
       signal,
     }),
+  subset: (id: string, table: string | null, n: number, signal?: AbortSignal) =>
+    getBinary(url(`/api/datasets/${encodeURIComponent(id)}/subset`, { n, table }), fetch, { signal }),
   genes: (id: string, table: string | null) =>
     getJson<GeneList>(url(`/api/datasets/${encodeURIComponent(id)}/genes`, { table })),
   /** Gene `i` (position in the gene list); values sent as uint16 (`q=16`): half the bytes, and

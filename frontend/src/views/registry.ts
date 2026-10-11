@@ -23,6 +23,8 @@ export interface ViewOutput {
   /** A part of the view failed (e.g. its colouring), the rest is still shown; with a retry. */
   problem?: { message: string; retry?: () => void };
   tooltip?: (index: number) => string | null;
+  /** A short note next to the title, e.g. "1 M of 3 M cells". */
+  caption?: string;
   /** Number of items drawn, for telemetry. */
   n?: number;
   /** Whatever the view's Legend needs, computed once by the view's hook. */

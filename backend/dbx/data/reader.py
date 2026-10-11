@@ -233,6 +233,10 @@ class Source:
         """`uns['<name>_colors']` as stored, or None."""
         raise NotImplementedError
 
+    def stored_subset(self, n: int) -> np.ndarray | None:
+        """A converted store's precomputed subset of `n` cells (SPEC §4.5), if there is one."""
+        return None
+
     def gene(self, matrix: str, i: int) -> GeneValues:
         """Gene `i` of a CSC or dense matrix, read directly."""
         raise NotImplementedError
@@ -424,6 +428,16 @@ class LazySource(Source):
 
     def uns_colors(self, name: str) -> Any:
         return self._read(lambda: self._uns_colors(name))
+
+    def stored_subset(self, n: int) -> np.ndarray | None:
+        def read() -> np.ndarray | None:
+            try:
+                node = self.group["uns"]["dbx"]["downsample"][str(n)]
+            except KeyError:
+                return None
+            return np.asarray(node[:])
+
+        return self._read(read)  # type: ignore[no-any-return]
 
     def _uns_colors(self, name: str) -> Any:
         uns = self.group.get("uns")
