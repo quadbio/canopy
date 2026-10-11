@@ -67,6 +67,16 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   above 2^24 lose precision, so ID-like columns should be strings). Floats are not gzipped (they
   barely compress); JSON and codes are. `GET …/obs/labels?column=` gives the labels behind the
   codes, also for plain string columns.
+- `GET /api/datasets/{id}/genes?table=`: gene names (the var index), readable symbols when the
+  index holds Ensembl ids (from a column such as `gene_symbols` or `feature_name`), and the
+  matrices genes can be read from (`X` and layers) with their access: `direct` (CSC or dense),
+  `memory` (CSR loaded whole once, up to `memory.small_file_gb` and half of `memory.cache_gb`)
+  or `needs_conversion`.
+- `GET /api/datasets/{id}/gene?i=&matrix=X&q=0|16`: gene `i` across all cells. Sparse (uint32
+  cell indices, then values) when smaller, else dense (`x-dbx-encoding`, `x-dbx-n`,
+  `x-dbx-nnz`); `q=16` sends uint16 codes, value = `x-dbx-offset` + code × `x-dbx-scale`
+  (65535 = missing). `x-dbx-min`, `x-dbx-max` and `x-dbx-p99` (of the non-zero values) give
+  the colour scale. A CSR matrix above the limit answers 409 `needs_conversion:x_csr`.
 - Every error reply is `{"detail": {"code", "message"}, "request_id"}`; the code is also logged.
 - The server answers only the host names in `server.allowed_hosts` (DNS-rebinding guard; add the
   server's name and address when serving to other machines), and POST requests only as JSON.

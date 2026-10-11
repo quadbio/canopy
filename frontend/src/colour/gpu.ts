@@ -22,6 +22,8 @@ export interface ValueColour {
   range?: [number, number];
   /** RGBA 0–255 for missing values (code < 0, or MISSING_VALUE). */
   missing: [number, number, number, number];
+  /** Numbers: draw higher values in front (as scanpy does), so sparse signals are not hidden. */
+  sortByValue?: boolean;
 }
 
 const LUT_WIDTH = 256;
@@ -34,6 +36,7 @@ type Uniforms = {
   lutSize: number;
   numbers: number;
   enabled: number;
+  sortByValue: number;
   valueColour_lut?: Texture;
 };
 
@@ -46,9 +49,11 @@ layout(std140) uniform valueColourUniforms {
   float lutSize;
   float numbers;
   float enabled;
+  float sortByValue;
 } valueColour;
 
 vec4 valueColour_rgba = vec4(0.0);
+float valueColour_t = 0.0; // position on the colour scale (numbers), for drawing order
 
 vec4 valueColour_lookup(float v) {
   float idx;
@@ -56,6 +61,7 @@ vec4 valueColour_lookup(float v) {
     if (v < -1.0e38) return valueColour.missing;
     float span = valueColour.range.y - valueColour.range.x;
     float t = span > 0.0 ? clamp((v - valueColour.range.x) / span, 0.0, 1.0) : 0.5;
+    valueColour_t = t;
     idx = floor(t * (valueColour.lutSize - 1.0) + 0.5);
   } else {
     if (v < -0.5 || v > valueColour.lutSize - 0.5) return valueColour.missing;
@@ -72,6 +78,8 @@ const inject = {
 `,
   'vs:DECKGL_FILTER_GL_POSITION': /* glsl */ `
   if (valueColour.enabled > 0.5 && valueColour_rgba.a == 0.0) position = vec4(0.0, 0.0, 2.0, 1.0);
+  // Higher values in front: move part of the way towards the near plane (z = -w), never past it.
+  else if (valueColour.sortByValue > 0.5) position.z -= valueColour_t * 0.5 * (position.z + position.w);
 `,
   'vs:DECKGL_FILTER_COLOR': /* glsl */ `
   if (valueColour.enabled > 0.5) color = vec4(valueColour_rgba.rgb, color.a * valueColour_rgba.a);
@@ -90,6 +98,7 @@ const valueColourModule = {
     lutSize: 'f32',
     numbers: 'f32',
     enabled: 'f32',
+    sortByValue: 'f32',
   },
 } as unknown as ShaderModule<Uniforms>;
 
@@ -143,9 +152,10 @@ export class ValueColourExtension extends LayerExtension {
             lutSize: vc.lut.length / 4,
             numbers: vc.mode === 'numbers' ? 1 : 0,
             enabled: 1,
+            sortByValue: vc.sortByValue && vc.mode === 'numbers' ? 1 : 0,
             valueColour_lut: state.valueColourTexture,
           }
-        : { range: [0, 1], missing: [0, 0, 0, 0], lutSize: 1, numbers: 0, enabled: 0, valueColour_lut: dummy(this) };
+        : { range: [0, 1], missing: [0, 0, 0, 0], lutSize: 1, numbers: 0, enabled: 0, sortByValue: 0, valueColour_lut: dummy(this) };
     this.setShaderModuleProps({ valueColour: uniforms });
   }
 

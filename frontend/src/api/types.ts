@@ -79,6 +79,30 @@ export interface ColumnMeta {
   colors: string[] | null;
 }
 
+export interface MatrixInfo {
+  name: string; // "X" or a layer name
+  encoding: string; // csr | csc | dense
+  dtype: string;
+  /** How genes are read: directly, after loading the matrix once, or not before conversion. */
+  access: 'direct' | 'memory' | 'needs_conversion';
+}
+
+export interface GeneList {
+  names: string[]; // the var index (used in requests and saved settings)
+  symbols: string[] | null; // readable symbols when the index holds ids
+  symbol_column: string | null;
+  matrices: MatrixInfo[];
+}
+
+/** One gene across all cells, dense, with statistics from the server. */
+export interface GeneVector {
+  values: Float32Array; // NaN = missing
+  min: number;
+  max: number;
+  p99: number; // 99th percentile of the non-zero values
+  nnz: number;
+}
+
 export interface DatasetMeta {
   id: string;
   version: string;
@@ -90,6 +114,7 @@ export interface DatasetMeta {
   n_vars: number;
   mode: 'lazy' | 'memory';
   obs: ColumnMeta[];
+  matrices: MatrixInfo[];
   embeddings: { key: string; dims: number }[];
   warnings: string[];
 }

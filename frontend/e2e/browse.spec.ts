@@ -250,3 +250,49 @@ test('palettes: colours follow the label name across datasets; changes send no p
   // 7.8 k cells: positions are 62 KB, values 31 KB. Only the colour table and uniforms may move.
   expect((await uploaded()) - before).toBeLessThan(10_000);
 });
+
+test('colour by a gene: search, gradient, tooltip, values from a layer', async ({ page }) => {
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await page.waitForTimeout(300);
+  const covered = await drawnFraction(page, page.getByTestId('view-cell').first(), { x0: 0, x1: 0.6 });
+  const search = page.getByTestId('gene-search');
+  await search.fill('lin28');
+  await expect(page.getByRole('option', { name: /^Lin28a/ })).toBeVisible();
+  await search.press('Enter');
+  const legend = page.getByTestId('legend');
+  await expect(legend).toContainText('Lin28a');
+  await expect(legend.locator('.colourbar')).toBeVisible();
+  await expect(page.getByTestId('colour-select')).toContainText('Lin28a');
+  const cell = page.getByTestId('view-cell').first();
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  await page.waitForTimeout(300);
+  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 })).length).toBeGreaterThan(4); // a gradient
+  // every cell is still drawn (expressing cells are moved in front, not out of view)
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.85 * covered);
+  await page.screenshot({ path: 'test-results/screens/spatial-gene.png' });
+  // a hover shows the gene's value
+  const box = (await cell.boundingBox())!;
+  let tip: string | null = null;
+  for (let gx = 0.25; gx < 0.6 && !tip; gx += 0.05) {
+    for (let gy = 0.3; gy < 0.9 && !tip; gy += 0.05) {
+      await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
+      if (await page.locator('.deck-tooltip').isVisible({ timeout: 150 }).catch(() => false)) {
+        tip = await page.locator('.deck-tooltip').textContent();
+      }
+    }
+  }
+  expect(tip).toMatch(/^Lin28a: [\d.e+-]+$/);
+
+  // a SpatialData table with layers: values from "counts"
+  await openDataset(page, 'region_1', 'table_cells');
+  await page.getByTestId('gene-search').fill('a');
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(page.getByTestId('matrix-select')).toBeVisible();
+  await page.getByTestId('matrix-select').click();
+  await page.getByRole('option', { name: /^counts/ }).click();
+  await expect(page.getByTestId('legend').nth(1)).toContainText('(counts)');
+  await expect(page.getByTestId('view-cell').nth(1)).toHaveAttribute('data-status', 'ready');
+  expect(errors).toEqual([]);
+});

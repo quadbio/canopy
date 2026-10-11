@@ -22,7 +22,9 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from anndata.io import read_elem
+from scipy import sparse
 
+from dbx.data.genes import GeneValues, from_column, from_dense, from_scipy_csc, matrices
 from dbx.inspect.models import AnnDataInfo, MatrixInfo
 
 # Categories beyond this are not sent (and the column cannot be coloured by category).
@@ -184,8 +186,29 @@ class Source:
     def column_meta(self, name: str) -> ColumnMeta:
         raise NotImplementedError
 
+    def var(self) -> pd.DataFrame:
+        """The var table (gene names and annotations)."""
+        raise NotImplementedError
+
+    def gene(self, matrix: str, i: int) -> GeneValues:
+        """Gene `i` of a CSC or dense matrix, read directly."""
+        raise NotImplementedError
+
+    def matrix_csc(self, matrix: str) -> Any:
+        """The whole matrix as a scipy CSC matrix in memory (for CSR matrices)."""
+        raise NotImplementedError
+
     def close(self) -> None:
         pass
+
+
+def _check_gene(info: AnnDataInfo, matrix: str, i: int) -> MatrixInfo:
+    m = matrices(info).get(matrix)
+    if m is None:
+        raise UnknownElementError("matrix")
+    if not 0 <= i < info.n_vars:
+        raise UnknownElementError("gene")
+    return m
 
 
 def _check_dims(info: AnnDataInfo, key: str, dims: list[int]) -> None:
@@ -255,6 +278,32 @@ class LazySource(Source):
             meta.colors = valid_colors(colors, meta.n_categories) if colors is not None else None
         return meta
 
+    def var(self) -> pd.DataFrame:
+        return self._read(lambda: read_elem(self.group["var"]))
+
+    def _matrix_node(self, matrix: str) -> Any:
+        return self.group["X"] if matrix == "X" else self.group["layers"][matrix]
+
+    def gene(self, matrix: str, i: int) -> GeneValues:
+        m = _check_gene(self.info, matrix, i)
+        n = self.info.n_obs
+
+        def read() -> GeneValues:
+            node = self._matrix_node(matrix)
+            if m.encoding == "dense":
+                return from_dense(node[:, i])
+            if m.encoding != "csc":
+                raise NeedsConversionError("x_csr")
+            a, b = (int(x) for x in node["indptr"][i : i + 2])
+            return from_column(node["indices"][a:b], node["data"][a:b], n)
+
+        return self._read(read)  # type: ignore[no-any-return]
+
+    def matrix_csc(self, matrix: str) -> Any:
+        _check_gene(self.info, matrix, 0)
+        mat = self._read(lambda: read_elem(self._matrix_node(matrix)))
+        return _to_csc(mat)
+
     def _uns_colors(self, name: str) -> Any:
         uns = self.group.get("uns")
         key = f"{name}_colors"
@@ -307,3 +356,29 @@ class MemorySource(Source):
                     valid_colors(colors, meta.n_categories) if colors is not None else None
                 )
         return meta
+
+    def var(self) -> pd.DataFrame:
+        return self.adata.var
+
+    def _matrix(self, matrix: str) -> Any:
+        return self.adata.X if matrix == "X" else self.adata.layers[matrix]
+
+    def gene(self, matrix: str, i: int) -> GeneValues:
+        _check_gene(self.info, matrix, i)
+        mat = self._matrix(matrix)
+        if sparse.issparse(mat):
+            if mat.format != "csc":
+                raise NeedsConversionError("x_csr")
+            return from_scipy_csc(mat, i)
+        return from_dense(np.asarray(mat[:, i]))
+
+    def matrix_csc(self, matrix: str) -> Any:
+        _check_gene(self.info, matrix, 0)
+        return _to_csc(self._matrix(matrix))
+
+
+def _to_csc(mat: Any) -> Any:
+    """A loaded matrix (scipy sparse or dense) as scipy CSC."""
+    if sparse.issparse(mat):
+        return mat.tocsc()
+    return sparse.csc_matrix(np.asarray(mat))

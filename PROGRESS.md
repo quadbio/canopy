@@ -158,3 +158,13 @@ Resume rule: read this file, then continue with the first unchecked step.
   3M cells: ready 0.67 s, switch to numbers 0.4 s.
   - Next in S5: F7 gene endpoint (CSC direct, quantised) + gene colouring; then converter/jobs/
     memory guard; subset drawing when zoomed out.
+- 2026-10-11 S5 gene expression DONE (ADR 0008). Backend: dbx.data.genes (access per matrix:
+  direct CSC/dense, memory = CSR loaded once as CSC within small_file_gb and half the cache,
+  needs_conversion above), /genes (names, symbols for Ensembl-like indexes, matrices) and /gene
+  (sparse/dense, uint16 option, min/max/p99 headers). Frontend: gene search (combobox), Values
+  from (X/layers), gene colouring with p99 scale, higher values drawn in front (shader). Fixed:
+  front-shift pushed points past the near plane (e2e coverage check added, verified to fail on
+  the bug). 190 backend tests, 38 frontend unit tests, 11 e2e tests. 3M cells: first gene 0.5 s,
+  then 50–200 ms per gene switch.
+  - Next: cold code review round (S5 part 1, R2, F1/F2) with two subagents; then converter +
+    jobs + memory guard, subset drawing.

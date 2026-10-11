@@ -81,3 +81,32 @@ export const useEmbedding = (
     gcTime: ARRAY_GC_MS,
     retry: false,
   });
+
+export const useGenes = (id: string, table: string | null, version: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: ['genes', id, version, table],
+    queryFn: () => timeAsync('genes_loaded', () => datasets.genes(id, table), (g) => ({ n: g.names.length })),
+    enabled: enabled && !!version,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+export const useGene = (
+  id: string,
+  table: string | null,
+  index: number | null,
+  matrix: string,
+  version: string | undefined,
+) =>
+  useQuery({
+    queryKey: ['gene', id, version, table, matrix, index],
+    queryFn: ({ signal }) =>
+      timeAsync('gene_loaded', () => datasets.gene(id, table, index!, matrix, signal), (g) => ({
+        n: g.values.length,
+        nnz: g.nnz,
+      })),
+    enabled: index !== null && index >= 0 && !!version,
+    staleTime: Infinity,
+    gcTime: ARRAY_GC_MS,
+    retry: false,
+  });

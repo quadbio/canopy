@@ -7,8 +7,8 @@
 import { ScatterplotLayer, type ScatterplotLayerProps } from '@deck.gl/layers';
 import { useEffect, useMemo, useRef } from 'react';
 
-import { useEmbedding, useMeta, useObs, useObsLabels } from '../../api/queries';
-import type { ColumnMeta, DatasetMeta } from '../../api/types';
+import { useEmbedding, useGene, useGenes, useMeta, useObs, useObsLabels } from '../../api/queries';
+import type { ColumnMeta, DatasetMeta, GeneList, GeneVector } from '../../api/types';
 import {
   categoryColouring,
   constantColouring,
@@ -34,13 +34,16 @@ import {
 import { assignSlots } from '../../colour/slots';
 import { event } from '../../telemetry/telemetry';
 import { Field, type OptionGroup, Select, Slider } from '../../ui/controls';
+import { GeneSearch } from '../../ui/GeneSearch';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
 import { type Bounds, registerView, type ViewOutput } from '../registry';
 
-/** What the points are coloured by: an obs column, or (later in S5) a gene. */
+/** What the points are coloured by: an obs column, or a gene (its var index name) read from
+ * `matrix` (X or a layer; X when absent). */
 export interface ColourBy {
   kind: 'obs' | 'gene';
   name: string;
+  matrix?: string;
 }
 
 export interface EmbeddingParams {
@@ -100,7 +103,12 @@ function normaliseColourBy(v: unknown): ColourBy | null {
   if (typeof v === 'string' && v) return { kind: 'obs', name: v };
   if (v && typeof v === 'object') {
     const c = v as Partial<ColourBy>;
-    if ((c.kind === 'obs' || c.kind === 'gene') && typeof c.name === 'string' && c.name) return { kind: c.kind, name: c.name };
+    if (c.kind === 'obs' && typeof c.name === 'string' && c.name) return { kind: 'obs', name: c.name };
+    if (c.kind === 'gene' && typeof c.name === 'string' && c.name) {
+      return typeof c.matrix === 'string' && c.matrix && c.matrix !== 'X'
+        ? { kind: 'gene', name: c.name, matrix: c.matrix }
+        : { kind: 'gene', name: c.name };
+    }
   }
   return null;
 }
@@ -163,6 +171,7 @@ export type EmbeddingLegendData =
 export function effectiveParams(
   p: EmbeddingParams,
   meta: DatasetMeta | undefined,
+  genes?: GeneList,
 ): { p: EmbeddingParams; notice?: string } {
   if (!meta) return { p };
   const notes: string[] = [];
@@ -175,8 +184,20 @@ export function effectiveParams(
     out = { ...out, dims: [0, 1] };
   }
   if (p.colorBy?.kind === 'gene') {
-    notes.push(`colouring by gene “${p.colorBy.name}” is not available yet`);
-    out = { ...out, colorBy: null, hidden: [] };
+    const { name } = p.colorBy;
+    let matrix = meta.matrices.find((m) => m.name === (p.colorBy!.matrix ?? 'X'));
+    if (!matrix) {
+      notes.push(`values “${p.colorBy.matrix}” not found, using X`);
+      matrix = meta.matrices.find((m) => m.name === 'X');
+      out = { ...out, colorBy: { kind: 'gene', name } };
+    }
+    if (!matrix || matrix.access === 'needs_conversion') {
+      notes.push('gene expression in this dataset needs a one-time conversion first');
+      out = { ...out, colorBy: null, hidden: [] };
+    } else if (genes && !genes.names.includes(name)) {
+      notes.push(`gene “${name}” not found`);
+      out = { ...out, colorBy: null, hidden: [] };
+    }
   } else if (p.colorBy && !meta.obs.some((c) => c.name === p.colorBy!.name)) {
     notes.push(`column “${p.colorBy.name}” not found`);
     out = { ...out, colorBy: null, hidden: [] };
@@ -184,18 +205,47 @@ export function effectiveParams(
   return { p: out, notice: notes.length ? `Saved settings changed: ${notes.join('; ')}.` : undefined };
 }
 
+/** A gene's readable name: its symbol when the index holds ids. */
+export function geneLabel(genes: GeneList, i: number): string {
+  return genes.symbols?.[i] || genes.names[i];
+}
+
+/** Colour scale of a gene: from 0 (or the lowest value, if negative) to the 99th percentile of
+ * its non-zero values, so a few extreme cells do not wash out the rest. */
+export function geneRange(g: GeneVector): [number, number] {
+  const lo = Math.min(0, g.min);
+  const hi = g.p99 > lo ? g.p99 : g.max > lo ? g.max : lo + 1;
+  return [lo, hi];
+}
+
 function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   const meta = useMeta(spec.datasetId, spec.table);
   const update = useWorkspace((s) => s.updateParams);
-  const { p, notice } = useMemo(() => effectiveParams(spec.params, meta.data), [spec.params, meta.data]);
   const version = meta.data?.version;
+  const wantsGene = spec.params.colorBy?.kind === 'gene';
+  const genes = useGenes(spec.datasetId, spec.table, version, wantsGene);
+  const { p, notice } = useMemo(
+    () => effectiveParams(spec.params, meta.data, genes.data),
+    [spec.params, meta.data, genes.data],
+  );
   const emb = useEmbedding(spec.datasetId, spec.table, p.embedding, p.dims, version);
   const positions = emb.data?.data as Float32Array | undefined;
   const n = positions ? positions.length / 2 : null;
   const column = (p.colorBy?.kind === 'obs' && meta.data?.obs.find((c) => c.name === p.colorBy!.name)) || null;
   const obs = useObs(spec.datasetId, spec.table, column ? column.name : null, version);
   const labelsQ = useObsLabels(spec.datasetId, spec.table, column?.kind === 'string' ? column.name : null, version);
+  const geneIndexOf = useMemo(() => (genes.data ? new Map(genes.data.names.map((g, i) => [g, i])) : null), [genes.data]);
+  const geneChoice = p.colorBy?.kind === 'gene' ? p.colorBy : null;
+  const geneIndex = geneChoice && geneIndexOf ? (geneIndexOf.get(geneChoice.name) ?? null) : null;
+  const geneQ = useGene(spec.datasetId, spec.table, geneIndex, geneChoice?.matrix ?? 'X', version);
+  const gene = geneQ.data && geneQ.data.values.length === n ? geneQ.data : undefined;
   const values = obs.data && obs.data.data.length === n ? obs.data : undefined;
+  // What the colour legend and tooltips call the colouring: a column, or a gene (its symbol).
+  const colourName = column
+    ? column.name
+    : geneChoice && geneIndex !== null
+      ? geneLabel(genes.data!, geneIndex) + (geneChoice.matrix ? ` (${geneChoice.matrix})` : '')
+      : null;
 
   // Keep the corrected parameters, so the notice is shown only once.
   useEffect(() => {
@@ -204,13 +254,17 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
 
   // Values for the GPU and the range of numbers: once per loaded column.
   const prepared = useMemo(() => {
-    if (!values) return null;
     const t0 = performance.now();
-    const gpu = gpuValues(values.data, values.kind === 'numeric');
-    const range = values.kind === 'numeric' ? robustRange(values.data) : null;
-    event('colour_values_prepared', performance.now() - t0, { n: gpu.length });
-    return { attr: { value: gpu, size: 1 }, range };
-  }, [values]);
+    let out: { attr: { value: Float32Array; size: number }; range: [number, number] | null } | null = null;
+    if (gene) {
+      out = { attr: { value: gpuValues(gene.values, true), size: 1 }, range: geneRange(gene) };
+    } else if (values) {
+      const gpu = gpuValues(values.data, values.kind === 'numeric');
+      out = { attr: { value: gpu, size: 1 }, range: values.kind === 'numeric' ? robustRange(values.data) : null };
+    }
+    if (out) event('colour_values_prepared', performance.now() - t0, { n: out.attr.value.length });
+    return out;
+  }, [values, gene]);
 
   const labels = useMemo<string[] | null>(() => {
     if (!column || !values || values.kind === 'numeric') return null;
@@ -245,19 +299,20 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   );
 
   const hiddenKey = p.hidden.join('\u0000');
+  const coloured = !!column || geneIndex !== null;
   const valueColour = useMemo<ValueColour | null>(() => {
-    if (!column) return constantColouring(BASE_RGB);
+    if (!coloured) return constantColouring(BASE_RGB);
     if (!prepared) return null;
-    if (prepared.range) return numberColouring(p.colormap, prepared.range);
+    if (prepared.range) return { ...numberColouring(p.colormap, prepared.range), sortByValue: true };
     if (!labels || !colours) return null;
     const hidden = new Set(hiddenKey ? hiddenKey.split('\u0000') : []);
     return categoryColouring(colours, labels.map((l) => hidden.has(l)));
-  }, [column, prepared, labels, colours, p.colormap, hiddenKey]);
+  }, [coloured, prepared, labels, colours, p.colormap, hiddenKey]);
 
   const bounds = useMemo(() => (positions ? computeBounds(positions) : null), [positions]);
   // Stable attribute objects: deck.gl uploads an attribute only when its object changes.
   const posAttr = useMemo(() => (positions ? { value: positions, size: 2 } : null), [positions]);
-  const valueAttr = column && prepared ? prepared.attr : null;
+  const valueAttr = coloured && prepared ? prepared.attr : null;
   const data = useMemo(
     () =>
       posAttr && n !== null
@@ -289,6 +344,9 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   );
 
   const legend = useMemo<EmbeddingLegendData | undefined>(() => {
+    if (gene && colourName && prepared?.range) {
+      return { kind: 'numeric', name: colourName, range: displayRange(prepared.range, p.colormap), colormap: p.colormap };
+    }
     if (!column || !values) return undefined;
     if (values.kind === 'numeric') {
       return prepared?.range
@@ -307,10 +365,10 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       order,
       repeats: coloursRepeat(palette, labels.length),
     };
-  }, [column, values, labels, colours, order, palette, prepared, p.colormap]);
+  }, [gene, colourName, column, values, labels, colours, order, palette, prepared, p.colormap]);
 
-  const error = meta.error ?? emb.error ?? obs.error ?? labelsQ.error;
-  const drawable = !!positions && !!valueColour && (!column || !!valueAttr);
+  const error = meta.error ?? emb.error ?? obs.error ?? labelsQ.error ?? genes.error ?? geneQ.error;
+  const drawable = !!positions && !!valueColour && (!coloured || !!valueAttr);
   const status: ViewOutput['status'] = error ? 'error' : drawable ? 'ready' : 'loading';
   const t0 = useRef(performance.now());
   const reported = useRef(false);
@@ -323,6 +381,10 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
 
   const hiddenSet = useMemo(() => new Set(p.hidden), [p.hidden]);
   const tooltip = (i: number): string | null => {
+    if (gene && colourName) {
+      const v = gene.values[i];
+      return `${colourName}: ${Number.isFinite(v) ? Number(v).toPrecision(4) : 'NA'}`;
+    }
     if (!column || !values) return null;
     const v = values.data[i];
     if (values.kind === 'numeric') return `${column.name}: ${Number.isFinite(v) ? Number(v).toPrecision(4) : 'NA'}`;
@@ -347,8 +409,13 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
   const meta = useMeta(spec.datasetId, spec.table);
   const update = useWorkspace((s) => s.updateParams);
   const p = spec.params;
+  const readable = meta.data?.matrices.filter((x) => x.access !== 'needs_conversion') ?? [];
+  const genes = useGenes(spec.datasetId, spec.table, meta.data?.version, readable.length > 0);
   if (!meta.data) return <p className="muted">{meta.error ? String(meta.error.message) : 'Loading…'}</p>;
   const m = meta.data;
+  const geneChoice = p.colorBy?.kind === 'gene' ? p.colorBy : null;
+  const geneIdx = geneChoice && genes.data ? genes.data.names.indexOf(geneChoice.name) : -1;
+
   const emb = m.embeddings.find((e) => e.key === p.embedding);
   const dimOptions = Array.from({ length: emb?.dims ?? 2 }, (_, i) => ({ value: String(i), label: `${i + 1}` }));
   const colourGroups: OptionGroup[] = [
@@ -367,6 +434,14 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
       options: m.obs.filter((c) => c.kind === 'numeric').map((c) => ({ value: `obs:${c.name}`, label: c.name })),
     },
   ].filter((g) => g.options.length);
+  if (geneChoice) {
+    // the chosen gene, so the Colour by list can show it
+    const label = genes.data && geneIdx >= 0 ? geneLabel(genes.data, geneIdx) : geneChoice.name;
+    colourGroups.unshift({ label: 'Gene', options: [{ value: `gene:${geneChoice.name}`, label, hint: 'gene' }] });
+  }
+  const pickGene = (name: string) =>
+    update(spec.id, { colorBy: { kind: 'gene', name, ...(geneChoice?.matrix ? { matrix: geneChoice.matrix } : {}) }, hidden: [] });
+  const matrixName = geneChoice?.matrix ?? 'X';
   const colorColumn = p.colorBy?.kind === 'obs' ? m.obs.find((c) => c.name === p.colorBy!.name) : undefined;
   const hasOwnColours = !!colorColumn?.colors && colorColumn.colors.length === colorColumn.categories?.length;
   const paletteOptions = PALETTES.filter((x) => x !== 'dataset' || hasOwnColours).map((x) => ({
@@ -420,11 +495,53 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
           testId="colour-select"
           value={p.colorBy ? `${p.colorBy.kind}:${p.colorBy.name}` : null}
           allowNone="None"
-          onChange={(v) => update(spec.id, { colorBy: v ? { kind: 'obs', name: v.slice(4) } : null, hidden: [] })}
+          onChange={(v) => {
+            if (v?.startsWith('gene:')) return; // the gene already chosen
+            update(spec.id, { colorBy: v ? { kind: 'obs', name: v.slice(4) } : null, hidden: [] });
+          }}
           groups={colourGroups}
         />
       </Field>
-      {colorColumn?.kind === 'numeric' && (
+      <Field
+        label="Gene"
+        help={
+          <p>
+            Colour the cells by a gene’s expression. Type part of a gene symbol or id. Cells with higher values are drawn
+            on top; the colour scale ends at the 99th percentile of the cells that express the gene.
+          </p>
+        }
+      >
+        {readable.length === 0 ? (
+          <p className="muted small" data-testid="genes-need-conversion">
+            Gene expression in this dataset needs a one-time conversion first (its matrix is stored cell by cell and
+            is too large to load whole).
+          </p>
+        ) : genes.data ? (
+          <GeneSearch genes={genes.data} onPick={pickGene} testId="gene-search" />
+        ) : (
+          <p className="muted small">{genes.error ? String(genes.error.message) : 'Loading genes…'}</p>
+        )}
+      </Field>
+      {geneChoice && m.matrices.length > 1 && (
+        <Field
+          label="Values from"
+          help={
+            <p>
+              The matrix the expression values are read from: <code>X</code>, or one of the dataset’s layers (e.g. raw
+              counts or normalised values). Layers that need conversion first are not listed.
+            </p>
+          }
+        >
+          <Select
+            label="Values from"
+            testId="matrix-select"
+            value={matrixName}
+            onChange={(v) => v && update(spec.id, { colorBy: v === 'X' ? { kind: 'gene', name: geneChoice.name } : { kind: 'gene', name: geneChoice.name, matrix: v } })}
+            groups={[{ label: 'matrices', options: readable.map((x) => ({ value: x.name, label: x.name, hint: x.dtype })) }]}
+          />
+        </Field>
+      )}
+      {(colorColumn?.kind === 'numeric' || geneChoice) && (
         <Field label="Colour map">
           <Select
             label="Colour map"

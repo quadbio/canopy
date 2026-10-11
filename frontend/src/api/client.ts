@@ -1,6 +1,6 @@
 // Typed access to the dbx backend. Views never call fetch directly; they go through here.
 
-import type { BinaryArray, TypedArray } from './types';
+import type { BinaryArray, GeneVector, TypedArray } from './types';
 
 export interface Health {
   status: string;
@@ -83,3 +83,39 @@ export async function getBinary(path: string, fetchImpl: typeof fetch = fetch, i
 }
 
 export const getHealth = (fetchImpl?: typeof fetch) => getJson<Health>('/api/health', fetchImpl);
+
+/** A gene reply (backend dbx/data/genes.py): sparse (uint32 cell indices, then values) or dense;
+ * float32, or uint16 codes with value = offset + code * scale (65535 = missing). */
+export function decodeGene(buf: ArrayBuffer, header: (name: string) => string | null): GeneVector {
+  const num = (k: string) => Number(header(`x-dbx-${k}`) ?? 'NaN');
+  const n = num('n');
+  const nnz = num('nnz');
+  const sparse = header('x-dbx-encoding') === 'sparse';
+  const count = sparse ? nnz : n;
+  const off = sparse ? nnz * 4 : 0;
+  let vals: Float32Array;
+  if (header('x-dbx-dtype') === 'uint16') {
+    const codes = new Uint16Array(buf, off, count);
+    const offset = num('offset');
+    const scale = num('scale');
+    vals = new Float32Array(count);
+    for (let k = 0; k < count; k += 1) vals[k] = codes[k] === 65535 ? NaN : offset + codes[k] * scale;
+  } else {
+    vals = new Float32Array(buf, off, count);
+  }
+  let values = vals;
+  if (sparse) {
+    const idx = new Uint32Array(buf, 0, nnz);
+    values = new Float32Array(n);
+    for (let k = 0; k < nnz; k += 1) values[idx[k]] = vals[k];
+  } else if (vals.byteOffset !== 0 || vals.length !== n) {
+    values = vals.slice();
+  }
+  return { values, min: num('min'), max: num('max'), p99: num('p99'), nnz };
+}
+
+export async function getGene(path: string, init?: RequestInit): Promise<GeneVector> {
+  const res = await fetch(path, { ...init, headers: { accept: 'application/octet-stream', ...init?.headers } });
+  if (!res.ok) return fail(res, path);
+  return decodeGene(await res.arrayBuffer(), (k) => res.headers.get(k));
+}

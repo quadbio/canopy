@@ -339,3 +339,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .crash-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
 
 .panel-footer { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+
+/* gene search */
+.gene-search { position: relative; }
+.gene-search input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.gene-matches {
+  position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 320px; overflow: auto; margin: 0; padding: 4px 0; list-style: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow);
+}
+.gene-match { display: flex; justify-content: space-between; gap: var(--space-2); padding: 4px 10px; cursor: pointer; }
+.gene-match.active { background: var(--accent-soft); }

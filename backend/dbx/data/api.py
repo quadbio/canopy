@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from dbx.catalog import Catalog, PathEscapeError
 from dbx.catalog.db import Row
+from dbx.data import genes
 from dbx.data.cache import DatasetCache, table_info
 from dbx.data.reader import (
     ColumnMeta,
@@ -40,7 +41,7 @@ from dbx.data.reader import (
 )
 from dbx.errors import ApiError
 from dbx.inspect.core import version_stamp
-from dbx.inspect.models import Fingerprint
+from dbx.inspect.models import AnnDataInfo, Fingerprint
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -64,8 +65,23 @@ class DatasetMeta(BaseModel):
     n_vars: int
     mode: str  # lazy | memory
     obs: list[ColumnMeta]
+    matrices: list[Matrix]
     embeddings: list[Embedding]
     warnings: list[str]
+
+
+class Matrix(BaseModel):
+    name: str  # "X" or a layer name
+    encoding: str  # csr | csc | dense
+    dtype: str
+    access: genes.Access  # how genes are read (see dbx.data.genes)
+
+
+class GeneListReply(BaseModel):
+    names: list[str]
+    symbols: list[str] | None
+    symbol_column: str | None
+    matrices: list[Matrix]
 
 
 class Labels(BaseModel):
@@ -209,6 +225,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
         mode=mode,
         obs=columns,
         embeddings=[Embedding(key=k, dims=d) for k, d in embedding_dims(info).items()],
+        matrices=_matrices(request, info),
         warnings=sorted({w.code for w in fp.warnings}),
     )
 
@@ -281,3 +298,133 @@ def obsm(
         ),
     )
     return _binary(arr, etag)
+
+
+# ---------------------------------------------------------------- genes
+
+
+def _memory_limit(request: Request) -> int:
+    """Largest CSR matrix loaded whole for gene queries: the small-file limit, and at most half
+    the cache budget (the CSC copy is cached like any array)."""
+    _, cache = _state(request)
+    return min(cache.small_file, cache.budget // 2)
+
+
+def _matrices(request: Request, info: AnnDataInfo) -> list[Matrix]:
+    limit = _memory_limit(request)
+    return [
+        Matrix(name=k, encoding=m.encoding, dtype=m.dtype, access=genes.access(m, limit))
+        for k, m in genes.matrices(info).items()
+    ]
+
+
+@router.get("/{id}/genes")
+def gene_list(request: Request, id: str, table: TableQ = None) -> GeneListReply:
+    """Gene names (the var index), readable symbols when the index holds ids, and the matrices
+    genes can be read from."""
+    row, fp, path = _dataset(request, id)
+    _, info = _table(fp, table)
+    _, cache = _state(request)
+    found = _with_source(
+        request,
+        row,
+        fp,
+        path,
+        table,
+        lambda src: cache.array(
+            (str(row.version), str(table), "genes"),
+            lambda: genes.gene_list(src.var()),
+            lambda g: 64 * len(g.names),
+            what="genes",
+            dataset_id=row.id,
+        ),
+    )
+    return GeneListReply(
+        names=found.names,
+        symbols=found.symbols,
+        symbol_column=found.symbol_column,
+        matrices=_matrices(request, info),
+    )
+
+
+@router.get("/{id}/gene")
+def gene(
+    request: Request,
+    id: str,
+    i: Annotated[int, Query(ge=0, le=10_000_000)],
+    matrix: Annotated[str, Query(min_length=1, max_length=512)] = "X",
+    q: Annotated[int, Query(description="16: values as uint16 (see x-dbx-scale)")] = 0,
+    table: TableQ = None,
+) -> Response:
+    """One gene's values across all cells (binary, see dbx.data.genes for the encoding)."""
+    if q not in (0, 16):
+        raise ApiError(400, "invalid_q", "q must be 0 or 16.")
+    row, fp, path = _dataset(request, id)
+    etag = _etag([str(row.version), str(table), "gene", matrix, str(i), str(q)])
+    if (r := _not_modified(request, etag)) is not None:
+        return r
+    _, info = _table(fp, table)
+    m = genes.matrices(info).get(matrix)
+    if m is None:
+        raise ApiError(404, "unknown_element", "No such matrix in this dataset.")
+    if i >= info.n_vars:
+        raise ApiError(404, "unknown_element", "No such gene in this dataset.")
+    acc = genes.access(m, _memory_limit(request))
+    if acc == "needs_conversion":
+        raise ApiError(
+            409,
+            f"needs_conversion:x_{m.encoding}",
+            "Gene expression for this dataset needs a one-time conversion.",
+        )
+    _, cache = _state(request)
+    version = str(row.version)
+
+    def read(src: Source) -> genes.GeneValues:
+        if acc == "direct":
+            return src.gene(matrix, i)
+        csc = cache.array(
+            (version, str(table), "csc", matrix),
+            lambda: src.matrix_csc(matrix),
+            lambda c: int(c.data.nbytes + c.indices.nbytes + c.indptr.nbytes),
+            what="matrix_csc",
+            dataset_id=row.id,
+            encoding=m.encoding,
+        )
+        return genes.from_scipy_csc(csc, i)
+
+    values = _with_source(
+        request,
+        row,
+        fp,
+        path,
+        table,
+        lambda src: cache.array(
+            (version, str(table), "gene", matrix, i),
+            lambda: read(src),
+            lambda g: int(g.indices.nbytes + g.values.nbytes),
+            what="gene",
+            dataset_id=row.id,
+            access=acc,
+        ),
+    )
+    enc = genes.encode(values, quantise=q == 16)
+    return Response(
+        content=enc.body,
+        media_type="application/octet-stream",
+        headers={
+            "etag": etag,
+            "cache-control": "private, no-cache",
+            "content-encoding": "identity",
+            **enc.headers,
+        },
+    )
+
+
+def _table(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataInfo]:
+    try:
+        name, info = table_info(fp, table)
+    except NeedsConversionError as e:
+        raise ApiError(409, f"needs_conversion:{e.code}", "This dataset has no table.") from e
+    except UnknownElementError as e:
+        raise ApiError(404, "unknown_element", "No such table in this dataset.") from e
+    return name, info

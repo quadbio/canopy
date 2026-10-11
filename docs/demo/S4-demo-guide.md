@@ -90,7 +90,8 @@ to about 15 frames per second (S5 adds drawing a representative subset when zoom
 
 ## 4. Not built yet (please don't report these as missing)
 
-- Colouring by **gene expression**, the converter and downsampling for very large datasets: **S5**.
+- The converter (gene expression for large cell-major files) and drawing a subset of cells when
+  zoomed out: **S5** (gene colouring itself is in: see the *Gene* box in the right panel).
 - **Spatial view** (tissue images, cell outlines, transcripts) and the **section grid**: **S6**.
 - Editing single colours, gene search, filters: **S7**.
 - Polished visual design: stage 3. This demo has a clean, plain look on purpose. Your opinion on
