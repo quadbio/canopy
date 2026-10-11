@@ -42,7 +42,7 @@ import { CANVAS_BUDGET, drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SI
 import { Conversion } from '../../ui/Conversion';
 import { GeneSearch } from '../../ui/GeneSearch';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
-import { type Bounds, registerView, type ViewOutput } from '../registry';
+import { type Bounds, MAIN_PANEL, type PanelOutput, panelLayerId, registerView, type ViewOutput } from '../registry';
 
 /** What the points are coloured by: an obs column, or a gene (its var index name) read from
  * `matrix` (X or a layer; X when absent). */
@@ -65,6 +65,8 @@ export interface EmbeddingParams {
   colormap: ColormapName; // numbers
   sortByValue: boolean; // numbers: draw higher values on top
   allCells: boolean; // large datasets: always draw every cell (else a subset when zoomed out)
+  splitBy: string | null; // a category column: one panel per category (small multiples)
+  sameScale: boolean; // split: all panels at one scale (else each fills its panel)
   legendCollapsed?: boolean;
   [key: string]: unknown;
 }
@@ -78,6 +80,17 @@ const VALUE_COLOUR = new ValueColourExtension();
 
 // Columns with more categories cannot be told apart by colour (and their legend would be huge).
 const MAX_COLOUR_CATEGORIES = 5_000;
+// At most this many panels when splitting by a column.
+export const MAX_PANELS = 64;
+
+/** Columns a view can be split by: categories (with at most MAX_PANELS) and booleans. */
+export function splittable(c: ColumnMeta): boolean {
+  if (c.kind === 'boolean') return true;
+  return c.kind === 'categorical' && !!c.categories && c.categories.length > 1 && c.categories.length <= MAX_PANELS;
+}
+
+/** Coordinates whose y grows downwards (image pixels, as scanpy and squidpy store `spatial`). */
+export const yDown = (embedding: string) => /spatial/i.test(embedding);
 
 function colourable(c: ColumnMeta): boolean {
   if (c.kind === 'numeric' || c.kind === 'boolean' || c.kind === 'string') return true;
@@ -165,6 +178,8 @@ export function normaliseParams(raw: unknown): EmbeddingParams | null {
     customColours: normaliseCustom(r.customColours),
     sortByValue: typeof r.sortByValue === 'boolean' ? r.sortByValue : true,
     allCells: typeof r.allCells === 'boolean' ? r.allCells : false,
+    splitBy: typeof r.splitBy === 'string' && r.splitBy ? r.splitBy : null,
+    sameScale: typeof r.sameScale === 'boolean' ? r.sameScale : true,
     colormap: COLORMAPS.includes(r.colormap as ColormapName) ? (r.colormap as ColormapName) : 'viridis',
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
   };
@@ -235,6 +250,13 @@ export function effectiveParams(
     notes.push(`column “${p.colorBy.name}” not found`);
     out = { ...out, colorBy: null, hidden: [] };
   }
+  if (p.splitBy) {
+    const c = meta.obs.find((x) => x.name === p.splitBy);
+    if (!c || !splittable(c)) {
+      notes.push(c ? `“${p.splitBy}” has too many categories to split by` : `column “${p.splitBy}” not found`);
+      out = { ...out, splitBy: null };
+    }
+  }
   return { p: out, notice: notes.length ? `Saved settings changed: ${notes.join('; ')}.` : undefined };
 }
 
@@ -267,6 +289,8 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   const column = (p.colorBy?.kind === 'obs' && meta.data?.obs.find((c) => c.name === p.colorBy!.name)) || null;
   const obs = useObs(spec.datasetId, spec.table, column ? column.name : null, version);
   const labelsQ = useObsLabels(spec.datasetId, spec.table, column?.kind === 'string' ? column.name : null, version);
+  const splitCol = (p.splitBy && meta.data?.obs.find((c) => c.name === p.splitBy)) || null;
+  const splitQ = useObs(spec.datasetId, spec.table, splitCol ? splitCol.name : null, version);
   const geneIndexOf = useMemo(() => (genes.data ? new Map(genes.data.names.map((g, i) => [g, i])) : null), [genes.data]);
   const geneChoice = p.colorBy?.kind === 'gene' ? p.colorBy : null;
   const geneIndex = geneChoice && geneIndexOf ? (geneIndexOf.get(geneChoice.name) ?? null) : null;
@@ -403,7 +427,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   // What is drawn: the current colouring when ready; while a new one loads (or if it failed),
   // the last one shown, else the points in the base colour. The plot never goes blank.
   const fatal = meta.error ?? emb.error;
-  const colourError = obs.error ?? labelsQ.error ?? genes.error ?? geneQ.error;
+  const colourError = obs.error ?? labelsQ.error ?? genes.error ?? geneQ.error ?? splitQ.error;
   const ready = !!data && !!valueColour && (!coloured || !!valueAttr);
   const current = useMemo<Shown | null>(
     () => (ready ? { data: data!, valueColour: valueColour!, legend, tooltip, n: n! } : null),
@@ -435,7 +459,20 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     const hidden = new Set(p.hidden);
     return lg.labels.reduce((a, l, i) => a + (hidden.has(l) ? lg.counts[i] : 0), 0) / total;
   }, [shown?.legend, p.hidden, total]);
-  const count = drawOrder ? drawCount(total, share, allowance, 1 - hiddenShare) : total;
+  // Panels: one per category of the split column (its cells in the draw order, so a prefix is
+  // still a fair sample), or one with every cell.
+  const splitValues = splitQ.data && splitQ.data.data.length === total ? splitQ.data : undefined;
+  const splitLabels = useMemo(
+    () => (splitCol ? (splitCol.kind === 'boolean' ? ['false', 'true'] : splitCol.categories) : null),
+    [splitCol],
+  );
+  const groups = useMemo(
+    () => (splitValues && splitLabels && positions ? splitGroups(splitValues.data, splitLabels, drawOrder, positions) : null),
+    [splitValues, splitLabels, drawOrder, positions],
+  );
+  const waitingForSplit = !!splitCol && !groups && !splitQ.error;
+  const notHidden = 1 - hiddenShare;
+  const count = drawOrder ? drawCount(total, share, allowance, notHidden) : total;
   const shownData = shown?.data;
   const drawData = useMemo(
     () => (shownData && drawOrder ? prefixOf(shownData as PointData, drawOrder, count) : shownData),
@@ -444,39 +481,69 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   // Fewer points look lighter: grow them a little (at most 1.5×) to keep the density similar.
   const sizeBoost = count < total ? Math.min(1.5, (total / count) ** 0.25) : 1;
 
-  const layers = useMemo(
-    () =>
-      shown
-        ? [
-            new ScatterplotLayer({
-              id: `${spec.id}:points`,
-              data: drawData,
-              getFillColor: [...BASE_RGB, 255],
-              getRadius: 1,
-              radiusScale: p.pointSize * sizeBoost,
-              radiusUnits: 'pixels',
-              opacity: p.opacity,
-              stroked: false,
-              pickable: true,
-              extensions: [VALUE_COLOUR],
-              valueColour: shown.valueColour,
-              // Only this layer uses depth (for "higher values on top"); every other layer
-              // draws without it (the canvas default), so nothing drawn later is hidden.
-              parameters: shown.valueColour.sortByValue
-                ? { depthCompare: 'less-equal', depthWriteEnabled: true }
-                : { depthCompare: 'always', depthWriteEnabled: false },
-            } as ScatterplotLayerProps & { valueColour: ValueColour }),
-          ]
-        : [],
-    [spec.id, drawData, shown?.valueColour, p.pointSize, p.opacity, sizeBoost], // eslint-disable-line react-hooks/exhaustive-deps
+  const valueColourShown = shown?.valueColour;
+  const pointsLayer = useCallback(
+    (panel: string, data: object, boost: number) =>
+      new ScatterplotLayer({
+        id: panelLayerId(spec.id, panel, 'points'),
+        data,
+        getFillColor: [...BASE_RGB, 255],
+        getRadius: 1,
+        radiusScale: p.pointSize * boost,
+        radiusUnits: 'pixels',
+        opacity: p.opacity,
+        stroked: false,
+        pickable: true,
+        extensions: [VALUE_COLOUR],
+        valueColour: valueColourShown,
+        // Only this layer uses depth (for "higher values on top"); every other layer
+        // draws without it (the canvas default), so nothing drawn later is hidden.
+        parameters: valueColourShown?.sortByValue
+          ? { depthCompare: 'less-equal', depthWriteEnabled: true }
+          : { depthCompare: 'always', depthWriteEnabled: false },
+      } as ScatterplotLayerProps & { valueColour: ValueColour }),
+    [spec.id, p.pointSize, p.opacity, valueColourShown],
   );
+
+  const layers = useMemo(
+    () => (drawData ? [pointsLayer(MAIN_PANEL, drawData, sizeBoost)] : []),
+    [drawData, sizeBoost, pointsLayer],
+  );
+
+  // Split: each panel gets its share of the view's allowance and draws a prefix of its cells.
+  // (a key, so zooming without a change in counts keeps the same layers)
+  const countsKey =
+    groups
+      ?.map((g) =>
+        drawOrder && Number.isFinite(allowance)
+          ? drawCount(g.cells.length, share, (allowance * g.cells.length) / Math.max(total, 1), notHidden)
+          : g.cells.length,
+      )
+      .join(',') ?? null;
+  const panelCounts = useMemo(() => (countsKey === null ? null : countsKey.split(',').map(Number)), [countsKey]);
+  const shownTooltip = shown?.tooltip;
+  const panels = useMemo<PanelOutput[] | undefined>(() => {
+    if (!groups || !panelCounts || !shownData || !shownTooltip) return undefined;
+    return groups.map((g, j) => {
+      const c = panelCounts[j];
+      const boost = c < g.cells.length ? Math.min(1.5, (g.cells.length / c) ** 0.25) : 1;
+      return {
+        id: g.id,
+        title: `${g.label} · ${formatCount(g.cells.length)}`,
+        layers: [pointsLayer(g.id, prefixOf(shownData as PointData, g.cells, c), boost)],
+        bounds: g.bounds,
+        tooltip: (i: number) => shownTooltip(g.cells[i]),
+      };
+    });
+  }, [groups, panelCounts, shownData, shownTooltip, pointsLayer]);
+  const drawnSplit = panelCounts?.reduce((a, b) => a + b, 0) ?? 0;
 
   // Until the order of a large dataset is known nothing is drawn (drawing all of it first would
   // upload and draw every cell once for nothing).
   const waitingForOrder = reorder && !drawOrder && !sub.error;
   const status: ViewOutput['status'] = fatal
     ? 'error'
-    : (current || (colourError && shown)) && !waitingForOrder
+    : (current || (colourError && shown)) && !waitingForOrder && !waitingForSplit
       ? 'ready'
       : 'loading';
   const t0 = useRef(performance.now());
@@ -502,12 +569,17 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   }, [current, p.colorBy?.kind, n]);
 
   const retry = () => {
-    for (const q of [obs, labelsQ, genes, geneQ]) if (q.error) void q.refetch();
+    for (const q of [obs, labelsQ, genes, geneQ, splitQ]) if (q.error) void q.refetch();
   };
 
+  const split = !!panels && !waitingForOrder;
+  const drawnNow = split ? drawnSplit : count;
   return {
-    layers: waitingForOrder ? [] : layers,
+    layers: waitingForOrder || waitingForSplit || split ? [] : layers,
     bounds,
+    panels: split ? panels : undefined,
+    sameScale: p.sameScale,
+    flipY: yDown(p.embedding),
     status,
     error: fatal ? String((fatal as Error).message) : undefined,
     notice,
@@ -515,7 +587,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       ? { message: `Colouring failed: ${(colourError as Error).message}`, retry }
       : undefined,
     tooltip: shown ? (drawOrder ? (i: number) => shown.tooltip(drawOrder[i]) : shown.tooltip) : () => null,
-    caption: drawOrder && count < total ? `${formatCount(count)} of ${formatCount(total)} cells` : undefined,
+    caption: drawOrder && drawnNow < total ? `${formatCount(drawnNow)} of ${formatCount(total)} cells` : undefined,
     n: n ?? 0,
     total,
     legend: shown?.legend,
@@ -550,6 +622,62 @@ function prefixOf(data: PointData, order: Int32Array, count: number): PointData 
   const attributes: PointData['attributes'] = {};
   for (const [k, a] of Object.entries(data.attributes)) attributes[k] = inOrder(a, order);
   return { length: count, attributes };
+}
+
+interface Group {
+  id: string;
+  label: string;
+  cells: Int32Array; // in draw order
+  bounds: Bounds | null;
+}
+
+/** Cells per category of `codes` (in `order` when given), in the labels' natural order; missing
+ * codes form an "NA" group. Empty categories get no panel. */
+export function splitGroups(
+  codes: ArrayLike<number>,
+  labels: string[],
+  order: Int32Array | null,
+  positions: Float32Array,
+): Group[] {
+  const k = labels.length;
+  const counts = new Int32Array(k + 1); // last: missing
+  const n = codes.length;
+  const code = (i: number) => {
+    const v = codes[i];
+    return v >= 0 && v < k ? v : k;
+  };
+  for (let i = 0; i < n; i += 1) counts[code(i)] += 1;
+  const cells = Array.from(counts, (c) => new Int32Array(c));
+  const fill = new Int32Array(k + 1);
+  for (let j = 0; j < n; j += 1) {
+    const i = order ? order[j] : j;
+    const c = code(i);
+    cells[c][fill[c]++] = i;
+  }
+  const byName = labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b]));
+  const out: Group[] = [];
+  for (const c of [...byName, k]) {
+    if (!counts[c]) continue;
+    out.push({ id: c === k ? 'na' : `c${c}`, label: c === k ? 'NA' : labels[c], cells: cells[c], bounds: boundsOf(positions, cells[c]) });
+  }
+  return out;
+}
+
+function boundsOf(pos: Float32Array, cells: Int32Array): Bounds | null {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const i of cells) {
+    const x = pos[2 * i];
+    const y = pos[2 * i + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  return Number.isFinite(x0) ? [x0, y0, x1, y1] : null;
 }
 
 interface Shown {
@@ -784,6 +912,51 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
           />
         </Field>
       )}
+      {m.obs.some(splittable) && (
+        <Field
+          label="Split by"
+          help={
+            <>
+              <p>
+                One panel per category of a column, e.g. per sample, section or condition (columns with up to{' '}
+                {MAX_PANELS} categories). The panels share the colours and the legend, and pan and zoom together at the
+                same scale, so sizes and densities compare.
+              </p>
+              <p>The cells drawn are shared among the panels, as for several views.</p>
+            </>
+          }
+        >
+          <Select
+            label="Split by"
+            testId="split-select"
+            value={p.splitBy}
+            allowNone="None"
+            onChange={(v) => update(spec.id, { splitBy: v })}
+            groups={[
+              {
+                label: 'Columns',
+                options: m.obs.filter(splittable).map((c) => ({
+                  value: c.name,
+                  label: c.name,
+                  hint: c.kind === 'boolean' ? 'yes/no' : `${c.categories!.length}`,
+                })),
+              },
+            ]}
+          />
+        </Field>
+      )}
+      {p.splitBy && (
+        <label className="check" data-testid="same-scale">
+          <input type="checkbox" checked={p.sameScale} onChange={(e) => update(spec.id, { sameScale: e.target.checked })} />
+          Same scale in all panels
+          <Help label="About “Same scale in all panels”">
+            <p>
+              Ticked, every panel uses one scale, so sizes compare (a small section looks small). Unticked, each panel is
+              zoomed to fill its space. Either way, zooming or panning one panel moves the others along.
+            </p>
+          </Help>
+        </label>
+      )}
       <Field label="Point size">
         <Slider
           label="Point size"
@@ -961,6 +1134,8 @@ registerView<EmbeddingParams>({
       colormap: 'viridis',
       sortByValue: true,
       allCells: false,
+      splitBy: null,
+      sameScale: true,
     };
   },
   normalise: normaliseParams,

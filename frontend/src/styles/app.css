@@ -137,6 +137,19 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   border: 1px solid var(--border);
 }
 .view-cell.selected { border-color: var(--accent); }
+/* panels of a split view (not the settings panel): a light frame and the category at the top left */
+.view-panel-frame { position: absolute; margin: -1px; border: 1px solid var(--border); pointer-events: none; }
+.view-panel-title {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .view-header {
   display: flex;
   align-items: center;

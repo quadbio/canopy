@@ -1,6 +1,9 @@
 // View types plug in here. A view type supplies:
 //  - `useView(spec)`: a React hook that loads data and returns deck.gl layers, the data bounds
-//    and a tooltip; it runs inside an invisible per-view component, so hooks are allowed;
+//    and a tooltip; it runs inside an invisible per-view component, so hooks are allowed.
+//    A view may instead return several `panels` (e.g. one per tissue section): they share the
+//    view's data, settings, legend and title, are laid out as a grid inside the view's cell, and
+//    pan and zoom together (`link`);
 //  - `Panel`: its settings in the right-hand panel; `Legend`: an overlay in its canvas cell;
 //  - `create(meta)`: default parameters for a dataset.
 // Adding a view type touches no other view: write one module and call `registerView`.
@@ -13,9 +16,42 @@ import type { ViewSpec } from '../state/workspace';
 
 export type Bounds = [minX: number, minY: number, maxX: number, maxY: number];
 
-export interface ViewOutput {
+/** One viewport of a view. Its layers' ids must start with `panelLayerId(view, panel, …)`'s
+ * prefix, so they are drawn only in this panel. */
+export interface PanelOutput {
+  id: string;
+  title?: string;
   layers: Layer[];
   bounds: Bounds | null;
+  tooltip?: (index: number) => string | null;
+}
+
+/** How the panels of a view follow each other: the same zoom, or the same zoom and the same
+ * offset from each panel's own centre. */
+export type Link = 'none' | 'zoom' | 'pan+zoom';
+
+/** The deck.gl view id of a panel, and the prefix of its layers' ids. */
+export const panelKey = (viewId: string, panelId: string) => `${viewId}/${panelId}`;
+export const panelLayerId = (viewId: string, panelId: string, name: string) => `${panelKey(viewId, panelId)}:${name}`;
+/** The view and panel a layer (or sub-layer) id belongs to. */
+export function ownerOf(layerId: string): { view: string; panel: string } {
+  const key = layerId.split(':')[0];
+  const slash = key.indexOf('/');
+  return slash < 0 ? { view: key, panel: MAIN_PANEL } : { view: key.slice(0, slash), panel: key.slice(slash + 1) };
+}
+export const MAIN_PANEL = 'main';
+
+export interface ViewOutput {
+  /** Layers of a view with one panel (ids prefixed with `panelLayerId(view, MAIN_PANEL, …)`). */
+  layers: Layer[];
+  bounds: Bounds | null;
+  /** Several panels instead of `layers`/`bounds`/`tooltip`. */
+  panels?: PanelOutput[];
+  link?: Link;
+  /** Panels fitted at one shared scale (default), so sizes compare; else each fills its panel. */
+  sameScale?: boolean;
+  /** y grows downwards on screen (images, spatial coordinates). */
+  flipY?: boolean;
   status: 'loading' | 'ready' | 'error';
   error?: string;
   /** A short note shown on the view, e.g. that a saved setting no longer applies. */
@@ -31,6 +67,13 @@ export interface ViewOutput {
   total?: number;
   /** Whatever the view's Legend needs, computed once by the view's hook. */
   legend?: unknown;
+}
+
+/** The panels of a view output: its `panels`, or one panel from `layers`/`bounds`/`tooltip`. */
+export function panelsOf(out: ViewOutput | undefined): PanelOutput[] {
+  if (!out) return [];
+  if (out.panels) return out.panels;
+  return [{ id: MAIN_PANEL, layers: out.layers, bounds: out.bounds, tooltip: out.tooltip }];
 }
 
 export interface ViewType<P = Record<string, unknown>> {

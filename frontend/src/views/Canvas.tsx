@@ -1,10 +1,13 @@
-// The one canvas: a single deck.gl Deck (one WebGL context) with an OrthographicView per open
-// view, laid out as a grid. Each view's data and layers come from its view type's hook, run in
-// an invisible <ViewRunner>; layers are drawn only in their own view (`layerFilter`).
+// The one canvas: a single deck.gl Deck (one WebGL context) with an OrthographicView per panel
+// of each open view; views are laid out as a grid, and a view with several panels (e.g. one per
+// section) as a grid inside its cell. Each view's data and layers come from its view type's
+// hook, run in an invisible <ViewRunner>; layers are drawn only in their own panel
+// (`layerFilter`, by layer id prefix).
 //
-// Each view fits itself to its data, and refits when its cell changes size until the user pans or
-// zooms it; from then on pan and zoom are the user's, kept (scaled with the cell) when other views
-// open or close. "Fit" refits on demand.
+// Each view fits itself to its data, and refits when its cell changes size (or its legend opens
+// or closes) until the user pans or zooms it; from then on pan and zoom are the user's, kept
+// (scaled with the cell) when other views open or close. "Fit" refits on demand. The panels of a
+// view pan and zoom together (`link`); fitted together they share one zoom, so sizes compare.
 
 import { type Layer, OrthographicView, type PickingInfo } from '@deck.gl/core';
 import DeckGL from '@deck.gl/react';
@@ -13,14 +16,71 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event, reportEnvironment } from '../telemetry/telemetry';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
-import { type Cell, fitBounds, gridCells, type OrthoState, resizeView } from './layout';
+import { type Cell, fitBounds, gridCells, type Insets, type OrthoState, resizeView } from './layout';
 import { allowances, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
-import { type Bounds, type ViewOutput, viewType } from './registry';
+import { linkedStates, panelRects } from './panels';
+import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
 
 const TITLE_ROW = 30; // px kept free for the view's title when fitting
+const PANEL_TITLE = 18; // px kept free at the top of each panel for its title
+const LEGEND_SPACE = 250; // px kept free at the right for an open legend
 const COMPACT_WIDTH = 480; // cells narrower than this start with the legend folded
 const ZOOM_LIMITS = { minZoom: -20, maxZoom: 40 };
+
+/** Where a view's panels go and what is kept free when fitting them. */
+interface Layout {
+  cell: Cell;
+  keys: string[]; // panel keys (deck.gl view ids)
+  rects: Cell[];
+  fitInsets: Insets; // per panel
+  link: Link;
+  sameScale: boolean;
+  flipY: boolean;
+  bounds: (Bounds | null)[];
+  titles: (string | undefined)[];
+}
+
+function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layout {
+  const panels = panelsOf(out);
+  const compact = cell.width < COMPACT_WIDTH;
+  const legendOpen = !!out?.legend && !((spec.params.legendCollapsed as boolean | undefined) ?? compact);
+  const right = legendOpen ? LEGEND_SPACE : 0;
+  const many = panels.length > 1;
+  return {
+    cell,
+    keys: panels.map((p) => panelKey(spec.id, p.id)),
+    rects: panelRects(panels.length, cell, { top: TITLE_ROW, right }),
+    fitInsets: many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right },
+    link: out?.link ?? 'pan+zoom',
+    sameScale: out?.sameScale ?? true,
+    flipY: !!out?.flipY,
+    bounds: panels.map((p) => p.bounds),
+    titles: panels.map((p) => p.title),
+  };
+}
+
+/** Fitted view states of all panels of a view; with `sameScale` they share the smallest zoom. */
+function fitLayout(l: Layout): Record<string, OrthoState> {
+  const fits = l.keys.map((_, j) => (l.bounds[j] ? fitBounds(l.bounds[j]!, l.rects[j], 0.06, l.fitInsets, l.flipY) : null));
+  const out: Record<string, OrthoState> = {};
+  const zooms = fits.filter((f): f is OrthoState => !!f).map((f) => f.zoom);
+  const common = l.sameScale && zooms.length > 1 ? Math.min(...zooms) : null;
+  l.keys.forEach((key, j) => {
+    const f = fits[j];
+    if (!f) return;
+    if (common === null) {
+      out[key] = f;
+      return;
+    }
+    // the same centre, at the shared zoom (the inset shift depends on the zoom)
+    const b = l.bounds[j]!;
+    const scale = 2 ** common;
+    const up = (l.fitInsets.top ?? 0) / 2 / scale;
+    out[key] = { target: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2 + (l.flipY ? -up : up), 0], zoom: common };
+  });
+  return out;
+}
 
 const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
   const t = viewType(spec.type)!;
@@ -30,7 +90,22 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
   useEffect(
     () => publish(spec.id, out),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.problem?.message, out.legend, out.caption, out.total],
+    [
+      spec.id,
+      out.layers,
+      out.bounds,
+      out.panels,
+      out.link,
+      out.sameScale,
+      out.flipY,
+      out.status,
+      out.error,
+      out.notice,
+      out.problem?.message,
+      out.legend,
+      out.caption,
+      out.total,
+    ],
   );
   return null;
 });
@@ -63,12 +138,14 @@ const ViewCell = memo(function ViewCell({
   output,
   selected,
   onFit,
+  panels,
 }: {
   spec: ViewSpec;
   cell: Cell;
   output: ViewOutput | undefined;
   selected: boolean;
   onFit: (id: string) => void;
+  panels: { key: string; title?: string; rect: Cell }[];
 }) {
   const select = useWorkspace((s) => s.select);
   const remove = useWorkspace((s) => s.removeView);
@@ -87,6 +164,17 @@ const ViewCell = memo(function ViewCell({
       data-status={output?.status ?? 'loading'}
       data-view-id={spec.id}
     >
+      {panels.length > 1 &&
+        panels.map((p) => (
+          <div
+            key={p.key}
+            className="view-panel-frame"
+            data-testid="panel"
+            style={{ left: p.rect.x - cell.x, top: p.rect.y - cell.y, width: p.rect.width, height: p.rect.height }}
+          >
+            {p.title && <span className="view-panel-title">{p.title}</span>}
+          </div>
+        ))}
       <div className="view-header">
         <button className="view-title" onClick={() => select(spec.id)} title={spec.title}>
           {spec.title}
@@ -140,6 +228,16 @@ const ViewCell = memo(function ViewCell({
   );
 });
 
+const NO_PANELS: { key: string; title?: string; rect: Cell }[] = [];
+const panelCache = new WeakMap<Layout, { key: string; title?: string; rect: Cell }[]>();
+/** Stable per layout, so the memoised cell re-renders only when its panels change. */
+function panelsFor(l: Layout | null) {
+  if (!l || l.keys.length < 2) return NO_PANELS;
+  let out = panelCache.get(l);
+  if (!out) panelCache.set(l, (out = l.keys.map((key, j) => ({ key, title: l.titles[j], rect: l.rects[j] }))));
+  return out;
+}
+
 export function Canvas() {
   const views = useWorkspace((s) => s.views);
   const selected = useWorkspace((s) => s.selected);
@@ -149,77 +247,105 @@ export function Canvas() {
   const [ref, size] = useSize<HTMLDivElement>();
   const cells = useMemo(() => gridCells(views.length, size.width, size.height, 2), [views.length, size]);
   const [viewStates, setViewStates] = useState<Record<string, OrthoState>>({});
-  // What each view was last fitted to, and the cell size its view state belongs to.
+  const layouts = useMemo(
+    () => views.map((v, i) => (cells[i] ? layoutOf(v, cells[i], outputs[v.id]) : null)),
+    [views, cells, outputs],
+  );
+  // Per panel: the bounds it was last fitted to, its fitted view state (linked panels follow
+  // relative to it), and the rectangle and insets its view state belongs to.
   const fitted = useRef<Record<string, Bounds>>({});
-  const cellOf = useRef<Record<string, Cell>>({});
+  const fits = useRef<Record<string, OrthoState>>({});
+  const placed = useRef<Record<string, { rect: Cell; insets: string }>>({});
   const touched = useRef<Set<string>>(new Set()); // views the user has panned or zoomed
   const [dragging, setDragging] = useState(false);
   const drawn = useRef<Set<string>>(new Set());
   const readyAt = useRef<Record<string, number>>({});
 
-  // Forget closed views.
+  // Forget closed views and panels.
   useEffect(() => {
     const open = new Set(views.map((v) => v.id));
-    for (const id of Object.keys(fitted.current)) if (!open.has(id)) delete fitted.current[id];
-    for (const id of Object.keys(cellOf.current)) if (!open.has(id)) delete cellOf.current[id];
+    const keys = new Set(layouts.flatMap((l) => l?.keys ?? []));
+    for (const m of [fitted.current, fits.current, placed.current]) {
+      for (const k of Object.keys(m)) if (!keys.has(k)) delete m[k];
+    }
     for (const id of touched.current) if (!open.has(id)) touched.current.delete(id);
     for (const id of Object.keys(outputs)) if (!open.has(id)) drop(id);
-  }, [views, outputs, drop]);
+  }, [views, outputs, drop, layouts]);
 
-  // Fit when a view's data first arrives or changes; follow cell size changes otherwise.
+  // Fit when a view's data first arrives or changes; follow size changes otherwise.
   useEffect(() => {
     const updates: Record<string, OrthoState> = {};
     views.forEach((v, i) => {
-      const cell = cells[i];
-      const b = outputs[v.id]?.bounds ?? null;
-      if (!cell || cell.width < 10) return;
-      const prevCell = cellOf.current[v.id];
-      const resized = prevCell && (prevCell.width !== cell.width || prevCell.height !== cell.height);
-      if (b && (fitted.current[v.id] !== b || (resized && !touched.current.has(v.id)))) {
-        fitted.current[v.id] = b;
-        updates[v.id] = fitBounds(b, cell, 0.06, TITLE_ROW);
-      } else if (resized && viewStates[v.id]) {
-        updates[v.id] = resizeView(viewStates[v.id], prevCell, cell);
+      const l = layouts[i];
+      if (!l || l.cell.width < 10) return;
+      const insets = `${JSON.stringify(l.fitInsets)}|${l.sameScale}`;
+      let refit = false;
+      const resized: string[] = [];
+      l.keys.forEach((key, j) => {
+        const b = l.bounds[j];
+        const prev = placed.current[key];
+        const moved = prev && (prev.rect.width !== l.rects[j].width || prev.rect.height !== l.rects[j].height || prev.insets !== insets);
+        if (b && (fitted.current[key] !== b || (moved && !touched.current.has(v.id)))) refit = true;
+        else if (moved && viewStates[key]) resized.push(key);
+      });
+      if (refit) {
+        for (const [key, st] of Object.entries(fitLayout(l))) {
+          updates[key] = st;
+          fits.current[key] = st;
+        }
+        l.keys.forEach((key, j) => {
+          if (l.bounds[j]) fitted.current[key] = l.bounds[j]!;
+        });
+      } else {
+        for (const key of resized) {
+          const j = l.keys.indexOf(key);
+          updates[key] = resizeView(viewStates[key], placed.current[key].rect, l.rects[j]);
+          if (fits.current[key]) fits.current[key] = resizeView(fits.current[key], placed.current[key].rect, l.rects[j]);
+        }
       }
-      cellOf.current[v.id] = cell;
+      l.keys.forEach((key, j) => (placed.current[key] = { rect: l.rects[j], insets }));
     });
     if (Object.keys(updates).length) setViewStates((s) => ({ ...s, ...updates }));
-  }, [views, outputs, cells]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [views, layouts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fit = (id: string) => {
-    const i = views.findIndex((v) => v.id === id);
-    const b = outputs[id]?.bounds;
-    if (i >= 0 && b && cells[i]) {
-      touched.current.delete(id);
-      setViewStates((s) => ({ ...s, [id]: fitBounds(b, cells[i], 0.06, TITLE_ROW) }));
-    }
+    const l = layouts[views.findIndex((v) => v.id === id)];
+    if (!l) return;
+    touched.current.delete(id);
+    const states = fitLayout(l);
+    Object.assign(fits.current, states);
+    setViewStates((s) => ({ ...s, ...states }));
   };
 
   const deckViews = useMemo(
     () =>
-      views.map(
-        (v, i) =>
-          new OrthographicView({
-            id: v.id,
-            x: cells[i]?.x ?? 0,
-            y: cells[i]?.y ?? 0,
-            width: cells[i]?.width ?? 1,
-            height: cells[i]?.height ?? 1,
-            flipY: false,
-            controller: { inertia: false, scrollZoom: { smooth: false, speed: 0.02 } },
-          }),
+      layouts.flatMap((l) =>
+        l
+          ? l.keys.map(
+              (key, j) =>
+                new OrthographicView({
+                  id: key,
+                  x: l.rects[j].x,
+                  y: l.rects[j].y,
+                  width: l.rects[j].width,
+                  height: l.rects[j].height,
+                  flipY: l.flipY,
+                  controller: { inertia: false, scrollZoom: { smooth: false, speed: 0.02 } },
+                }),
+            )
+          : [],
       ),
-    [views, cells],
+    [layouts],
   );
 
   // While dragging, nothing is pickable: hover picking reads pixels back from the GPU, which
   // is wasted work during a pan.
   const layers = useMemo(() => {
-    const all = views.flatMap((v) => (outputs[v.id]?.layers ?? []) as Layer[]);
+    const all = views.flatMap((v) => panelsOf(outputs[v.id]).flatMap((p) => p.layers as Layer[]));
     return dragging ? all.map((l) => l.clone({ pickable: false })) : all;
   }, [views, outputs, dragging]);
   const viewState = Object.fromEntries(
-    views.map((v) => [v.id, { ...(viewStates[v.id] ?? { target: [0, 0, 0], zoom: 0 }), ...ZOOM_LIMITS }]),
+    deckViews.map((dv) => [dv.id, { ...(viewStates[dv.id] ?? { target: [0, 0, 0], zoom: 0 }), ...ZOOM_LIMITS }]),
   );
 
   useEffect(() => {
@@ -228,17 +354,24 @@ export function Canvas() {
     }
   }, [views, outputs]);
 
-  // How much of each view's data is on screen, for level of detail (views/lod.ts).
+  // How much of each view's data is on screen, for level of detail (views/lod.ts): the largest
+  // share among its panels.
   const setVisible = useLod((s) => s.setVisible);
   const setAllowance = useLod((s) => s.setAllowance);
   const forgetLod = useLod((s) => s.forget);
   useEffect(() => {
     views.forEach((v, i) => {
-      const b = outputs[v.id]?.bounds;
-      const st = viewStates[v.id];
-      if (b && st && cells[i]) setVisible(v.id, visibleShare(b, cells[i].width, cells[i].height, st.zoom));
+      const l = layouts[i];
+      if (!l) return;
+      let share = 0;
+      l.keys.forEach((key, j) => {
+        const b = l.bounds[j];
+        const st = viewStates[key];
+        if (b && st) share = Math.max(share, visibleShare(b, l.rects[j].width, l.rects[j].height, st.zoom));
+      });
+      if (share > 0) setVisible(v.id, share);
     });
-  }, [views, outputs, viewStates, cells, setVisible]);
+  }, [views, layouts, viewStates, setVisible]);
   // One point budget for the whole canvas, shared by the views in proportion to their cells.
   const totalsKey = views.map((v) => `${v.id}:${outputs[v.id]?.total ?? 0}`).join(',');
   useEffect(() => {
@@ -253,18 +386,20 @@ export function Canvas() {
     openIds.current = now;
   }, [views, forgetLod]);
 
-  // The current zoom of each view as a data attribute (for tests and debugging; no re-render).
+  // The current zoom of each view (its first panel) as a data attribute (for tests and
+  // debugging; no re-render).
   useEffect(() => {
-    for (const [id, st] of Object.entries(viewStates)) {
-      const el = ref.current?.querySelector<HTMLElement>(`[data-view-id="${id}"]`);
-      if (el) el.dataset.zoom = st.zoom.toFixed(3);
-    }
-  }, [viewStates, ref]);
+    layouts.forEach((l, i) => {
+      const st = l && viewStates[l.keys[0]];
+      const el = ref.current?.querySelector<HTMLElement>(`[data-view-id="${views[i]?.id}"]`);
+      if (el && st) el.dataset.zoom = st.zoom.toFixed(3);
+    });
+  }, [viewStates, layouts, views, ref]);
 
   const tooltip = (info: PickingInfo) => {
     if (dragging || !info.layer || info.index < 0) return null;
-    const id = info.layer.id.split(':')[0];
-    const text = outputs[id]?.tooltip?.(info.index);
+    const { view, panel } = ownerOf(info.layer.id);
+    const text = panelsOf(outputs[view]).find((p) => p.id === panel)?.tooltip?.(info.index);
     return text ? { text, className: 'deck-tooltip' } : null;
   };
 
@@ -291,14 +426,20 @@ export function Canvas() {
           viewState={viewState}
           onViewStateChange={({ viewId, viewState: vs, interactionState }) => {
             const { target, zoom } = vs as unknown as OrthoState;
-            if (interactionState && Object.values(interactionState).some(Boolean)) touched.current.add(viewId);
-            setViewStates((s) => ({ ...s, [viewId]: { target, zoom } }));
+            const owner = ownerOf(viewId).view;
+            if (interactionState && Object.values(interactionState).some(Boolean)) touched.current.add(owner);
+            const l = layouts[views.findIndex((v) => v.id === owner)];
+            setViewStates((s) => {
+              if (!l || l.keys.length < 2) return { ...s, [viewId]: { target, zoom } };
+              const mine = Object.fromEntries(l.keys.filter((k) => s[k]).map((k) => [k, s[k]]));
+              return { ...s, ...linkedStates(l.link, viewId, { target, zoom }, mine, fits.current) };
+            });
           }}
           onInteractionStateChange={(s) => setDragging(!!s.isDragging)}
           layers={layers}
           layerFilter={({ layer, viewport }) => layer.id.startsWith(`${viewport.id}:`)}
           getTooltip={tooltip}
-          onClick={(info) => info.viewport && select(info.viewport.id)}
+          onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
           onAfterRender={() => {
             for (const v of views) {
               const t0 = readyAt.current[v.id];
@@ -322,7 +463,14 @@ export function Canvas() {
       {views.map((v, i) =>
         cells[i] ? (
           <ErrorBoundary key={v.id} scope="view" fallback={() => null}>
-            <ViewCell spec={v} cell={cells[i]} output={outputs[v.id]} selected={v.id === selected} onFit={fit} />
+            <ViewCell
+              spec={v}
+              cell={cells[i]}
+              output={outputs[v.id]}
+              selected={v.id === selected}
+              onFit={fit}
+              panels={panelsFor(layouts[i])}
+            />
           </ErrorBoundary>
         ) : null,
       )}

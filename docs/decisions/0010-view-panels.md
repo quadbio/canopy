@@ -1,0 +1,66 @@
+# 0010 Views with panels, linked pan and zoom (R3)
+
+Date: 2026-10-11 · Status: accepted (R3, before S6)
+
+## Context
+Review S3–S4 (B-M4, B-m8, B-m9, B-m14) found that the view model was one view = one viewport.
+That cannot express the section grid of S6 (F11c: one dataset split into up to ~50 sections that
+share data, colours and legend and move together). The model also drew spatial coordinates
+mirrored (fixed `flipY: false`), and fitted data under the legend. The S5 feedback adds chart
+views (two-feature plots, start of S7), so the contract must not assume maps either.
+
+## Decisions
+- **Panels** (`views/registry.ts`):
+  - A view's hook may return `panels: {id, title, layers, bounds, tooltip}[]` instead of
+    `layers`/`bounds`/`tooltip`. `panelsOf(out)` turns a one-panel output into a single `main`
+    panel, so existing views need nothing new.
+  - Each panel is one deck.gl `OrthographicView` with id `<view>/<panel>`; its layers' ids start
+    with `<view>/<panel>:` (`panelLayerId`), which `layerFilter`, tooltips and selection use
+    (`ownerOf`).
+  - All panels of all views stay in the single `Deck` (one WebGL context).
+- **Layout** (`views/panels.ts`):
+  - One panel fills the view's cell, with the title and legend floating over it.
+  - Several panels form a grid below the title row and left of an open legend. Each panel has a
+    light frame and its title (e.g. "embryo1 · 18 k").
+  - There is one legend per view.
+- **Linked pan and zoom:** `link: 'none' | 'zoom' | 'pan+zoom'` (default `pan+zoom`).
+  - A moved panel's change is applied to the others relative to their own fitted state: the same
+    zoom steps and the same distance on screen.
+  - `sameScale` (default on) fits all panels at the smallest zoom, so sizes compare. Off, each
+    panel fills its space, and linking still works.
+- **Per-output view options:** `flipY` (y grows downwards). The embedding view sets it for
+  coordinates named like `spatial`, as scanpy and squidpy plot them.
+- **Legend-aware fitting:** fitting leaves the title row and, when the legend is open, 250 px on
+  the right free (`fitBounds` insets). Opening or closing the legend refits a view the user has
+  not moved yet.
+- **Split by** (embedding):
+  - Any categorical column with 2–64 categories (or a boolean) splits the view into one panel per
+    category, in natural order; missing values form an "NA" panel.
+  - Each panel draws its cells in the representative order of large datasets (ADR 0007/LOD), with
+    its share of the view's point budget.
+  - The panels together upload about one copy of the points (e2e).
+- **Views must still re-render rarely** (B-m9). Pan and zoom states stay in the Canvas (deck.gl
+  needs them as props). The per-view cells and legends are memoised and receive stable panel
+  lists, and panel layers are rebuilt only when what they draw changes.
+  - Measured with 51 panels (spatial.h5ad split by `pos`) in the software-WebGL test browser: the
+    median frame while zooming and panning is 16.7 ms, the same as with one panel.
+  - Moving view state out of React is not needed so far.
+
+## Consequences
+- S6 builds the section grid and the spatial view as panels; images and polygons get the same
+  ids, linking and `flipY`.
+- S7's Plot view can be a view type whose panel holds chart layers (or an overlay component);
+  the canvas needs no change for that.
+- The 9-view limit stays (visible: "At most 9 views…"); panels are limited per view (64).
+
+## Evidence
+- Unit tests:
+  - `panels.test.ts`: layout, relative linking, ids;
+  - `layout.test.ts`: insets, flipped y;
+  - `split.test.ts`: groups, order, NA, spatial axis.
+- e2e "split by a column":
+  - 3 panels with one legend, each drawing;
+  - uploads ≤ 1.2 × one copy;
+  - zooming one panel zooms all;
+  - the own-scale fit;
+  - back to one panel.

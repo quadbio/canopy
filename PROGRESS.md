@@ -221,3 +221,10 @@ Resume rule: read this file, then continue with the first unchecked step.
     bars; server-side summaries), ~4-6 days; recommended after S6 as start of S7.
   - Next: user's choice on plots; then R3 (multi-panel view contract, allowing non-map views) and S6.
 - 2026-10-11 User chose (a): Plot view after S6, as the start of S7. Work paused until the user's usage resets; next: R3 (allow non-map views), then S6.
+- 2026-10-11 R3 DONE (ADR 0010): views may return panels (one deck.gl view each, ids
+  `<view>/<panel>`), grid inside the view's cell left of an open legend, one legend per view, linked
+  pan+zoom relative to each panel's fit, "same scale" option, flipY per output (spatial coords
+  y-down), legend-aware fitting. Embedding "Split by" (categorical <=64 / boolean) as the first
+  user: panels share the point budget and upload ~one copy. 51 panels: median frame 16.7 ms
+  (same as 1 panel). 57 unit, 18 e2e.
+  - Next: S6 spatial (SpatialData path, pyramids, polygons, transcripts, section grid on panels).

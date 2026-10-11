@@ -38,3 +38,16 @@ describe('resizeView', () => {
     expect(v.zoom).toBeCloseTo(1);
   });
 });
+
+describe('fitBounds with insets and flipped y', () => {
+  it('leaves room for an open legend at the right', () => {
+    const v = fitBounds([0, 0, 100, 100], { width: 300, height: 200 }, 0, { right: 100 });
+    expect(v.zoom).toBeCloseTo(1);
+    expect(v.target[0]).toBeCloseTo(75); // view centre 50 px = 25 units right of the data centre
+  });
+
+  it('moves the centre the other way when y grows downwards', () => {
+    const v = fitBounds([0, 0, 100, 100], { width: 200, height: 220 }, 0, 20, true);
+    expect(v.target[1]).toBeCloseTo(45);
+  });
+});

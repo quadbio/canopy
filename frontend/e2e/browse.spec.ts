@@ -493,3 +493,50 @@ test('convert a dataset, keep working elsewhere, come back to the converted copy
   await expect(page.getByTestId('details').getByTestId('convert')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('split by a column: one panel per category, linked zoom, one legend', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.addInitScript(countUploads);
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  const cell = page.getByTestId('view-cell').first();
+  const uploaded = () => page.evaluate(() => (window as unknown as { __uploaded: number }).__uploaded);
+  await expect.poll(uploaded).toBeGreaterThan(0); // the first picture is on the GPU
+  const start = await uploaded();
+  await page.getByTestId('embedding-select').click();
+  await page.getByRole('option', { name: /^spatial/ }).click();
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  await expect.poll(uploaded).toBeGreaterThan(start + 500_000);
+  const before = await uploaded();
+  const oneCopy = before - start; // all points of the dataset, once
+  await page.getByTestId('split-select').click();
+  await page.getByRole('option', { name: /^embryo/ }).click();
+  await expect(cell.getByTestId('panel')).toHaveCount(3);
+  await expect(cell.getByTestId('panel').first()).toContainText('·');
+  await expect(page.getByTestId('legend')).toHaveCount(1);
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  await page.waitForTimeout(300);
+  // each panel draws its own cells; all together about one copy of the points is uploaded
+  for (const k of [0, 1, 2]) expect(await drawnFraction(page, cell.getByTestId('panel').nth(k))).toBeGreaterThan(0.01);
+  await page.screenshot({ path: 'test-results/screens/split-by-embryo.png' });
+  expect((await uploaded()) - before).toBeLessThan(1.2 * oneCopy);
+
+  // zooming one panel zooms all of them
+  const zoom0 = Number(await cell.getAttribute('data-zoom'));
+  const p2 = (await cell.getByTestId('panel').nth(2).boundingBox())!;
+  await page.mouse.move(p2.x + p2.width / 2, p2.y + p2.height / 2);
+  await page.mouse.wheel(0, -400);
+  await expect.poll(async () => Number(await cell.getAttribute('data-zoom'))).toBeGreaterThan(zoom0 + 0.5);
+
+  // each panel filling its space: embryo1 (smaller than embryo3) is zoomed in further
+  await page.getByTestId('view-cell').first().getByRole('button', { name: 'Fit to data' }).click();
+  const shared = Number(await cell.getAttribute('data-zoom'));
+  await page.getByTestId('same-scale').locator('input').uncheck();
+  await expect.poll(async () => Number(await cell.getAttribute('data-zoom'))).toBeGreaterThan(shared + 0.5);
+
+  // back to one panel
+  await page.getByTestId('split-select').click();
+  await page.getByRole('option', { name: /^None/ }).click();
+  await expect(cell.getByTestId('panel')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
