@@ -71,7 +71,7 @@ with `DBX_DEMO_PORT=8766 pixi run -e dev demo` and open `http://127.0.0.1:8766`.
 | 11 | Click **202302171205_region_1…**; under **Table** choose `table_cells`; **Open** | A third view: the UMAP of the segmented cells of this spatial dataset, coloured by its cluster column (e.g. `leiden_1.0`). A spatial dataset can hold several tables, one per kind of object (here cells and tiles); hover the **?** next to *Table* for the explanation. |
 | 12 | Open **region_3** too, so that **four plots** are open; then click each plot's title | The centre shows the four plots in a 2 × 2 grid; legends start folded in small plots (click the legend title to unfold); the right panel shows the settings of the plot whose title you clicked. |
 | 13 | Zoom into one view, then close another with **×** | The grid rearranges; the view you zoomed keeps its place, untouched views refit. **⤢** (next to ×) fits a view to its data again. |
-| 14 | Reload the browser page (Cmd+R) | The same plots come back, with your settings. (A plot you close with × is gone: opening that dataset again starts from the default settings.) |
+| 14 | Reload the browser page (Cmd+R) | The same plots come back, with your settings. Closing a plot with × and opening the same dataset again also brings back its last settings; **Reset to defaults** (bottom of the right panel) starts over. |
 | 15 | Click **Theme** (auto → light → dark) | The whole app switches between light and dark. |
 | 16 | Click **Refresh** (top right) | "Scanning…" briefly, then a new "Indexed" time. |
 

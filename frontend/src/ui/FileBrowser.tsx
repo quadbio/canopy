@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { metaQuery, useDatasetDetail, useFolder, useRoots, useSearch } from '../api/queries';
 import type { DatasetEntry } from '../api/types';
-import { MAX_VIEWS, useWorkspace } from '../state/workspace';
+import { MAX_VIEWS, rememberKey, useWorkspace } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { viewTypes } from '../views/registry';
 import { formatBytes, formatCount, Help } from './controls';
@@ -82,6 +82,7 @@ function describeTable(
 function Details({ id }: { id: string }) {
   const q = useDatasetDetail(id);
   const addView = useWorkspace((s) => s.addView);
+  const recall = useWorkspace((s) => s.recall);
   const queryClient = useQueryClient();
   const [table, setTable] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -105,20 +106,22 @@ function Details({ id }: { id: string }) {
     try {
       const meta = await queryClient.fetchQuery(metaQuery(d.id, chosenTable));
       for (const t of viewTypes()) {
-        const params = t.create(meta);
-        if (params) {
+        const defaults = t.create(meta);
+        if (defaults) {
+          // Continue with the settings this dataset had last time, if any.
+          const saved = recall(rememberKey({ type: t.type, datasetId: d.id, table: chosenTable }));
           const added = addView({
             type: t.type,
             datasetId: d.id,
             table: chosenTable,
             title: chosenTable ? `${d.name} · ${chosenTable}` : d.name,
-            params,
+            params: saved ?? defaults,
           });
           if (added === null) {
             setProblem(`At most ${MAX_VIEWS} views fit in the canvas: close one first.`);
             return;
           }
-          event('view_opened', null, { type: t.type, kind: d.kind ?? '', n_obs: meta.n_obs });
+          event('view_opened', null, { type: t.type, kind: d.kind ?? '', n_obs: meta.n_obs, remembered: saved ? 1 : 0 });
           return;
         }
       }

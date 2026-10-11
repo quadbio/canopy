@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { DatasetMeta } from '../api/types';
 import { effectiveParams, normaliseParams } from '../views/embedding';
 import { registerView, viewType } from '../views/registry';
-import { restoreViews } from './workspace';
+import { defaultPointSize } from '../views/embedding';
+import { MAX_REMEMBERED, rememberKey, restoreRemembered, restoreViews, useWorkspace } from './workspace';
 
 describe('restoreViews', () => {
   it('drops unknown view types and repairs parameters from older builds', () => {
@@ -56,5 +57,45 @@ describe('view registry', () => {
     });
     expect(viewType('test-dummy')?.label).toBe('Dummy');
     expect(restoreViews([{ id: 'z', type: 'test-dummy', datasetId: 'd', params: {} }])).toHaveLength(1);
+  });
+});
+
+describe('remembered settings', () => {
+  const base = { type: 'embedding', datasetId: 'd1', table: null, title: 'd1' };
+
+  it('keeps the last settings of a closed view and recalls them validated', () => {
+    const ws = useWorkspace.getState();
+    ws.reset();
+    const id = ws.addView({ ...base, params: normaliseParams({ embedding: 'X_umap' })! })!;
+    useWorkspace.getState().updateParams(id, { pointSize: 5, hidden: ['T cell'] });
+    useWorkspace.getState().removeView(id);
+    const got = useWorkspace.getState().recall(rememberKey(base));
+    expect(got).toMatchObject({ embedding: 'X_umap', pointSize: 5, hidden: ['T cell'] });
+    expect(useWorkspace.getState().recall(rememberKey({ ...base, table: 'other' }))).toBeNull();
+  });
+
+  it('keeps at most MAX_REMEMBERED datasets, dropping the oldest', () => {
+    const ws = useWorkspace.getState();
+    ws.reset();
+    for (let i = 0; i < MAX_REMEMBERED + 5; i++) {
+      const id = useWorkspace.getState().addView({ ...base, datasetId: `d${i}`, params: { embedding: 'X_umap' } })!;
+      useWorkspace.getState().updateParams(id, { pointSize: 2 });
+      useWorkspace.getState().removeView(id);
+    }
+    const keys = Object.keys(useWorkspace.getState().remembered);
+    expect(keys).toHaveLength(MAX_REMEMBERED);
+    expect(keys).not.toContain(rememberKey({ ...base, datasetId: 'd0' }));
+  });
+
+  it('restores only well-formed entries', () => {
+    expect(restoreRemembered({ a: { params: {}, at: 1 }, b: { params: 1, at: 1 }, c: null })).toEqual({ a: { params: {}, at: 1 } });
+    expect(restoreRemembered('x')).toEqual({});
+  });
+});
+
+describe('default point size', () => {
+  it('shrinks with the number of cells', () => {
+    expect(defaultPointSize(5_000)).toBeGreaterThan(defaultPointSize(100_000));
+    expect(defaultPointSize(100_000)).toBeGreaterThan(defaultPointSize(3_000_000));
   });
 });

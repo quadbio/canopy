@@ -5,8 +5,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 import { catalog } from '../api/endpoints';
-import { useCatalogStatus } from '../api/queries';
-import { useWorkspace } from '../state/workspace';
+import { metaQuery, useCatalogStatus } from '../api/queries';
+import { useWorkspace, type ViewSpec } from '../state/workspace';
+import { event } from '../telemetry/telemetry';
 import { FileBrowser } from '../ui/FileBrowser';
 import { Canvas } from '../views/Canvas';
 import { viewType } from '../views/registry';
@@ -71,11 +72,41 @@ function SettingsPanel() {
           </h3>
           <p className="muted small">{t.label}</p>
           <t.Panel spec={spec} />
+          <ResetView spec={spec} />
         </>
       ) : (
         <p className="muted small pad">Select a view to change its settings.</p>
       )}
     </aside>
+  );
+}
+
+/** Back to the view type's defaults for this dataset (the remembered settings are replaced too). */
+function ResetView({ spec }: { spec: ViewSpec }) {
+  const qc = useQueryClient();
+  const setParams = useWorkspace((s) => s.setParams);
+  const [busy, setBusy] = useState(false);
+  const reset = async () => {
+    const t = viewType(spec.type);
+    if (!t) return;
+    setBusy(true);
+    try {
+      const meta = await qc.fetchQuery(metaQuery(spec.datasetId, spec.table));
+      const params = t.create(meta);
+      if (params) {
+        setParams(spec.id, params as Record<string, unknown>);
+        event('view_reset', null, { type: spec.type });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="panel-footer">
+      <button className="ghost" onClick={() => void reset()} disabled={busy} data-testid="reset-view">
+        Reset to defaults
+      </button>
+    </div>
   );
 }
 

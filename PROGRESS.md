@@ -144,3 +144,8 @@ Resume rule: read this file, then continue with the first unchecked step.
     drawing when zoomed out (frame budget target: 3M cells, zoomed out, < 20 ms).
   - Open question to user: remember last view settings per dataset on re-open?
   - Next: S5, starting with R2.
+- 2026-10-11 Batch F2 (user said yes): remembered view settings per dataset/table/view type
+  (workspace `remembered`, max 200, validated through `normalise` on recall), "Reset to defaults"
+  in the settings panel; default point size 0.8 px above 1 M cells (user: bigger points are
+  slower, as expected from fill cost). Storage falls back to memory when localStorage is missing.
+  23 frontend unit tests, 9 e2e tests. Next: S5, starting with R2.

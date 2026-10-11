@@ -58,8 +58,9 @@ export function defaultColumn(meta: DatasetMeta): string | null {
   return [...cats].sort((a, b) => rank(a) - rank(b))[0]?.name ?? null;
 }
 
-function defaultPointSize(n: number): number {
-  return n < 20_000 ? 3 : n < 200_000 ? 2 : 1.2;
+/** Smaller points for more cells: they stay distinct, and drawing cost grows with point area. */
+export function defaultPointSize(n: number): number {
+  return n < 20_000 ? 3 : n < 200_000 ? 2 : n < 1_000_000 ? 1.2 : 0.8;
 }
 
 /** Saved parameters made valid (older builds, hand edits); null if unusable. */

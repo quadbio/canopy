@@ -175,3 +175,23 @@ test('size and opacity changes send no point data to the GPU', async ({ page }) 
   // 52 k cells: positions alone are 414 KB, colours 207 KB. Only small uniform buffers may move.
   expect((await uploaded()) - before).toBeLessThan(20_000);
 });
+
+test('reopening a dataset continues with its last settings; reset goes back to defaults', async ({ page }) => {
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await page.getByTestId('colour-select').click();
+  await page.getByRole('option', { name: /^total_counts/ }).click();
+  await expect(page.getByTestId('legend')).toContainText('total_counts');
+  await page.getByLabel('Close view').click();
+  await expect(page.getByTestId('view-cell')).toHaveCount(0);
+
+  await openDataset(page, 'spatial.h5ad');
+  await expect(page.getByTestId('legend')).toContainText('total_counts');
+  await page.getByTestId('reset-view').click();
+  await expect(page.getByTestId('legend')).toContainText('celltype');
+
+  // the reset is remembered too
+  await page.getByLabel('Close view').click();
+  await openDataset(page, 'spatial.h5ad');
+  await expect(page.getByTestId('legend')).toContainText('celltype');
+});
