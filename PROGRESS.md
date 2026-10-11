@@ -220,3 +220,4 @@ Resume rule: read this file, then continue with the first unchecked step.
   - Proposed (awaiting user choice): Plot view for two features (scatter/density, violin, stacked
     bars; server-side summaries), ~4-6 days; recommended after S6 as start of S7.
   - Next: user's choice on plots; then R3 (multi-panel view contract, allowing non-map views) and S6.
+- 2026-10-11 User chose (a): Plot view after S6, as the start of S7. Work paused until the user's usage resets; next: R3 (allow non-map views), then S6.
