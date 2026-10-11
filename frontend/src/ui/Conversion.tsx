@@ -1,8 +1,10 @@
 // Converting a dataset: the button, the progress of the job, cancel and retry. Used in the
 // dataset details and wherever a view needs a converted dataset (e.g. gene expression).
+// The state shown always comes from the server (the dataset's `conversion` and its latest job);
+// the app-wide job watcher (JobWatcher) refreshes everything when a job ends.
 
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import { jobs } from '../api/endpoints';
@@ -11,20 +13,23 @@ import type { Job } from '../api/types';
 import { event } from '../telemetry/telemetry';
 import { Help } from './controls';
 
-const STAGES: Record<string, string> = {
-  read: 'Reading cells and genes',
-  obsm: 'Copying embeddings',
-  count: 'Counting values per gene',
-  reorder: 'Reordering by gene',
-  write: 'Writing gene by gene',
-  finish: 'Checking and finishing',
-  waiting_for_memory: 'Waiting for free memory on the server',
-};
+const STAGES: [string, string][] = [
+  ['read', 'Reading cells and genes'],
+  ['obsm', 'Copying embeddings'],
+  ['count', 'Counting values per gene'],
+  ['reorder', 'Reordering by gene'],
+  ['write', 'Writing gene by gene'],
+  ['finish', 'Checking and finishing'],
+];
 
 const ERRORS: Record<string, string> = {
   cancelled: 'Cancelled.',
-  interrupted: 'Interrupted (the server restarted).',
-  memory_limit: 'Stopped: it needed more memory than allowed (jobs.memory_gb).',
+  interrupted: 'Interrupted: the conversion process ended unexpectedly.',
+  no_heartbeat: 'Interrupted: the conversion process stopped responding.',
+  server_stopped: 'Interrupted by a server restart; it will run again.',
+  memory_limit: 'Stopped: it needed more memory than allowed (jobs.memory_gb in the server settings).',
+  not_enough_disk: 'Not enough free disk space on the server for the converted copy.',
+  source_changed: 'The file changed while it was being converted; refresh the index and try again.',
   duplicate_entries: 'The matrix stores some cells twice for the same gene; it cannot be converted.',
   legacy_layout: 'Files written by anndata before 0.8 cannot be converted yet.',
   store_invalid: 'The converted copy failed its checks; please report this (the server log has details).',
@@ -38,39 +43,66 @@ export function describeError(code: string | null): string {
 }
 
 const ACTIVE = new Set(['queued', 'running']);
+const gb = (b: unknown) => (typeof b === 'number' ? `${(b / 2 ** 30).toFixed(1)} GB` : '?');
+
+function elapsed(from: number | null): string {
+  if (!from) return '';
+  const s = Math.max(0, Math.round(Date.now() / 1000 - from));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+}
+
+function Progress({ job, onCancel }: { job: Job; onCancel: () => void }) {
+  const pct = Math.round(job.progress * 100);
+  const step = STAGES.findIndex(([k]) => k === job.stage);
+  let line: string;
+  if (job.stage === 'waiting_for_memory') {
+    line = `Waiting for free memory on the server (needs ${gb(job.info?.need_bytes)}, ${gb(job.info?.available_bytes)} free)`;
+  } else if (job.state === 'queued') {
+    line = 'Queued…';
+  } else if (step >= 0) {
+    line = `Step ${step + 1} of ${STAGES.length}: ${STAGES[step][1]} · ${pct}% · ${elapsed(job.started)}`;
+  } else {
+    line = `Starting… · ${elapsed(job.started)}`;
+  }
+  return (
+    <div className="conversion" data-testid="conversion">
+      <div className="small" role="status">
+        {line}
+      </div>
+      <div className="progress" role="progressbar" aria-label="Conversion progress" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className="progress-bar" style={{ width: `${pct}%` }} />
+      </div>
+      <button className="link" onClick={onCancel}>
+        Cancel
+      </button>
+    </div>
+  );
+}
 
 export function Conversion({ datasetId, layers = [], compact = false }: { datasetId: string; layers?: string[]; compact?: boolean }) {
   const detail = useDatasetDetail(datasetId);
   const qc = useQueryClient();
   const known = detail.data?.conversion?.job ?? null;
-  const [jobId, setJobId] = useState<number | null>(null);
-  const job = useJob(jobId ?? known?.id ?? null, jobId === null ? known : null);
+  const job = useJob(known?.id ?? null, known);
   const [xSource, setXSource] = useState('X');
   const [problem, setProblem] = useState<string | null>(null);
+  const [, tick] = useState(0);
   const j: Job | null = job.data ?? null;
   const active = !!j && ACTIVE.has(j.state);
-  const converted = !!detail.data?.conversion?.converted || j?.state === 'done';
-
-  // When the job finishes, everything read from this dataset is fetched again (now from the
-  // converted copy: genes load directly).
-  const wasActive = useRef(false);
+  const conv = detail.data?.conversion;
   useEffect(() => {
-    if (active) wasActive.current = true;
-    else if (wasActive.current && j) {
-      wasActive.current = false;
-      event('conversion_finished', null, { state: j.state });
-      for (const key of ['dataset', 'meta', 'genes', 'gene']) {
-        void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === key && q.queryKey[1] === datasetId });
-      }
-    }
-  }, [active, j, qc, datasetId]);
+    if (!active) return;
+    const t = setInterval(() => tick((x) => x + 1), 1000); // elapsed time
+    return () => clearInterval(t);
+  }, [active]);
 
   const start = async () => {
     setProblem(null);
     try {
-      const started = await jobs.convert(datasetId, xSource);
-      setJobId(started.id);
+      const started = await jobs.convert(datasetId, xSource, !!conv?.converted);
       qc.setQueryData(['job', started.id], started);
+      await qc.invalidateQueries({ queryKey: ['dataset', datasetId] });
+      await qc.invalidateQueries({ queryKey: ['jobs-active'] });
       event('conversion_started', null, { x_source: xSource === 'X' ? 'X' : 'layer' });
     } catch (e) {
       setProblem(e instanceof ApiError ? e.message : String(e));
@@ -85,41 +117,26 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
     }
   };
 
-  if (!detail.data) return null;
+  if (!detail.data || !conv) return null;
   const kind = detail.data.kind;
   if (kind !== 'h5ad' && kind !== 'anndata_zarr') return null;
 
-  if (converted && !active) {
+  if (active && j) return <Progress job={j} onCancel={() => void cancel()} />;
+  if (conv.converted) {
+    const from = conv.x_source && conv.x_source !== 'X' ? ` (values from ${conv.x_source.replace(/^layers\//, '')})` : '';
     return (
       <p className="small conversion done" data-testid="conversion">
-        ✓ Converted: genes load directly.
+        ✓ Converted{from}: genes load directly.
       </p>
     );
   }
-  if (active && j) {
-    const pct = Math.round(j.progress * 100);
-    return (
-      <div className="conversion" data-testid="conversion">
-        <div className="small">
-          {j.state === 'queued' && j.stage !== 'waiting_for_memory' ? 'Queued…' : (STAGES[j.stage ?? ''] ?? 'Converting…')}
-          {j.state === 'running' && ` · ${pct}%`}
-        </div>
-        <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-          <div className="progress-bar" style={{ width: `${pct}%` }} />
-        </div>
-        <button className="link" onClick={() => void cancel()}>
-          Cancel
-        </button>
-      </div>
-    );
-  }
-  const failed = j && (j.state === 'failed' || j.state === 'interrupted' || j.state === 'cancelled');
+  const failed = j && j.version === detail.data.version && (j.state === 'failed' || j.state === 'interrupted' || j.state === 'cancelled');
   return (
     <div className="conversion" data-testid="conversion">
       {failed && <p className="small error">{describeError(j.error ?? j.state)}</p>}
       {!compact && layers.length > 0 && (
         <label className="field">
-          <span className="field-label">Expression values</span>
+          <span className="field-label">Expression values to convert</span>
           <select className="native-select" value={xSource} onChange={(e) => setXSource(e.target.value)}>
             <option value="X">X</option>
             {layers.map((l) => (
@@ -140,8 +157,8 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
             whatever the file size. The original file is not changed.
           </p>
           <p>
-            It runs in the background (minutes for large files); you can keep working. The copy holds one expression
-            matrix: X, or the layer you choose.
+            It runs in the background (minutes for large files); you can keep working, also on other datasets. The copy
+            holds one expression matrix (X, or the layer you choose); the other layers stay available as before.
           </p>
         </Help>
       </div>

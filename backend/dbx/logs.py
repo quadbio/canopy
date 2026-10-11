@@ -59,6 +59,9 @@ NAME_FIELDS = frozenset(
         "column",
         "gene",
         "gene_index",  # with the public gene list, an index names a gene
+        "layer",
+        "x_source",  # "layers/<name>"
+        "details",  # validator messages: they name columns and elements
         "config_file",
         "log_dir",
         "cache_dir",
@@ -456,6 +459,22 @@ def memory_snapshot(cache_dir: Path | None = None) -> dict[str, Any]:
         du = psutil.disk_usage(str(cache_dir))
         snap["cache_disk_free_gb"] = round(du.free / 2**30, 1)
     return snap
+
+
+def memory_headroom() -> int:
+    """Bytes this process could still use: the host's available memory, or less if the cgroup
+    (e.g. a systemd slice with MemoryMax) leaves less."""
+    avail = int(psutil.virtual_memory().available)
+    try:
+        rel = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
+        base = Path("/sys/fs/cgroup") / rel.lstrip("/")
+        usage = int((base / "memory.current").read_text())
+        limit_raw = (base / "memory.max").read_text().strip()
+        if limit_raw != "max":
+            avail = min(avail, int(limit_raw) - usage)
+    except (OSError, IndexError, ValueError):
+        pass
+    return max(avail, 0)
 
 
 def _cgroup_memory() -> dict[str, float]:

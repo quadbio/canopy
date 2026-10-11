@@ -129,7 +129,7 @@ def to_hex(colour: str) -> str | None:
     matplotlib understands (`red`, `lightgray`, `tab:blue`, `C0`, …); None if not a colour."""
     c = colour.strip()
     if _HEX.fullmatch(c):
-        return c[:7]  # as written (the dataset author's spelling)
+        return c[:7].lower()  # SPEC: "#rrggbb"
     if re.fullmatch(r"#[0-9a-fA-F]{3}", c):
         return "#" + "".join(ch * 2 for ch in c[1:]).lower()
     try:
@@ -360,6 +360,9 @@ class LazySource(Source):
         meta = ColumnMeta(name=name, kind=col.kind, dtype=col.dtype, ordered=col.ordered)
         if col.kind == "boolean":
             meta.categories, meta.n_categories = ["false", "true"], 2
+            colors = self._read(lambda: self._uns_colors(name))
+            if colors is not None:  # scanpy plots booleans as two categories (False, True)
+                meta.colors = valid_colors(colors, 2, name)
         if col.kind != "categorical":
             # Plain string columns: labels come from /obs/labels (they need a full read).
             return meta
@@ -481,6 +484,9 @@ class MemorySource(Source):
         meta = ColumnMeta(name=name, kind=col.kind, dtype=col.dtype, ordered=col.ordered)
         if col.kind == "boolean":
             meta.categories, meta.n_categories = ["false", "true"], 2
+            colors = self.adata.uns.get(f"{name}_colors")
+            if colors is not None:
+                meta.colors = valid_colors(colors, 2, name)
         s = self.adata.obs.get(name)
         if col.kind == "categorical" and s is not None and hasattr(s, "cat"):
             meta.n_categories = len(s.cat.categories)

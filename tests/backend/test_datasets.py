@@ -269,7 +269,7 @@ def test_example_h5ad_golden(cfg: Config, example: Callable[[str], Path], name: 
             np.testing.assert_array_equal(got, s.cat.codes.to_numpy())
             colors = a.uns.get(f"{col['name']}_colors")
             if colors is not None and len(colors) == len(s.cat.categories):
-                assert col["colors"] == list(colors), col["name"]
+                assert col["colors"] == [c.lower() for c in colors], col["name"]
         elif s.dtype.kind in "iuf":
             np.testing.assert_array_equal(got, s.to_numpy().astype(np.float32))
     for e in m["embeddings"]:
@@ -521,7 +521,7 @@ def test_parse_colors_accepts_what_scanpy_and_matplotlib_accept() -> None:
     from dbx.data.reader import parse_colors
 
     assert parse_colors(["#FF0000", "#00ff0080", "#abc"], 3) == (
-        ["#FF0000", "#00ff00", "#aabbcc"],
+        ["#ff0000", "#00ff00", "#aabbcc"],
         None,
     )
     assert parse_colors(["red", "lightgray", "tab:blue", "C1"], 4)[0] == [

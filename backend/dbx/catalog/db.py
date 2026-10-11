@@ -155,6 +155,13 @@ class CatalogDB:
         finally:
             con.close()
 
+    def versions(self) -> set[str]:
+        """Every dataset version the index knows (converted stores are kept for these)."""
+        with self.connect() as con:
+            return {
+                r[0] for r in con.execute("SELECT version FROM datasets WHERE version IS NOT NULL")
+            }
+
     # ------------------------------------------------------------ scans
     def start_scan(self, trigger: str, full: bool) -> int:
         with self.connect() as con:

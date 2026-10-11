@@ -80,9 +80,16 @@ def serve(config: ConfigOpt = None) -> None:
         config=cfg.model_dump(mode="json"),
         build=build_info(),
     )
+    from dbx.jobs.manager import CacheInUseError
+
+    try:
+        server = create_app(cfg)
+    except CacheInUseError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
     # Requests are logged by our middleware, so uvicorn's access log is off.
     uvicorn.run(
-        create_app(cfg),
+        server,
         host=cfg.server.host,
         port=cfg.server.port,
         log_config=None,
@@ -252,3 +259,49 @@ def catalog_scan(
     db = CatalogDB(cfg.cache_dir / DB_FILE)
     counts = scan(db, cfg.data_roots, cfg.catalog, full=full, trigger="cli")
     typer.echo(json.dumps(counts.as_dict(), indent=2))
+
+
+cache_app = _typer("The cache folder: converted stores and indexes.")
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("prune")
+def cache_prune(
+    config: ConfigOpt = None,
+    dry_run: Annotated[bool, typer.Option(help="Only list what would be removed")] = False,
+) -> None:
+    """Remove converted stores of dataset versions the catalog no longer knows (old versions of
+    changed files, removed files) and leftovers of failed conversions. Refuses while a server
+    uses the cache."""
+    import shutil
+
+    from dbx.catalog import Catalog
+    from dbx.jobs.manager import CacheInUseError, lock_cache, tmp_dirs
+
+    cfg = _cli_logging(config) or _load(None)
+    try:
+        lock_cache(cfg.cache_dir)
+    except CacheInUseError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    versions = Catalog(cfg).db.versions()
+    log = get_logger("dbx.cache")
+    removed = 0
+    for d in sorted(p for p in cfg.cache_dir.iterdir() if p.is_dir()):
+        if not any(d.glob("c*/manifest.json")) and not any(d.glob("c*.tmp-*")):
+            continue  # not a store folder (logs, tmp, jobs, …)
+        if d.name in versions:
+            continue
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        typer.echo(
+            f"{'would remove' if dry_run else 'removing'} store {d.name} ({size / 2**30:.2f} GB)"
+        )
+        if not dry_run:
+            shutil.rmtree(d, ignore_errors=True)
+            log.info("store_pruned", version=d.name, bytes=size)
+        removed += size
+    for t in tmp_dirs(cfg.cache_dir, cfg.jobs.tmp_dir):
+        typer.echo(f"{'would remove' if dry_run else 'removing'} leftover {t.name}")
+        if not dry_run:
+            shutil.rmtree(t, ignore_errors=True)
+    typer.echo(f"{'would free' if dry_run else 'freed'} {removed / 2**30:.2f} GB")

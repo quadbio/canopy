@@ -74,23 +74,51 @@ def table_info(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataI
     return name, tables[name]
 
 
-def store_table(cache_dir: Path, fp: Fingerprint) -> tuple[Path, AnnDataInfo] | None:
-    """The converted store's table for this dataset version, if it was converted (AnnData
-    sources; SpatialData stores come in S6)."""
-    from dbx.convert.anndata import TABLE, has_store, store_dir
+@dataclass
+class StoreTable:
+    path: Path  # the table group
+    info: AnnDataInfo
+    x_source: str  # which source matrix the store's X is ("X", "layers/<name>", "raw/X")
+    built: str  # identifies this build of the store (for ETags)
 
-    if fp.kind not in ("h5ad", "anndata_zarr") or not has_store(cache_dir, fp.dataset_id):
+
+def store_table(cache_dir: Path, fp: Fingerprint) -> StoreTable | None:
+    """The converted store's table for this dataset version, if it was converted and its
+    contract major version is the one this server reads (AnnData sources; SpatialData stores
+    come in S6). Described once per store build (keyed by the manifest's modification time)."""
+    from dbx.contract import MANIFEST
+    from dbx.convert.anndata import store_dir
+
+    if fp.kind not in ("h5ad", "anndata_zarr"):
         return None
-    path = store_dir(cache_dir, fp.dataset_id) / "tables" / TABLE
-    info = _store_info(str(path))
-    return (path, info) if info is not None else None
+    manifest = store_dir(cache_dir, fp.dataset_id) / MANIFEST
+    try:
+        mtime = manifest.stat().st_mtime_ns
+    except OSError:
+        return None
+    return _store_table(str(manifest), mtime)
 
 
 @lru_cache(maxsize=256)
-def _store_info(path: str) -> AnnDataInfo | None:
+def _store_table(manifest: str, mtime: int) -> StoreTable | None:
+    from dbx.contract import CONTRACT_MAJOR, read_manifest
+
+    try:
+        m = read_manifest(Path(manifest).parent)
+    except (OSError, ValueError):
+        get_logger("dbx.cache").warning("store_unreadable")
+        return None
+    if m.major != CONTRACT_MAJOR:
+        get_logger("dbx.cache").warning(
+            "store_incompatible", store_version=m.contract_version, reads=CONTRACT_MAJOR
+        )
+        return None
     from dbx.inspect import inspect_path
 
-    return inspect_path(Path(path)).anndata
+    name, t = next(iter(m.tables.items()))
+    path = Path(manifest).parent / t.path
+    info = inspect_path(path).anndata
+    return StoreTable(path, info, t.x_source, f"{m.converter.created}|{mtime}") if info else None
 
 
 def open_source(
@@ -103,8 +131,7 @@ def open_source(
     if cache_dir is not None and (st := store_table(cache_dir, fp)) is not None:
         if table not in (None, ""):
             raise UnknownElementError("table")
-        store_path, store_info = st
-        src = LazySource(store_info, zarr.open_group(store_path, mode="r"))
+        src = LazySource(st.info, zarr.open_group(st.path, mode="r"))
         src.mode = "converted"
         return src
     name, info = table_info(fp, table)
@@ -140,12 +167,13 @@ class DatasetCache:
 
     # ------------------------------------------------------------ public
     def drop_closed_source(self, version: str, table: str | None) -> None:
-        """Forget a source found closed, so the next `source()` opens it again."""
-        key = ("source", version, table or "")
+        """Forget sources found closed, so the next `source()` opens them again."""
         with self._lock:
-            e = self._lru.get(key)
-            if e is not None and getattr(e.value, "closed", False):
-                del self._lru[key]
+            for which in ("", "original"):
+                key = ("source", version, table or "", which)
+                e = self._lru.get(key)
+                if e is not None and getattr(e.value, "closed", False):
+                    del self._lru[key]
 
     def drop_version(self, version: str) -> None:
         """Forget everything of a dataset version (e.g. after it was converted: the next request
@@ -159,19 +187,36 @@ class DatasetCache:
 
     def has_source(self, version: str, table: str | None) -> bool:
         with self._lock:
-            return ("source", version, table or "") in self._lru
+            return ("source", version, table or "", "") in self._lru
 
     def source(
-        self, version: str, fp: Fingerprint, path: Path, table: str | None, *, dataset: str = ""
+        self,
+        version: str,
+        fp: Fingerprint,
+        path: Path,
+        table: str | None,
+        *,
+        dataset: str = "",
+        original: bool = False,
     ) -> Source:
-        key = ("source", version, table or "")
+        """The open source of a dataset version: its converted store when there is one, else
+        (or with `original`) the file itself."""
+        key = ("source", version, table or "", "original" if original else "")
         hit = self._get(key)
         if hit is not None:
-            if hit.mode == "converted" or store_table(self.cache_dir, fp) is None:
+            if original:
                 return hit  # type: ignore[no-any-return]
-            self.drop_version(version)  # converted since it was opened: read the store now
+            st = store_table(self.cache_dir, fp)
+            if (hit.mode == "converted") == (st is not None) and (
+                st is None or hit.info is st.info
+            ):
+                return hit  # type: ignore[no-any-return]
+            # converted, re-converted or deleted since it was opened: open it again
+            self.drop_version(version)
         with timed("open_dataset", kind=fp.kind, dataset_id=dataset) as extra:
-            src = open_source(fp, path, table, self.small_file, self.cache_dir)
+            src = open_source(
+                fp, path, table, self.small_file, None if original else self.cache_dir
+            )
             nbytes = estimate_memory_bytes(src.info) if src.mode == "memory" else 0
             extra.update(mode=src.mode, nbytes=nbytes)
         return self._put(key, src, nbytes, is_source=True)  # type: ignore[no-any-return]

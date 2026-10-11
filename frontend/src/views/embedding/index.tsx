@@ -35,7 +35,7 @@ import { isMissing } from '../../colour/missing';
 import { assignSlots } from '../../colour/slots';
 import { event } from '../../telemetry/telemetry';
 import { Field, formatCount, Help, type OptionGroup, Select, Slider } from '../../ui/controls';
-import { FULL_LIMIT, SUBSET_SIZE, useSubsetNow } from '../lod';
+import { CANVAS_BUDGET, drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
 import { Conversion } from '../../ui/Conversion';
 import { GeneSearch } from '../../ui/GeneSearch';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
@@ -293,7 +293,11 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   // The dataset's own colours (uns['<col>_colors']) are the default whenever it has them; for a
   // text column they come with its labels.
   const given =
-    column?.kind === 'categorical' ? column.colors : column?.kind === 'string' ? (labelsQ.data?.colors ?? null) : null;
+    column?.kind === 'categorical' || column?.kind === 'boolean'
+      ? column.colors
+      : column?.kind === 'string'
+        ? (labelsQ.data?.colors ?? null)
+        : null;
   const palette = labels ? resolvePalette(p.palette, labels.length, given) : null;
   const slots = useMemo(
     () => (labels && order && palette && palette !== 'dataset' ? assignSlots(labels, order, paletteSize(palette)) : []),
@@ -383,14 +387,33 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     (lastGood.current && lastGood.current.n === n ? lastGood.current : null) ??
     (baseData ? { data: baseData, valueColour: BASE_COLOURING, legend: undefined, tooltip: () => null, n: n! } : null);
 
-  // Large datasets: representative cells while many cells are on screen (views/lod.ts). The
-  // subset is fetched ahead, so zooming out switches without waiting.
+  // Large datasets (views/lod.ts): the cells in a representative order, drawn as a prefix whose
+  // length follows the canvas budget, the zoom and the hidden categories. The order needs the
+  // server's subset, asked for as soon as the cell count is known.
   const total = n ?? 0;
-  const large = total > FULL_LIMIT && !p.allCells;
-  const sub = useSubset(spec.datasetId, spec.table, large ? SUBSET_SIZE : null, version);
-  const subsetNow = useSubsetNow(spec.id, total, p.allCells);
-  const idx = subsetNow ? (sub.data?.data as Int32Array | undefined) : undefined;
-  const drawData = useMemo(() => (shown && idx ? subsetOf(shown.data as PointData, idx) : shown?.data), [shown?.data, idx]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nObs = meta.data?.n_obs ?? 0;
+  const reorder = !p.allCells && nObs > REORDER_ABOVE;
+  const sub = useSubset(spec.datasetId, spec.table, reorder ? Math.min(nObs, SUBSET_SIZE) : null, version);
+  const drawOrder = useMemo(
+    () => (reorder && sub.data && total ? representativeOrder(sub.data.data as Int32Array, total) : null),
+    [reorder, sub.data, total],
+  );
+  const share = useLod((s) => s.visible[spec.id] ?? 1);
+  const allowance = useLod((s) => s.allowance[spec.id] ?? Infinity);
+  const hiddenShare = useMemo(() => {
+    const lg = shown?.legend;
+    if (!lg || lg.kind !== 'categories' || !p.hidden.length || !total) return 0;
+    const hidden = new Set(p.hidden);
+    return lg.labels.reduce((a, l, i) => a + (hidden.has(l) ? lg.counts[i] : 0), 0) / total;
+  }, [shown?.legend, p.hidden, total]);
+  const count = drawOrder ? drawCount(total, share, allowance, 1 - hiddenShare) : total;
+  const shownData = shown?.data;
+  const drawData = useMemo(
+    () => (shownData && drawOrder ? prefixOf(shownData as PointData, drawOrder, count) : shownData),
+    [shownData, drawOrder, count],
+  );
+  // Fewer points look lighter: grow them a little (at most 1.5×) to keep the density similar.
+  const sizeBoost = count < total ? Math.min(1.5, (total / count) ** 0.25) : 1;
 
   const layers = useMemo(
     () =>
@@ -401,7 +424,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
               data: drawData,
               getFillColor: [...BASE_RGB, 255],
               getRadius: 1,
-              radiusScale: p.pointSize,
+              radiusScale: p.pointSize * sizeBoost,
               radiusUnits: 'pixels',
               opacity: p.opacity,
               stroked: false,
@@ -416,10 +439,17 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
             } as ScatterplotLayerProps & { valueColour: ValueColour }),
           ]
         : [],
-    [spec.id, drawData, shown?.valueColour, p.pointSize, p.opacity], // eslint-disable-line react-hooks/exhaustive-deps
+    [spec.id, drawData, shown?.valueColour, p.pointSize, p.opacity, sizeBoost], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const status: ViewOutput['status'] = fatal ? 'error' : current || (colourError && shown) ? 'ready' : 'loading';
+  // Until the order of a large dataset is known nothing is drawn (drawing all of it first would
+  // upload and draw every cell once for nothing).
+  const waitingForOrder = reorder && !drawOrder && !sub.error;
+  const status: ViewOutput['status'] = fatal
+    ? 'error'
+    : (current || (colourError && shown)) && !waitingForOrder
+      ? 'ready'
+      : 'loading';
   const t0 = useRef(performance.now());
   const reported = useRef(false);
   useEffect(() => {
@@ -447,7 +477,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   };
 
   return {
-    layers,
+    layers: waitingForOrder ? [] : layers,
     bounds,
     status,
     error: fatal ? String((fatal as Error).message) : undefined,
@@ -455,9 +485,10 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     problem: colourError
       ? { message: `Colouring failed: ${(colourError as Error).message}`, retry }
       : undefined,
-    tooltip: shown ? (idx ? (i: number) => shown.tooltip(idx[i]) : shown.tooltip) : () => null,
-    caption: idx ? `${formatCount(idx.length)} of ${formatCount(total)} cells` : undefined,
+    tooltip: shown ? (drawOrder ? (i: number) => shown.tooltip(drawOrder[i]) : shown.tooltip) : () => null,
+    caption: drawOrder && count < total ? `${formatCount(count)} of ${formatCount(total)} cells` : undefined,
     n: n ?? 0,
+    total,
     legend: shown?.legend,
   };
 }
@@ -467,28 +498,29 @@ interface PointData {
   attributes: Record<string, { value: Float32Array; size: number }>;
 }
 
-// Gathered copies per (source array, subset): stable objects, so the GPU upload happens once.
-const gathered = new WeakMap<Float32Array, WeakMap<Int32Array, { value: Float32Array; size: number }>>();
+// Copies in the representative order per (source array, order): stable objects, so the GPU
+// upload happens once per colouring; changing how many are drawn uploads nothing.
+const reordered = new WeakMap<Float32Array, WeakMap<Int32Array, { value: Float32Array; size: number }>>();
 
-function gather(attr: { value: Float32Array; size: number }, idx: Int32Array) {
-  let byIdx = gathered.get(attr.value);
-  if (!byIdx) gathered.set(attr.value, (byIdx = new WeakMap()));
-  let out = byIdx.get(idx);
+function inOrder(attr: { value: Float32Array; size: number }, order: Int32Array) {
+  let byOrder = reordered.get(attr.value);
+  if (!byOrder) reordered.set(attr.value, (byOrder = new WeakMap()));
+  let out = byOrder.get(order);
   if (!out) {
     const { value, size } = attr;
-    const v = new Float32Array(idx.length * size);
-    for (let k = 0; k < idx.length; k += 1) for (let d = 0; d < size; d += 1) v[k * size + d] = value[idx[k] * size + d];
+    const v = new Float32Array(order.length * size);
+    for (let k = 0; k < order.length; k += 1) for (let d = 0; d < size; d += 1) v[k * size + d] = value[order[k] * size + d];
     out = { value: v, size };
-    byIdx.set(idx, out);
+    byOrder.set(order, out);
   }
   return out;
 }
 
-/** The same point data for the cells in `idx` only. */
-function subsetOf(data: PointData, idx: Int32Array): PointData {
+/** The first `count` cells of `order`: the same reordered buffers, a shorter length. */
+function prefixOf(data: PointData, order: Int32Array, count: number): PointData {
   const attributes: PointData['attributes'] = {};
-  for (const [k, a] of Object.entries(data.attributes)) attributes[k] = gather(a, idx);
-  return { length: idx.length, attributes };
+  for (const [k, a] of Object.entries(data.attributes)) attributes[k] = inOrder(a, order);
+  return { length: count, attributes };
 }
 
 interface Shown {
@@ -637,7 +669,7 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
               Gene expression in this dataset needs a one-time conversion first: its matrix is stored cell by cell and
               is too large to load whole.
             </p>
-            <Conversion datasetId={spec.datasetId} compact />
+            <Conversion key={spec.datasetId} datasetId={spec.datasetId} compact />
           </div>
         ) : genes.data ? (
           <GeneSearch genes={genes.data} onPick={pickGene} testId="gene-search" />
@@ -732,15 +764,17 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
           format={(v) => `${Math.round(v * 100)}%`}
         />
       </Field>
-      {m.n_obs > FULL_LIMIT && (
+      {m.n_obs > REORDER_ABOVE && (
         <label className="check" data-testid="all-cells">
           <input type="checkbox" checked={p.allCells} onChange={(e) => update(spec.id, { allCells: e.target.checked })} />
           Show all cells
           <Help label="About “Show all cells”">
             <p>
-              With more than {formatCount(FULL_LIMIT)} cells, the view shows {formatCount(SUBSET_SIZE)} representative cells
-              (every cell type included) while you look at the whole dataset, and all cells once you zoom in. This keeps
-              panning and zooming smooth. Tick this to always draw every cell.
+              To stay smooth, the canvas draws about {formatCount(CANVAS_BUDGET)} cells on screen at a time, shared by
+              the open views. A large dataset then shows representative cells (every category of its main annotation
+              included) when you look at all of it, more as you zoom in, and all of them when only a part is in view or
+              when you hide other categories. The note next to the title says how many are drawn. Tick this to always
+              draw every cell.
             </p>
           </Help>
         </label>

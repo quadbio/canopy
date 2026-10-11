@@ -47,13 +47,22 @@ feedback asked for a choice of palettes for categories and more colour maps for 
   is not used and the server logs `uns_colors_ignored` with the reason. Plain text columns get
   their colours too (with their labels, in scanpy's alphabetical order).
 
-- **Level of detail** (S5, review S5a B-M4): datasets above 1.5 M cells draw 1 M representative
-  cells while more than 1.5 M would be on screen, and all cells once zoomed in (`views/lod.ts`;
-  the canvas publishes each view's visible share in powers of two, so zooming re-renders views
-  rarely). The subset comes from `/api/datasets/{id}/subset` (a converted store's stratified
-  subset, else computed once with the same rule and cached) and is fetched ahead; positions and
-  values are gathered once per (array, subset), so switching costs no new upload after the first.
-  "Show all cells" forces every cell; the view header says "1.0 M of 3.0 M cells".
+- **Level of detail** (S5; revised in R5 after review S5b B-M1–B-M3, B-M7):
+  - Large datasets (more than a quarter of the canvas budget, at most 200 k cells) are reordered
+    once, "representative cells first": the server's stratified subset (`/subset`, every category
+    of the main annotation kept) shuffled, then the other cells shuffled. Any prefix is a fair
+    sample, so drawing fewer cells means drawing a shorter prefix of the same GPU buffers:
+    changing how many are drawn uploads nothing (e2e: < 20 KB while zooming).
+  - The canvas shares one budget of points on screen (1 M; `?lod=<n>` overrides it) among its
+    views in proportion to their cells (`views/lod.ts` `allowances`).
+  - A view draws as many cells as keep about its share on screen, up to 1.5 × its share (points
+    off screen still cost time). Hidden categories count as not on screen, and the cap grows
+    with them: isolating one population draws all of it.
+  - Points grow a little (at most 1.5×) when fewer are drawn, so the density looks similar. The
+    view header says "1.0 M of 3.0 M cells"; "Show all cells" overrides.
+  - Until the order is known a large view draws nothing new (no full upload first).
+  - Spatially chunked drawing (only the chunks in view) comes with S6; until then a deep zoom
+    into a very large dataset shows a dense sample, not every cell.
 
 ## Evidence
 - e2e (strengthened in R4 after review S5a B-M5): a gradient shows both ends of the colour map on
@@ -63,8 +72,9 @@ feedback asked for a choice of palettes for categories and more colour maps for 
   (< 10 KB); higher values on top raise the share of top colours; a slow or failing gene keeps
   the plot drawn and Retry recovers.
 - Unit tests: CPU reference of the shader lookup, ranges, slots, palettes (no black or grey).
-- Level of detail, 3 M cells (M2, Chrome, Metal): zoomed out 18 ms per frame with the subset
-  (56–66 ms with all cells before), zoomed in with all cells ~25 ms.
+- Level of detail, 3 M cells (M2, Chrome, Metal): zoomed out 18 ms per frame (1 M drawn), first
+  zoom step 29 ms, further steps 17–20 ms (1.5 M drawn); four views of 3 M + 1 M + 3 M + 1 M cells
+  21 ms per frame (72 ms before the shared budget).
 - 3 M cells (M2, Chrome): open → ready 0.67 s; switching to a numeric column 0.4 s; frame time
   unchanged (zoomed-out drawing cost is overdraw, addressed by subset drawing in S5).
 

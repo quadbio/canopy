@@ -9,6 +9,7 @@ import { metaQuery, useCatalogStatus } from '../api/queries';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { FileBrowser } from '../ui/FileBrowser';
+import { JobWatcher } from './JobWatcher';
 import { Canvas } from '../views/Canvas';
 import { viewType } from '../views/registry';
 
@@ -71,8 +72,8 @@ function SettingsPanel() {
             {spec.title}
           </h3>
           <p className="muted small">{t.label}</p>
-          <t.Panel spec={spec} />
-          <ResetView spec={spec} />
+          <t.Panel key={spec.id} spec={spec} />
+          <ResetView key={`reset-${spec.id}`} spec={spec} />
         </>
       ) : (
         <p className="muted small pad">Select a view to change its settings.</p>
@@ -139,6 +140,7 @@ export function App() {
           Theme: {theme === 'system' ? 'auto' : theme}
         </button>
       </header>
+      <JobWatcher />
       <FileBrowser />
       <main className="main">
         <Canvas />

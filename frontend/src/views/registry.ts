@@ -27,6 +27,8 @@ export interface ViewOutput {
   caption?: string;
   /** Number of items drawn, for telemetry. */
   n?: number;
+  /** Number of items the view holds (for the canvas's level-of-detail budget). */
+  total?: number;
   /** Whatever the view's Legend needs, computed once by the view's hook. */
   legend?: unknown;
 }

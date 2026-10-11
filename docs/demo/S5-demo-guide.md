@@ -22,7 +22,7 @@ Report in `feedback-S5.md` (same format as before). About 20 minutes.
 | 6 | Open **region_1**, table `table_cells`; pick a gene; **Values from** → `counts` | Gene values from the counts layer; hover shows whole numbers. |
 | 7 | Close a plot, open the same dataset again | Your last settings come back; **Reset to defaults** (bottom of the panel) starts over. |
 | 8 | Click **synthetic_3M_cells.h5ad**, then **Convert for full speed** in its details | A progress bar with the current stage, then "✓ Converted" (about 15 s on this Mac). |
-| 9 | Open **synthetic_3M_cells.h5ad** | Next to the title: "1.0 M of 3.0 M cells"; panning is smooth. Zoom in a few steps: the note disappears (all cells drawn). **Show all cells** in the panel forces every cell. |
+| 9 | Open **synthetic_3M_cells.h5ad**; zoom in a few steps; then open **synthetic_1M_cells.h5ad** next to it | Next to the title: "1.0 M of 3.0 M cells"; panning is smooth. Zooming in draws more cells (up to 1.5 M). With two large views open they share the budget (e.g. "750 k of 3.0 M" and "250 k of 1.0 M"). Hide all categories but one: all its cells are drawn. **Show all cells** forces every cell. |
 | 10 | Pick a gene in the 3 M view | Colours change within a fraction of a second (the converted copy reads each gene directly). |
 
 ## What I would most like your judgement on

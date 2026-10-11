@@ -107,6 +107,13 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   only with 1.5 × this free and is stopped beyond 2 × this + 1 GB), `tmp_dir` (spill files, about
   12 bytes per stored value; default `<cache>/tmp`).
 - Each job runs in its own process and logs to `dbx-worker-<pid>.jsonl` next to the server's log.
+- One server per cache folder (`server.lock`). A converted dataset is converted again only with
+  `"force": true`. Free disk is checked before a job (about 20 bytes per stored value).
+- Sizing: a conversion needs about 0.3 GB + 1.2–1.5 × `jobs.memory_gb` + its obs/var (about 80
+  bytes per cell plus the columns). For atlases of 10⁷–10⁸ cells set `memory_gb` to 16–64.
+- `dbx cache prune [--dry-run]` removes converted stores of dataset versions the catalog no
+  longer knows (changed or removed files) and leftovers of failed conversions; run it with the
+  server stopped.
 
 ## Frontend
 

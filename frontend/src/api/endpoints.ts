@@ -42,8 +42,9 @@ export const datasets = {
 };
 
 export const jobs = {
-  convert: (id: string, xSource = 'X') =>
-    postJson<Job>(`/api/datasets/${encodeURIComponent(id)}/convert`, { x_source: xSource }) as Promise<Job>,
+  convert: (id: string, xSource = 'X', force = false) =>
+    postJson<Job>(`/api/datasets/${encodeURIComponent(id)}/convert`, { x_source: xSource, force }) as Promise<Job>,
+  active: () => getJson<Job[]>('/api/jobs?active=true'),
   get: (job: number) => getJson<Job>(`/api/jobs/${job}`),
   cancel: (job: number) => postJson<Job>(`/api/jobs/${job}/cancel`, {}) as Promise<Job>,
 };

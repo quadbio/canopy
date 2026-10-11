@@ -202,3 +202,12 @@ Resume rule: read this file, then continue with the first unchecked step.
   feedback-S5.md. 224 backend, 43 frontend unit, 15 e2e.
   - Next: user tries the S5 demo; optional review round on S5 part 2 (converter/jobs/LOD); then
     R3 (multi-panel view contract) and S6 (spatial).
+- 2026-10-11 Cold review S5b (../reviews/code_review_S5b/): A converter 7, jobs 5, serving 6; B LOD 5,
+  conversion UX 5, colours 8; 1 blocker, 15 major. All accepted; batch R5 DONE (SUMMARY §4): job
+  robustness (leftover cleanup by job id, disk check, heartbeats, re-queue on server stop, one
+  server per cache, one store per version + atomic swap, layers kept), memory guard with obs
+  estimate + cgroup, richer worker logs, strict-safe, faithfulness fixes, dbx cache prune;
+  frontend: server-truth conversion state + app-wide job watcher, LOD as prefix of a representative
+  order with a canvas budget (3M: 18 ms zoomed out; 4 views 21 ms vs 72). 234 backend, 46 unit,
+  16 e2e.
+  - Next: user tries the S5 demo; then R3 (multi-panel view contract) and S6.

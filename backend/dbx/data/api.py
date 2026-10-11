@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
@@ -43,7 +44,7 @@ from dbx.data.reader import (
 )
 from dbx.errors import ApiError
 from dbx.inspect.core import version_stamp
-from dbx.inspect.models import AnnDataInfo, Fingerprint
+from dbx.inspect.models import AnnDataInfo, Fingerprint, MatrixInfo
 from dbx.logs import get_logger
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -74,10 +75,11 @@ class DatasetMeta(BaseModel):
 
 
 class Matrix(BaseModel):
-    name: str  # "X" or a layer name
+    name: str  # "X", a layer name, or "raw"
     encoding: str  # csr | csc | dense
     dtype: str
     access: genes.Access  # how genes are read (see dbx.data.genes)
+    converted: bool = False  # served from the converted store
 
 
 class GeneListReply(BaseModel):
@@ -140,6 +142,8 @@ def _with_source[T](
     path: Path,
     table: str | None,
     fn: Callable[[Source], T],
+    *,
+    original: bool = False,
 ) -> T:
     """Run `fn(source)` on the dataset's open source (opened on first use)."""
     catalog, cache = _state(request)
@@ -148,7 +152,7 @@ def _with_source[T](
         _check_current(catalog, row, path)
     for attempt in (0, 1):
         try:
-            return fn(cache.source(version, fp, path, table, dataset=row.id))
+            return fn(cache.source(version, fp, path, table, dataset=row.id, original=original))
         except SourceClosedError:
             if attempt:
                 raise
@@ -221,6 +225,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
         raise ApiError(409, f"needs_conversion:{e.code}", "This dataset has no table.") from e
     except UnknownElementError as e:
         raise ApiError(404, "unknown_element", "No such table in this dataset.") from e
+    source_info = info
     info = _effective(request, fp, info)
 
     def describe(src: Source) -> tuple[str, list[ColumnMeta]]:
@@ -239,7 +244,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
         mode=mode,
         obs=columns,
         embeddings=[Embedding(key=k, dims=d) for k, d in embedding_dims(info).items()],
-        matrices=_matrices(request, info),
+        matrices=_matrices(request, fp, source_info),
         warnings=sorted({w.code for w in fp.warnings}),
     )
 
@@ -330,8 +335,9 @@ def subset(
     table: TableQ = None,
 ) -> Response:
     """`n` cell indices (sorted, int32) for drawing large datasets when zoomed out: a converted
-    store's precomputed subset, else one computed once and cached, stratified by the first
-    categorical column with colours (every category keeps at least one cell; fixed seed)."""
+    store's precomputed subset, else one computed once and cached, stratified by the main
+    annotation column, cell type or cluster first (every category keeps at least one cell;
+    fixed seed)."""
     row, fp, path = _dataset(request, id)
     table, info = _table(fp, table)
     info = _effective(request, fp, info)
@@ -342,13 +348,17 @@ def subset(
     _, cache = _state(request)
 
     def load(src: Source) -> np.ndarray:
-        from dbx.convert.anndata import downsample_indices
+        from dbx.convert.anndata import annotation_column, downsample_indices
 
         stored = src.stored_subset(n)
         if stored is not None:
             return stored.astype(np.int32)
-        by = next(
-            (c.name for c in info.obs.columns if c.kind == "categorical" and c.has_colors), None
+        by = annotation_column(
+            [
+                (c.name, c.n_categories or 0, c.has_colors)
+                for c in info.obs.columns
+                if c.kind == "categorical"
+            ]
         )
         groups = src.obs(by).values if by else None
         return downsample_indices(info.n_obs, n, groups).astype(np.int32)
@@ -380,11 +390,47 @@ def _memory_limit(request: Request) -> int:
     return min(cache.small_file, cache.budget // 2)
 
 
-def _matrices(request: Request, info: AnnDataInfo) -> list[Matrix]:
+@dataclass
+class Served:
+    """How one matrix is served: from the converted store (as its X) or from the source file."""
+
+    info: MatrixInfo
+    original: bool  # read from the source file, not the store
+    inner: str  # its name in that source ("X" in the store)
+
+
+def _served(
+    request: Request, fp: Fingerprint, source: AnnDataInfo
+) -> tuple[AnnDataInfo, dict[str, Served]]:
+    """The table as served and its matrices. Once converted, the store holds one matrix (its X,
+    named after what it was converted from); the source's other matrices stay available from
+    the source file, as before the conversion."""
+    _, cache = _state(request)
+    st = store_table(cache.cache_dir, fp)
+    src = genes.matrices(source)
+    if st is None:
+        return source, {k: Served(m, False, k) for k, m in src.items()}
+    name = st.x_source.removeprefix("layers/") if st.x_source != "raw/X" else "raw"
+    out = {name: Served(st.info.X, False, "X")} if st.info.X is not None else {}
+    for k, m in src.items():
+        if k != name and m.shape[1] == st.info.n_vars and st.x_source != "raw/X":
+            out[k] = Served(m, True, k)
+    return st.info, out
+
+
+def _matrices(request: Request, fp: Fingerprint, source: AnnDataInfo) -> list[Matrix]:
     limit = _memory_limit(request)
+    _, cache = _state(request)
+    converted = store_table(cache.cache_dir, fp) is not None
     return [
-        Matrix(name=k, encoding=m.encoding, dtype=m.dtype, access=genes.access(m, limit))
-        for k, m in genes.matrices(info).items()
+        Matrix(
+            name=k,
+            encoding=s.info.encoding,
+            dtype=s.info.dtype,
+            access=genes.access(s.info, limit),
+            converted=converted and not s.original,
+        )
+        for k, s in _served(request, fp, source)[1].items()
     ]
 
 
@@ -393,8 +439,7 @@ def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
     """Gene names (the var index, made unique), readable symbols when the index holds ids, and
     the matrices genes can be read from."""
     row, fp, path = _dataset(request, id)
-    tname, info = _table(fp, table)
-    info = _effective(request, fp, info)
+    tname, source_info = _table(fp, table)
     etag = _etag([str(row.version), str(tname), "genes", _store_mark(request, fp)])
     if (r := _not_modified(request, etag)) is not None:
         return r
@@ -418,7 +463,7 @@ def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
         symbols=found.symbols,
         symbol_column=found.symbol_column,
         duplicates=found.duplicates,
-        matrices=_matrices(request, info),
+        matrices=_matrices(request, fp, source_info),
     )
     return Response(
         content=reply.model_dump_json(),
@@ -440,16 +485,17 @@ def gene(
     if q not in (0, 16):
         raise ApiError(400, "invalid_q", "q must be 0 or 16.")
     row, fp, path = _dataset(request, id)
-    tname, info = _table(fp, table)
-    info = _effective(request, fp, info)
+    tname, source_info = _table(fp, table)
     etag = _etag(
         [str(row.version), str(tname), "gene", matrix, str(i), str(q), _store_mark(request, fp)]
     )
     if (r := _not_modified(request, etag)) is not None:
         return r
-    m = genes.matrices(info).get(matrix)
-    if m is None:
+    info, served = _served(request, fp, source_info)
+    sv = served.get(matrix)
+    if sv is None:
         raise ApiError(404, "unknown_matrix", "No such matrix in this dataset.")
+    m, inner, original = sv.info, sv.inner, sv.original
     if i >= info.n_vars:
         raise ApiError(404, "unknown_gene", "No such gene in this dataset.")
     acc = genes.access(m, _memory_limit(request))
@@ -475,10 +521,10 @@ def gene(
 
     def read(src: Source) -> genes.GeneValues:
         if acc == "direct":
-            return src.gene(matrix, i)
+            return src.gene(inner, i)
         copy = cache.array(
-            (version, str(tname), "columns", matrix),
-            lambda: src.matrix_columns(matrix),
+            (version, str(tname), "columns", matrix, original),
+            lambda: src.matrix_columns(inner),
             _columns_bytes,
             reserve=genes.load_peak_bytes(m, block_bytes(m)),
             outcome=loaded,
@@ -497,7 +543,7 @@ def gene(
         path,
         tname,
         lambda src: cache.array(
-            (version, str(tname), "gene", matrix, i),
+            (version, str(tname), "gene", matrix, i, original),
             lambda: read(src),
             lambda g: int(g.indices.nbytes + g.values.nbytes),
             outcome=outcome,
@@ -505,6 +551,7 @@ def gene(
             dataset_id=row.id,
             **facts,
         ),
+        original=original,
     )
     enc = genes.encode(values, quantise_values=q == 16)
     log.info(
@@ -543,13 +590,14 @@ def _effective(request: Request, fp: Fingerprint, info: AnnDataInfo) -> AnnDataI
     """The table as it is served: the converted store's, once the dataset was converted."""
     _, cache = _state(request)
     st = store_table(cache.cache_dir, fp)
-    return st[1] if st is not None else info
+    return st.info if st is not None else info
 
 
 def _store_mark(request: Request, fp: Fingerprint) -> str:
-    """Part of ETags of replies whose encoding depends on the source (e.g. which matrices)."""
+    """Part of ETags of replies that depend on the store (which build, from which matrix)."""
     _, cache = _state(request)
-    return "store" if store_table(cache.cache_dir, fp) is not None else "source"
+    st = store_table(cache.cache_dir, fp)
+    return f"store:{st.x_source}:{st.built}" if st is not None else "source"
 
 
 def _table(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataInfo]:

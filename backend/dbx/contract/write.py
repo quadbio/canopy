@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,13 @@ from dbx.contract.models import (
 
 ANNDATA_ARRAY = {"encoding-type": "array", "encoding-version": "0.2.0"}
 ANNDATA_DICT = {"encoding-type": "dict", "encoding-version": "0.1.0"}
+
+
+def consolidate(path: Path) -> None:
+    """Consolidate zarr metadata (what anndata and spatialdata expect), without the v3 warning."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Consolidated metadata", category=UserWarning)
+        zarr.consolidate_metadata(path)
 
 
 def is_store(path: Path) -> bool:

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from dbx.catalog import PathEscapeError
 from dbx.convert.anndata import has_store
 from dbx.errors import ApiError
+from dbx.jobs.db import ACTIVE
 from dbx.jobs.manager import JobManager
 
 router = APIRouter(tags=["jobs"])
@@ -24,6 +25,8 @@ router = APIRouter(tags=["jobs"])
 
 class ConvertRequest(BaseModel):
     x_source: str = Field(default="X", max_length=512, pattern=r"^(X|raw/X|layers/.+)$")
+    # Replace an existing converted copy (one per dataset version).
+    force: bool = False
 
 
 def _jobs(request: Request) -> JobManager:
@@ -49,14 +52,25 @@ def convert(request: Request, id: str, body: ConvertRequest | None = None) -> di
         raise ApiError(403, "path_escape", "The dataset path leaves its data root.") from e
     except FileNotFoundError as e:
         raise ApiError(410, "vanished", "The dataset no longer exists.") from e
+    cfg = request.app.state.config
+    if has_store(cfg.cache_dir, row.version) and not body.force:
+        raise ApiError(409, "already_converted", "This dataset is converted already.")
     options = {"x_source": body.x_source}
     job = _jobs(request).submit("convert", row.id, row.version, options, path, row.fingerprint)
+    if job.options != options:
+        raise ApiError(
+            409, "conversion_running", "A conversion of this dataset with other options runs."
+        )
     return job.public()
 
 
 @router.get("/api/jobs")
-def list_jobs(request: Request, dataset: str | None = None) -> list[dict[str, Any]]:
-    return [j.public() for j in _jobs(request).db.find(dataset=dataset)[:50]]
+def list_jobs(
+    request: Request, dataset: str | None = None, active: bool = False
+) -> list[dict[str, Any]]:
+    """Recent jobs, newest first; `active=true`: only queued and running ones."""
+    states = ACTIVE if active else ()
+    return [j.public() for j in _jobs(request).db.find(dataset=dataset, states=states)[:50]]
 
 
 @router.get("/api/jobs/{job}")
@@ -80,7 +94,19 @@ def conversion_state(request: Request, dataset: str, version: str | None) -> dic
     cfg = request.app.state.config
     jobs = _jobs(request).db.find(dataset=dataset)
     latest = next((j for j in jobs if j.version == version), None)
+    converted = bool(version) and has_store(cfg.cache_dir, str(version))
+    x_source = None
+    if converted:
+        from dbx.contract import read_manifest
+        from dbx.convert.anndata import store_dir
+
+        try:
+            m = read_manifest(store_dir(cfg.cache_dir, str(version)))
+            x_source = next(iter(m.tables.values())).x_source
+        except (OSError, ValueError, StopIteration):
+            x_source = None
     return {
-        "converted": bool(version) and has_store(cfg.cache_dir, str(version)),
+        "converted": converted,
+        "x_source": x_source,  # which matrix the converted copy holds
         "job": latest.public() if latest else None,
     }

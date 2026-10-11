@@ -203,7 +203,7 @@ function Details({ id }: { id: string }) {
         </button>
       )}
       {problem && <p className="error small">{problem}</p>}
-      {d.state === 'inspected' && <Conversion datasetId={d.id} layers={Object.keys(fp?.anndata?.layers ?? {})} />}
+      {d.state === 'inspected' && <Conversion key={d.id} datasetId={d.id} layers={Object.keys(fp?.anndata?.layers ?? {})} />}
       <DatasetNotes notices={fp?.warnings ?? []} />
     </div>
   );

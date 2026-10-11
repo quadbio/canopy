@@ -23,7 +23,7 @@ const EXPLAIN: Record<string, Explained> = {
     text: (n) =>
       `The expression matrix${n ? ` of ${n}` : ''} is stored one cell after another (CSR). Colouring by a gene reads one gene ` +
       'across all cells, so dbx loads the matrix into memory once (fast for files up to a few GB). Larger files need a ' +
-      'one-time conversion, which is not available in this version yet.',
+      'one-time conversion: “Convert for full speed” below.',
     level: 'info',
   },
   x_dtype: {

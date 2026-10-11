@@ -379,7 +379,48 @@ test('a slow or failing gene keeps the plot on screen; Retry recovers', async ({
   await expect(page.getByTestId('view-problem')).toHaveCount(0);
 });
 
-test('convert a dataset: progress, then genes from the converted copy', async ({ page }) => {
+test('level of detail: a prefix of the same buffers, more cells when zoomed in, all when isolated', async ({ page }) => {
+  await page.addInitScript(countUploads);
+  await page.goto('/?lod=20000'); // a canvas budget of 20 k points: the 52 k-cell example is "large"
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await openDataset(page, 'spatial.h5ad');
+  const caption = page.getByTestId('view-caption');
+  await expect(caption).toHaveText('20 k of 52 k cells');
+  const cell = page.getByTestId('view-cell').first();
+  const uploaded = () => page.evaluate(() => (window as unknown as { __uploaded: number }).__uploaded);
+  await page.waitForTimeout(300);
+  const before = await uploaded();
+  // zoom in: more cells are drawn, from the buffers already on the GPU
+  const box = (await cell.boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.55);
+  for (let i = 0; i < 4; i += 1) {
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(150);
+  }
+  await expect(page.getByText('20 k of 52 k cells')).toHaveCount(0); // more (or all) cells drawn
+  expect((await uploaded()) - before).toBeLessThan(20_000);
+  // fit again; hovering names the cell under the pointer (through the drawn order)
+  await cell.getByRole('button', { name: 'Fit to data' }).click();
+  await expect(caption).toHaveText('20 k of 52 k cells');
+  let tip: string | null = null;
+  for (let gx = 0.25; gx < 0.6 && !tip; gx += 0.05) {
+    for (let gy = 0.3; gy < 0.9 && !tip; gy += 0.05) {
+      await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
+      if (await page.locator('.deck-tooltip').isVisible({ timeout: 150 }).catch(() => false)) {
+        tip = await page.locator('.deck-tooltip').textContent();
+      }
+    }
+  }
+  expect(tip).toMatch(/^celltype_seqfish: /);
+  // isolate one population: all of its cells are drawn
+  const legend = page.getByTestId('legend');
+  await legend.getByRole('button', { name: 'hide all' }).click();
+  await legend.locator('.legend-item', { hasText: /^Gut tube/ }).click();
+  await expect(caption).toHaveCount(0);
+});
+
+test('convert a dataset, keep working elsewhere, come back to the converted copy', async ({ page }) => {
   test.setTimeout(120_000);
   const errors = collectErrors(page);
   await freshPage(page);
@@ -387,7 +428,15 @@ test('convert a dataset: progress, then genes from the converted copy', async ({
   const conv = page.getByTestId('details').getByTestId('conversion');
   await conv.getByTestId('convert').click();
   await expect(conv.getByRole('progressbar').or(conv.getByText('Converted'))).toBeVisible();
-  await expect(conv).toContainText('Converted', { timeout: 90_000 });
+  // look at another dataset while it runs (the widget of this one is gone)
+  await page.getByTestId('dataset-row').filter({ hasText: 'spatial.h5ad' }).click();
+  await expect(page.getByTestId('details')).toContainText('spatial.h5ad');
+  await expect
+    .poll(async () => (await page.request.get('/api/jobs?active=true')).json(), { timeout: 90_000 })
+    .toEqual([]);
+  // back: the details know it is converted (the app-wide job watcher refreshed them)
+  await page.getByTestId('dataset-row').filter({ hasText: 'dissociated.h5ad' }).click();
+  await expect(page.getByTestId('details').getByTestId('conversion')).toContainText('Converted', { timeout: 15_000 });
   await page.screenshot({ path: 'test-results/screens/converted.png' });
   await openDataset(page, 'dissociated.h5ad');
   await expect(page.locator('.panel')).toContainText('converted copy');
@@ -395,5 +444,7 @@ test('convert a dataset: progress, then genes from the converted copy', async ({
   await page.getByTestId('gene-search').press('Enter');
   await expect(page.getByTestId('view-cell').first()).toHaveAttribute('data-status', 'ready');
   await expect(page.getByTestId('legend').locator('.colourbar')).toBeVisible();
+  // converting again is refused by the server; the details offer no button for it
+  await expect(page.getByTestId('details').getByTestId('convert')).toHaveCount(0);
   expect(errors).toEqual([]);
 });

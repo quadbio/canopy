@@ -38,6 +38,36 @@ from logs alone.
 - **UI:** "Convert for full speed" in the dataset details and in the Gene box when needed, with
   the stage, progress, Cancel and Try again; queries refresh when the job finishes.
 
+- **Robustness (R5, review S5b):**
+  - **Temporary folders** carry the job id (`c0.tmp-j<job>-…`); those of jobs that are not
+    running are removed at start, before each launch and after a worker dies (also after a kill
+    that left no chance to clean up).
+  - **Free disk** is checked first: 12 bytes per value for spill files, 8 for the store, +10 %;
+    otherwise `not_enough_disk`.
+  - **Workers** write a heartbeat every 5 s. A running job whose process is gone, whose pid now
+    belongs to another process (start time checked), or that is silent for 2 min becomes
+    `interrupted`. A job stopped by a server shutdown is re-queued at the next start.
+  - **One server per cache folder** (`server.lock`); each worker gets its own config file.
+  - **One store per dataset version:** converting again needs `force` (409
+    `already_converted`), one active job per dataset (409 `conversion_running`), and a
+    replaced store is renamed aside before the new one moves in. The server describes a store
+    by its manifest's time, so a re-converted or deleted store is noticed.
+  - **Other layers stay available** after conversion, served from the source as before.
+  - **The memory guard and watchdog** include an estimate of obs/var (read whole): about 80
+    bytes per cell plus 4–64 bytes per column value.
+  - **Logs:** sub-stage durations, buckets, spill bytes and free disk; a progress line every
+    30 s with RSS; memory samples; `version` for the dataset version. Layer names and
+    validator details are name fields (tokenised at strict).
+  - **Faithfulness:** strings stay strings; raw/X always takes raw's genes; NaN/inf counts and
+    integers above 2²⁴ are reported as warnings; a file changed since its inspection or during
+    the conversion is refused (`source_changed`). Downsampling works with more categories than
+    cells to keep and stratifies by the main annotation (cell type / cluster first).
+  - **`dbx cache prune`** removes stores of versions the catalog no longer knows, and leftovers.
+- **Sizing for atlases:** `jobs.memory_gb` sets the matrix working memory; a job needs about
+  0.3 GB + 1.2–1.5 × `memory_gb` + the obs/var estimate. For 10⁷–10⁸ cells use 16–64 GB: fewer,
+  larger buckets and row blocks (each block appends to every bucket; appends are buffered up to
+  64 MB).
+
 ## Evidence
 - Tests: CSR/CSC/dense × h5ad/zarr with a tiny budget (many buckets and blocks) give stores that
   validate and equal the source (X, obs, var, embeddings, colours, statistics); a layer as X;
@@ -49,6 +79,12 @@ from logs alone.
   The peak is about the interpreter and libraries (0.25 GB) + 1.2 × budget + ~0.3 GB.
 
 ## Known limits
+- Not built from plan F8: resumable stages (a stopped job starts again from the beginning) and
+  the "one large + several small jobs" rule (`max_running` bounds all jobs alike). The 1–5 GB
+  synthetic layout tests of the S5 row are covered by `bench/convert.py` and `bench/genes.py`
+  runs recorded in `bench/README.md`, not by automated tests.
+- X is not sharded: stores above about 100,000 chunk files (≈ 2.6 × 10¹⁰ values) need the
+  sharding the SPEC allows; it comes with the S6 writers.
 - SpatialData datasets are converted in S6 (images, labels, shapes, points, their tables).
 - obs and var are read whole: tens of millions of cells with many text columns need several GB.
 - Spill files need about 12 bytes per stored value in `jobs.tmp_dir` (default `<cache>/tmp`).

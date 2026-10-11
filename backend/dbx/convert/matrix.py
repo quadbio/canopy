@@ -5,16 +5,22 @@ Memory stays within `budget_bytes` whatever the matrix size:
 1. **Count** the stored entries per gene (one pass over the indices; free for CSC sources).
 2. **Spill** (CSR and dense sources): one pass over the cells in row blocks; each entry goes to
    the temporary file of its *gene bucket* (a run of consecutive genes whose entries fit the
-   budget). Disk use: about 10 bytes per stored value, in `tmp_dir`.
+   budget). Disk use: 12 bytes per stored value (16 above 2^31 cells), in `tmp_dir`; entries
+   are buffered per bucket and appended in blocks of a few MB.
 3. **Write** bucket by bucket: load one bucket, group its entries by gene (rows stay ascending,
    so the result is canonical CSC), write it as one contiguous range of `data`/`indices`, and
    compute the bucket's gene statistics.
-A CSC source skips the spill: each bucket is read straight from the source and sorted.
+A CSC source skips the spill: each bucket is read straight from the source; rows are sorted
+within a gene only where the source left them unsorted.
+
+`facts` (budget, buckets, blocks, spill bytes, free space) go into the converter's log line.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +81,7 @@ class CscWriter:
         budget_bytes: int,
         tmp_dir: Path,
         progress: Progress,
+        source_dtype: str = "float32",
     ) -> None:
         self.node = node
         self.encoding = encoding
@@ -85,10 +92,14 @@ class CscWriter:
         self.tmp_dir = tmp_dir
         self.progress = progress
         self.idx_dtype = np.int32 if self.n_obs < 2**31 else np.int64
+        self.source_dtype = np.dtype(source_dtype)
+        self.facts: dict[str, Any] = {"budget_values": self.budget_values}
 
     # -------------------------------------------------------------------- public
     def write(self, x: zarr.Group) -> GeneStats:
+        t0 = time.monotonic()
         counts = self._counts()
+        self.facts["count_s"] = round(time.monotonic() - t0, 1)
         indptr = np.zeros(self.n_vars + 1, dtype=np.int64)
         np.cumsum(counts, out=indptr[1:])
         nnz = int(indptr[-1])
@@ -108,6 +119,12 @@ class CscWriter:
         )
         array(x, "indptr", indptr, chunks=(INDPTR_CHUNK,))
         buckets = _buckets(counts, self.budget_values)
+        sizes = [int(indptr[b] - indptr[a]) for a, b in buckets]
+        self.facts.update(
+            n_buckets=len(buckets),
+            largest_bucket=max(sizes, default=0),
+            oversize_buckets=sum(1 for v in sizes if v > self.budget_values),
+        )
         z = self.n_vars
         stats = GeneStats(
             np.zeros(z, np.float32),
@@ -118,31 +135,47 @@ class CscWriter:
         if self.encoding == "csc":
             source = self._csc_bucket
         else:
+            t1 = time.monotonic()
             spill = self._spill(buckets)
             source = spill.read
+            self.facts["spill_s"] = round(time.monotonic() - t1, 1)
+            self.facts.update(
+                spill_bytes=spill.bytes,
+                tmp_free_bytes=shutil.disk_usage(self.tmp_dir).free,
+            )
+        nonfinite = 0
+        t2 = time.monotonic()
         for k, (a, b) in enumerate(buckets):
             rows, cols, vals = source(a, b)
             lo, hi = int(indptr[a]), int(indptr[b])
             if len(rows) != hi - lo:
                 raise ConversionError("inconsistent_matrix", "entry counts changed between passes")
-            # Group by gene, rows staying ascending within one: a stable sort on the gene's position
-            # in the bucket (16 bits when it fits: numpy then uses a linear-time radix sort).
-            local = (cols - a).astype(np.uint16 if b - a <= 2**16 else np.int32)
-            del cols
-            order = np.argsort(local, kind="stable")
-            rows, vals = rows[order], vals[order]
-            cols = local[order].astype(np.int64) + a
-            del order, local
+            if self.encoding != "csc":
+                # Group by gene, rows staying ascending within one: a stable sort on the gene's
+                # position in the bucket (16 bits when it fits: numpy then uses a linear-time
+                # radix sort). CSC sources come grouped already.
+                local = (cols - a).astype(np.uint16 if b - a <= 2**16 else np.int32)
+                del cols
+                order = np.argsort(local, kind="stable")
+                rows, vals = rows[order], vals[order]
+                cols = local[order].astype(np.int64) + a
+                del order, local
             self._check_canonical(rows, cols, a)
             if hi > lo:
                 indices[lo:hi] = rows.astype(self.idx_dtype, copy=False)
                 data[lo:hi] = vals
             self._stats(stats, a, b, cols, vals, indptr)
+            nonfinite += int(len(vals) - np.isfinite(vals).sum())
             self.progress("write", (k + 1) / len(buckets))
         if self.encoding != "csc":
             spill.close()
-        if nnz and np.isnan(stats.max).any():
-            stats.warnings.append("nan_values")
+        if nonfinite:
+            stats.warnings.append(f"non_finite_values:{nonfinite}")
+        # SPEC §4.2: integer counts above 2^24 are not exact in float32
+        if self.source_dtype.kind in "iu" and nnz and float(stats.max.max()) > 2**24:
+            stats.warnings.append("integers_above_2_24")
+        self.facts["non_finite"] = nonfinite
+        self.facts["write_s"] = round(time.monotonic() - t2, 1)
         return stats
 
     # -------------------------------------------------------------------- pass 1: counts
@@ -174,12 +207,17 @@ class CscWriter:
     def _csc_bucket(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         ip = np.asarray(self.node["indptr"][a : b + 1], dtype=np.int64)
         lo, hi = int(ip[0]), int(ip[-1])
-        rows = np.asarray(self.node["indices"][lo:hi], dtype=np.int64)
+        rows = np.asarray(self.node["indices"][lo:hi], dtype=self.idx_dtype)
         vals = np.asarray(self.node["data"][lo:hi], dtype=np.float32)
         cols = np.repeat(np.arange(a, b, dtype=np.int64), np.diff(ip))
-        # rows within a gene may be unsorted in the source: sort by (gene, row)
-        order = np.lexsort((rows, cols))
-        return rows[order], cols[order], vals[order]
+        # Rows may be unsorted within a gene in the source: sort only then, by (gene, row).
+        if len(rows) > 1:
+            step = np.diff(rows.astype(np.int64))
+            new_gene = np.diff(cols) != 0
+            if np.any((step < 0) & ~new_gene):
+                order = np.lexsort((rows, cols))
+                rows, cols, vals = rows[order], cols[order], vals[order]
+        return rows, cols, vals
 
     # -------------------------------------------------------------------- spill (CSR / dense)
     def _spill(self, buckets: list[tuple[int, int]]) -> _Spill:
@@ -272,27 +310,40 @@ class _Spill:
         self.dtype = np.dtype(
             [("r", "<i4" if n_obs < 2**31 else "<i8"), ("c", "<i4"), ("v", "<f4")]
         )
-        self.files: dict[int, Any] = {}
+        self.pending: dict[int, list[np.ndarray]] = {}
+        self.pending_bytes: dict[int, int] = {}
+        self.held = 0
         self.counts = [0] * len(buckets)
         self.bytes = 0
 
+    BUFFER = 64 * 2**20  # entries held in memory before the fullest buckets are written out
+
     def append(self, q: int, rows: np.ndarray, cols: np.ndarray, vals: np.ndarray) -> None:
-        f = self.files.get(q)
-        if f is None:
-            if len(self.files) >= 64:  # bound open files: close the least recent
-                old = next(iter(self.files))
-                self.files.pop(old).close()
-            f = self.files[q] = open(self.paths[q], "ab")  # noqa: SIM115
         rec = np.empty(len(rows), dtype=self.dtype)
         rec["r"], rec["c"], rec["v"] = rows, cols, vals
-        f.write(rec.tobytes())
+        self.pending.setdefault(q, []).append(rec)
+        self.pending_bytes[q] = self.pending_bytes.get(q, 0) + rec.nbytes
+        self.held += rec.nbytes
         self.counts[q] += len(rows)
         self.bytes += rec.nbytes
+        if self.held > self.BUFFER:
+            for big in sorted(self.pending_bytes, key=lambda k: -self.pending_bytes[k]):
+                self._write(big)
+                if self.held <= self.BUFFER // 2:
+                    break
+
+    def _write(self, q: int) -> None:
+        recs = self.pending.pop(q, [])
+        if not recs:
+            return
+        with open(self.paths[q], "ab") as f:
+            for r in recs:
+                f.write(r.tobytes())
+        self.held -= self.pending_bytes.pop(q, 0)
 
     def flush(self) -> None:
-        for f in self.files.values():
-            f.close()
-        self.files.clear()
+        for q in list(self.pending):
+            self._write(q)
 
     def read(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         path = self.paths[self.index[a]]

@@ -8,6 +8,8 @@ var are read whole (they are small next to X), embeddings and X in blocks.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import time
 import uuid
@@ -38,13 +40,13 @@ from dbx.contract.models import (
     SourceInfo,
     TableEntry,
 )
-from dbx.contract.write import ANNDATA_ARRAY, anndata_dict_group, array, codecs
+from dbx.contract.write import ANNDATA_ARRAY, anndata_dict_group, array, codecs, consolidate
 from dbx.convert.matrix import ConversionError, CscWriter, GeneStats
 from dbx.data.genes import gene_list
 from dbx.data.reader import embedding_dims, parse_colors
-from dbx.inspect.models import AnnDataInfo, Fingerprint
+from dbx.inspect.core import dataset_id, version_stamp
+from dbx.inspect.models import AnnDataInfo, Fingerprint, MatrixInfo
 from dbx.logs import get_logger, timed
-from dbx.synth.anndata_gen import consolidate
 
 Progress = Callable[[str, float], None]
 TABLE = "table"  # a plain AnnData file has one table, named "table" (SPEC §2)
@@ -59,6 +61,7 @@ class ConvertOptions:
     x_source: str = "X"
     memory_bytes: int = 2 * 2**30
     tmp_dir: Path | None = None
+    job: int = 0  # job id, in the temporary folders' names (`c0.tmp-j<job>-…`)
 
 
 @dataclass
@@ -66,6 +69,19 @@ class Result:
     store: Path
     manifest: Manifest
     warnings: list[str] = field(default_factory=list)
+
+
+def table_memory_estimate(info: AnnDataInfo) -> int:
+    """Rough memory of obs and var read whole (they are outside the matrix budget): a pandas
+    index of strings plus the columns (text values counted at 64 bytes each)."""
+
+    def frame(n: int, cols: list[Any]) -> int:
+        per = 80  # index: one Python string per row
+        for c in cols:
+            per += {"categorical": 4, "numeric": 8, "boolean": 1}.get(c.kind, 64)
+        return n * per
+
+    return frame(info.n_obs, info.obs.columns) + frame(info.n_vars, info.var.columns)
 
 
 def store_dir(cache_dir: Path, version: str) -> Path:
@@ -97,8 +113,8 @@ def _open(path: Path, kind: str) -> tuple[Any, Any]:
     return zarr.open_group(path, mode="r"), None
 
 
-def _matrix_node(root: Any, info: AnnDataInfo, x_source: str) -> tuple[Any, str, list[int]]:
-    """The source matrix chosen as X, its encoding and shape."""
+def _matrix_node(root: Any, info: AnnDataInfo, x_source: str) -> tuple[Any, str, list[int], bool]:
+    """The source matrix chosen as X, its encoding and shape, and whether it is raw/X."""
     if x_source == "X":
         m, node = info.X, root.get("X")
         if m is None and info.raw is not None:  # SPEC §4.2: raw/X when X is missing
@@ -114,7 +130,7 @@ def _matrix_node(root: Any, info: AnnDataInfo, x_source: str) -> tuple[Any, str,
         raise ConversionError("unknown_matrix", f"no matrix {x_source}")
     if len(m.shape) != 2 or m.shape[0] != info.n_obs:
         raise ConversionError("matrix_shape", "the matrix does not have one row per cell")
-    return node, m.encoding, list(m.shape)
+    return node, m.encoding, list(m.shape), x_source == "raw/X"
 
 
 def convert_anndata(
@@ -131,50 +147,76 @@ def convert_anndata(
         raise ConversionError("legacy_layout", "files written by anndata < 0.8 are not supported")
     log = get_logger("dbx.convert")
     t0 = time.monotonic()
-    final = store_dir(cache_dir, fp.dataset_id)
-    tmp = final.parent / f"{final.name}.tmp-{uuid.uuid4().hex[:8]}"
-    work = (opts.tmp_dir or cache_dir / "tmp") / tmp.name
+    version = fp.dataset_id
+    stamp = version_stamp(src)
+    if dataset_id(src, stamp) != version:
+        raise ConversionError("source_changed", "the file changed since it was inspected")
+    final = store_dir(cache_dir, version)
+    tmp = final.parent / f"{final.name}.tmp-j{opts.job}-{uuid.uuid4().hex[:8]}"
+    spill_root = opts.tmp_dir or cache_dir / "tmp"
+    work = spill_root / tmp.name
     prog = StageProgress(progress)
     warnings: list[str] = []
+    node_info = _matrix_info(info, opts.x_source)
+    _check_disk(final.parent, spill_root, node_info, version, log)
     root, handle = _open(src, fp.kind)
     try:
         tmp.mkdir(parents=True)
         store = zarr.open_group(tmp, mode="w")
         store.attrs["dbx"] = {"contract_version": CONTRACT_VERSION}
-        with timed("convert/read_obs_var", dataset_id=fp.dataset_id) as extra:
+        node, encoding, shape, from_raw = _matrix_node(root, info, opts.x_source)
+        with timed("convert/read_obs_var", version=version) as extra:
             obs: pd.DataFrame = read_elem(root["obs"])
-            var: pd.DataFrame = read_elem(root["var"])
-            extra.update(n_obs=len(obs), n_vars=len(var), obs_columns=len(obs.columns))
-        node, encoding, shape = _matrix_node(root, info, opts.x_source)
+            # raw/X has its own genes: always raw's var, also when the counts happen to match
+            var: pd.DataFrame = read_elem(root["raw"]["var"] if from_raw else root["var"])
+            extra.update(
+                n_obs=len(obs),
+                n_vars=len(var),
+                obs_columns=len(obs.columns),
+                estimate_bytes=table_memory_estimate(info),
+            )
         if shape[1] != len(var):
-            if opts.x_source == "raw/X" or (opts.x_source == "X" and info.X is None):
-                var = read_elem(root["raw"]["var"])
-            else:
-                raise ConversionError(
-                    "matrix_shape", "the matrix does not have one column per gene"
-                )
+            raise ConversionError("matrix_shape", "the matrix does not have one column per gene")
         uns = _colours(root, obs, warnings)
         prog("read", 1.0)
 
         # ---- the AnnData skeleton: obs, var, colours (X and obsm are written below)
         tpath = tmp / "tables" / TABLE
         store.require_group("tables")
-        ad.AnnData(obs=obs, var=var, uns=uns).write_zarr(tpath)
+        with timed("convert/write_obs_var", version=version):
+            # strings stay strings ("values are never changed, only re-laid-out")
+            ad.AnnData(obs=obs, var=var, uns=uns).write_zarr(
+                tpath, convert_strings_to_categoricals=False
+            )
         tg = zarr.open_group(tpath, mode="a", use_consolidated=False)
-        embeddings, spatial = _obsm(root, info, tg, warnings, lambda f: prog("obsm", f))
+        with timed("convert/obsm", version=version) as extra:
+            embeddings, spatial = _obsm(root, info, tg, warnings, lambda f: prog("obsm", f))
+            extra.update(n_embeddings=len(embeddings) + len(spatial))
 
         # ---- X as gene-major CSC, with gene statistics
-        with timed("convert/x", dataset_id=fp.dataset_id, encoding=encoding) as extra:
-            writer = CscWriter(node, encoding, (shape[0], shape[1]), opts.memory_bytes, work, prog)
+        with timed(
+            "convert/x", version=version, encoding=encoding, source_dtype=node_info.dtype
+        ) as extra:
+            writer = CscWriter(
+                node,
+                encoding,
+                (shape[0], shape[1]),
+                opts.memory_bytes,
+                work,
+                prog,
+                source_dtype=node_info.dtype,
+            )
             if "X" in tg:
                 del tg["X"]
             stats = writer.write(tg.create_group("X"))
             nnz = writer.nnz
-            extra.update(nnz=nnz)
+            extra.update(nnz=nnz, **writer.facts)
         warnings += stats.warnings
         dbxg = anndata_dict_group(tg["uns"], "dbx")  # type: ignore[arg-type]
         _gene_stats(dbxg, stats)
-        sizes = _downsample(dbxg, obs, uns)
+        with timed("convert/downsample", version=version) as extra:
+            sizes = _downsample(dbxg, obs, uns)
+            extra.update(sizes=sizes)
         prog("finish", 0.3)
 
         # ---- manifest, consolidation, validation, publish
@@ -202,7 +244,7 @@ def convert_anndata(
                     n_obs=shape[0],
                     n_vars=shape[1],
                     nnz=nnz,
-                    x_source=opts.x_source if opts.x_source != "X" or info.X else "raw/X",
+                    x_source="raw/X" if from_raw else opts.x_source,
                     embeddings=embeddings,
                     spatial_keys=spatial,
                     categorical={
@@ -225,16 +267,17 @@ def convert_anndata(
             },
         )
         (tmp / MANIFEST).write_text(json.dumps(manifest.model_dump(mode="json"), indent=2))
-        with timed("convert/validate", dataset_id=fp.dataset_id) as extra:
+        with timed("convert/validate", version=version) as extra:
             report = validate_store(tmp, deep=True)
             extra.update(errors=len(report.errors), warnings=len(report.warnings))
         if not report.ok:
-            log.error("store_invalid", dataset_id=fp.dataset_id, errors=report.errors[:20])
+            # the messages name columns and elements: a name field (tokenised at strict)
+            log.error("store_invalid", version=version, details=report.errors[:20])
             raise ConversionError("store_invalid", "the converted store failed validation")
+        if version_stamp(src) != stamp:
+            raise ConversionError("source_changed", "the file changed during the conversion")
         prog("finish", 0.9)
-        if final.exists():
-            shutil.rmtree(final)
-        tmp.rename(final)
+        _publish(tmp, final)
         prog("finish", 1.0)
         return Result(final, manifest, warnings)
     except BaseException:
@@ -244,6 +287,66 @@ def convert_anndata(
         shutil.rmtree(work, ignore_errors=True)
         if handle is not None:
             handle.close()
+
+
+def _publish(tmp: Path, final: Path) -> None:
+    """Move the new store in place; an existing one is renamed aside first and removed after,
+    so readers never see a half-replaced store."""
+    old = None
+    if final.exists():
+        old = final.parent / f"{final.name}.old-{uuid.uuid4().hex[:8]}"
+        final.rename(old)
+    tmp.rename(final)
+    if old is not None:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _matrix_info(info: AnnDataInfo, x_source: str) -> MatrixInfo:
+    if x_source == "X" and info.X is None and info.raw is not None:
+        return info.raw
+    m = {"X": info.X, "raw/X": info.raw}.get(x_source)
+    if x_source.startswith("layers/"):
+        m = info.layers.get(x_source.split("/", 1)[1])
+    if m is None:
+        raise ConversionError("unknown_matrix", "the dataset has no such matrix")
+    return m
+
+
+# Spill files and the store per stored value (12 bytes of spill records; the store compresses
+# to well under 8 bytes per value), with a margin.
+SPILL_BYTES_PER_VALUE = 12
+STORE_BYTES_PER_VALUE = 8
+DISK_MARGIN = 1.1
+
+
+def _check_disk(
+    store_parent: Path, spill_root: Path, m: MatrixInfo, version: str, log: Any
+) -> None:
+    """Refuse to start when the cache or the spill folder lacks the space the job needs."""
+    n_obs, n_vars = m.shape
+    values = (m.nnz or 0) if m.encoding != "dense" else n_obs * n_vars
+    spill = 0 if m.encoding == "csc" else int(values * SPILL_BYTES_PER_VALUE * DISK_MARGIN)
+    store = int(values * STORE_BYTES_PER_VALUE * DISK_MARGIN)
+    store_parent.mkdir(parents=True, exist_ok=True)
+    spill_root.mkdir(parents=True, exist_ok=True)
+    same = os.stat(store_parent).st_dev == os.stat(spill_root).st_dev
+    needs = {store_parent: store + (spill if same else 0)}
+    if not same:
+        needs[spill_root] = spill
+    for path, need in needs.items():
+        free = shutil.disk_usage(path).free
+        log.info(
+            "convert_disk",
+            version=version,
+            need_bytes=need,
+            free_bytes=free,
+            spill=path == spill_root,
+        )
+        if free < need:
+            raise ConversionError(
+                "not_enough_disk",
+                f"needs {need / 2**30:.1f} GB free, {free / 2**30:.1f} GB available",
+            )
 
 
 def _colours(root: Any, obs: pd.DataFrame, warnings: list[str]) -> dict[str, Any]:
@@ -287,8 +390,11 @@ def _obsm(
     out: dict[str, int] = {}
     for k, (key, dims) in enumerate(keys.items()):
         node = root["obsm"][key]
-        if not hasattr(node, "shape"):  # a data frame
-            warnings.append("obsm_frame_skipped")
+        if not hasattr(node, "shape"):  # a data frame or a sparse matrix
+            kind = dict(getattr(node, "attrs", {})).get("encoding-type", "")
+            warnings.append(
+                "obsm_sparse_skipped" if "matrix" in str(kind) else "obsm_frame_skipped"
+            )
             continue
         a = obsm.create_array(
             key,
@@ -318,34 +424,38 @@ def _gene_stats(dbxg: zarr.Group, stats: GeneStats) -> None:
 
 def downsample_indices(n_obs: int, n: int, groups: np.ndarray | None, seed: int = 0) -> np.ndarray:
     """`n` sorted cell indices; stratified by `groups` (codes, -1 = none) so every group keeps
-    at least one cell, proportionally otherwise; uniform without groups."""
+    at least one cell, proportionally otherwise; uniform without groups. With more groups than
+    `n`, one cell from each of the `n` largest groups."""
     rng = np.random.default_rng(seed)
+    n = min(n, n_obs)
     if groups is None:
         return np.sort(rng.choice(n_obs, size=n, replace=False))
     codes = np.asarray(groups, dtype=np.int64) + 1  # missing → group 0
     counts = np.bincount(codes)
-    present = counts > 0
-    want = counts * (n / n_obs)
-    quota = np.floor(want).astype(np.int64)
-    quota[present & (quota == 0)] = 1
-    quota = np.minimum(quota, counts)
-    short = n - int(quota.sum())
-    if short > 0:  # largest remainders first, within each group's size
-        room = counts - quota
+    present = np.flatnonzero(counts)
+    quota = np.zeros(len(counts), dtype=np.int64)
+    if len(present) >= n:
+        quota[present[np.argsort(-counts[present], kind="stable")[:n]]] = 1
+    else:
+        want = counts * (n / n_obs)
+        quota = np.minimum(np.maximum(np.floor(want).astype(np.int64), (counts > 0)), counts)
+        short = n - int(quota.sum())
+        # add by largest remainder (where room is left), or take back from the largest groups
         order = np.argsort(-(want - np.floor(want)), kind="stable")
-        for g in order:
-            if short == 0:
-                break
-            take = int(min(room[g], short))
-            quota[g] += take
-            short -= take
-    elif short < 0:  # the "at least one" rule overshot: take back from the largest
-        for g in np.argsort(-quota):
-            give = int(min(quota[g] - 1, -short))
-            quota[g] -= give
-            short += give
-            if short == 0:
-                break
+        while short > 0:
+            for g in order:
+                if short == 0:
+                    break
+                if quota[g] < counts[g]:
+                    quota[g] += 1
+                    short -= 1
+        while short < 0:
+            for g in np.argsort(-quota, kind="stable"):
+                if short == 0:
+                    break
+                if quota[g] > 1:
+                    quota[g] -= 1
+                    short += 1
     order = np.argsort(codes, kind="stable")
     bounds = np.concatenate([[0], np.cumsum(counts)])
     picked = [
@@ -356,17 +466,29 @@ def downsample_indices(n_obs: int, n: int, groups: np.ndarray | None, seed: int 
     return np.sort(np.concatenate(picked)) if picked else np.zeros(0, np.int64)
 
 
+# Names that usually hold the main annotation (cell type, cluster): the column the subsets are
+# stratified by, as the browser's default colouring prefers them.
+_ANNOTATION = re.compile(r"cell.?type|annotation|cluster|leiden|louvain", re.I)
+
+
+def annotation_column(columns: list[tuple[str, int, bool]]) -> str | None:
+    """The categorical column to stratify by, from (name, categories, has colours): cell type /
+    cluster names first, then coloured columns, among those with 2–5,000 categories."""
+    usable = [c for c in columns if 1 < c[1] <= 5_000]
+    rank = lambda c: (0 if _ANNOTATION.search(c[0]) else 2) + (0 if c[2] else 1)  # noqa: E731
+    return min(usable, key=rank)[0] if usable else None
+
+
 def _downsample(dbxg: zarr.Group, obs: pd.DataFrame, uns: dict[str, Any]) -> list[int]:
     n_obs = len(obs)
     if n_obs <= DOWNSAMPLE_THRESHOLD:
         return []
-    by = next(
-        (
-            c
+    by = annotation_column(
+        [
+            (str(c), len(obs[c].cat.categories), f"{c}_colors" in uns)
             for c in obs.columns
-            if isinstance(obs[c].dtype, pd.CategoricalDtype) and f"{c}_colors" in uns
-        ),
-        None,
+            if isinstance(obs[c].dtype, pd.CategoricalDtype)
+        ]
     )
     groups = obs[by].cat.codes.to_numpy() if by else None
     g = anndata_dict_group(dbxg, "downsample")

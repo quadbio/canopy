@@ -14,7 +14,7 @@ import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event, reportEnvironment } from '../telemetry/telemetry';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { type Cell, fitBounds, gridCells, type OrthoState, resizeView } from './layout';
-import { useLod, visibleShare } from './lod';
+import { allowances, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { type Bounds, type ViewOutput, viewType } from './registry';
 
@@ -26,10 +26,11 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
   const t = viewType(spec.type)!;
   const out = t.useView(spec);
   const publish = useViewOutputs((s) => s.publish);
+  // `tooltip` changes together with `layers` (the drawn order), so it is not listed.
   useEffect(
     () => publish(spec.id, out),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.problem?.message, out.legend, out.caption],
+    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.problem?.message, out.legend, out.caption, out.total],
   );
   return null;
 });
@@ -229,6 +230,7 @@ export function Canvas() {
 
   // How much of each view's data is on screen, for level of detail (views/lod.ts).
   const setVisible = useLod((s) => s.setVisible);
+  const setAllowance = useLod((s) => s.setAllowance);
   const forgetLod = useLod((s) => s.forget);
   useEffect(() => {
     views.forEach((v, i) => {
@@ -237,7 +239,19 @@ export function Canvas() {
       if (b && st && cells[i]) setVisible(v.id, visibleShare(b, cells[i].width, cells[i].height, st.zoom));
     });
   }, [views, outputs, viewStates, cells, setVisible]);
-  useEffect(() => () => views.forEach((v) => forgetLod(v.id)), [views, forgetLod]);
+  // One point budget for the whole canvas, shared by the views in proportion to their cells.
+  const totalsKey = views.map((v) => `${v.id}:${outputs[v.id]?.total ?? 0}`).join(',');
+  useEffect(() => {
+    setAllowance(allowances(Object.fromEntries(views.map((v) => [v.id, outputs[v.id]?.total ?? 0]))));
+  }, [totalsKey, setAllowance]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Forget the views that were closed (only those).
+  const openIds = useRef<string[]>([]);
+  useEffect(() => {
+    const now = views.map((v) => v.id);
+    const gone = openIds.current.filter((id) => !now.includes(id));
+    if (gone.length) forgetLod(gone);
+    openIds.current = now;
+  }, [views, forgetLod]);
 
   // The current zoom of each view as a data attribute (for tests and debugging; no re-render).
   useEffect(() => {

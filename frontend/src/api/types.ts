@@ -145,9 +145,11 @@ export interface Job {
   finished: number | null;
   error: string | null;
   result: Record<string, unknown> | null;
+  info: Record<string, unknown> | null; // e.g. memory numbers while waiting
 }
 
 export interface Conversion {
   converted: boolean;
+  x_source: string | null; // which matrix the converted copy holds
   job: Job | null;
 }

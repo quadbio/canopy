@@ -193,9 +193,15 @@ def test_convert_job_end_to_end(cfg: Config) -> None:
     assert detail["conversion"]["converted"] and detail["conversion"]["job"]["id"] == job["id"]
     after = c.get(f"/api/datasets/{id}/meta").json()
     assert after["mode"] == "converted"
-    assert [(m["name"], m["encoding"], m["access"]) for m in after["matrices"]] == [
-        ("X", "csc", "direct")
+    # X from the store; the source's layer stays available as before (served from the file)
+    assert [(m["name"], m["encoding"], m["access"], m["converted"]) for m in after["matrices"]] == [
+        ("X", "csc", "direct", True),
+        ("counts", "csr", "memory", False),
     ]
+    rc = c.get(f"/api/datasets/{id}/gene", params={"i": 4, "matrix": "counts"})
+    np.testing.assert_array_equal(
+        decode(rc.content, dict(rc.headers)), dense(a.layers["counts"])[:, 4]
+    )
     r = c.get(f"/api/datasets/{id}/gene", params={"i": 9})
     np.testing.assert_array_equal(decode(r.content, dict(r.headers)), dense(a.X)[:, 9])
     obs = c.get(f"/api/datasets/{id}/obs", params={"column": "cluster"})
@@ -284,3 +290,204 @@ def test_a_store_subset_is_read_from_the_store(tmp_path: Path) -> None:
     got = src.stored_subset(1000)
     assert got is not None and got[1] == 2
     assert src.stored_subset(5) is None
+
+
+# ---------------------------------------------------------------- review S5b fixes (R5)
+
+
+def test_strict_job_logs_name_no_layer(cfg: Config) -> None:
+    from dbx.config import LoggingConfig
+    from dbx.logs import setup_logging
+
+    cfg.logging = LoggingConfig(dir=cfg.logging.dir, privacy="strict", memory_sample_interval=0)
+    setup_logging(cfg.logging, role="test", salt="s", to_console=False)
+    a = source(cfg.data_roots[0].path / "m.h5ad")
+    a.layers["SECRETLAYER"] = a.layers["counts"]
+    a.write_h5ad(cfg.data_roots[0].path / "m.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "m.h5ad")
+    job = c.post(f"/api/datasets/{id}/convert", json={"x_source": "layers/SECRETLAYER"}).json()
+    assert _wait(c, job["id"], c.app)["state"] == "done"
+    text = "".join(f.read_text() for f in (cfg.logging.dir or Path()).glob("*.jsonl"))
+    assert "SECRETLAYER" not in text and "job_done" in text
+
+
+def test_leftovers_of_dead_jobs_are_removed_and_disk_is_checked(
+    cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from dbx.convert import anndata as conv
+    from dbx.jobs.manager import JobManager
+
+    stale = cfg.cache_dir / "v1" / "c0.tmp-j99-abcd"
+    spill = cfg.cache_dir / "tmp" / "c0.tmp-j99-abcd"
+    for d in (stale, spill):
+        d.mkdir(parents=True)
+        (d / "bucket-00000").write_bytes(b"x" * 1000)
+    db = JobsDB(cfg.cache_dir / DB_FILE, wal=False)
+    live = db.add("convert", "d", "v2", {}, "/x", "{}")
+    db.claim(live, os.getpid())  # this test process plays a running worker
+    kept = cfg.cache_dir / "v2" / f"c0.tmp-j{live}-ffff"
+    kept.mkdir(parents=True)
+    JobManager(cfg, wal=False)
+    assert not stale.exists() and not spill.exists() and kept.exists()
+    assert any(e["event"] == "tmp_removed" for e in log_events())
+    # not enough disk: refused before anything is written
+    src = tmp_path / "src.h5ad"
+    source(src)
+    monkeypatch.setattr(conv.shutil, "disk_usage", lambda p: type("U", (), {"free": 10})())
+    with pytest.raises(ConversionError) as e:
+        convert_anndata(
+            src, inspect_path(src), tmp_path / "cache", ConvertOptions(), lambda s, f: None
+        )
+    assert e.value.code == "not_enough_disk"
+
+
+def test_dead_or_silent_workers_are_interrupted_and_stopped_jobs_requeued(cfg: Config) -> None:
+    import os
+
+    db = JobsDB(cfg.cache_dir / DB_FILE, wal=False)
+    a = db.add("convert", "d", "v", {}, "/x", "{}")
+    db.claim(a, os.getpid())
+    db.update(a, heartbeat=time.time() - 3600)  # alive but silent for an hour
+    b = db.add("convert", "d2", "v2", {}, "/x", "{}")
+    db.claim(b, os.getpid())
+    db.update(b, pid_start=1.0)  # the pid now belongs to another process
+    c = db.add("convert", "d3", "v3", {}, "/x", "{}")
+    db.update(c, state="interrupted", error="server_stopped")
+    assert set(db.mark_interrupted()) == {a, b}
+    assert db.get(a).error == "no_heartbeat" and db.get(b).error == "interrupted"  # type: ignore[union-attr]
+    assert db.requeue_stopped() == [c] and db.get(c).state == "queued"  # type: ignore[union-attr]
+
+
+def test_one_server_per_cache(cfg: Config) -> None:
+    import subprocess
+    import sys
+
+    from dbx.jobs.manager import lock_cache
+
+    lock_cache(cfg.cache_dir)
+    code = (
+        "import sys; from pathlib import Path\n"
+        "from dbx.jobs.manager import lock_cache, CacheInUseError\n"
+        "try:\n lock_cache(Path(sys.argv[1]))\nexcept CacheInUseError:\n sys.exit(7)"
+    )
+    r = subprocess.run([sys.executable, "-c", code, str(cfg.cache_dir)], check=False)
+    assert r.returncode == 7
+
+
+def test_a_converted_dataset_is_not_converted_again_unless_forced(cfg: Config) -> None:
+    source(cfg.data_roots[0].path / "m.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "m.h5ad")
+    first = c.post(f"/api/datasets/{id}/convert", json={}).json()
+    other = c.post(f"/api/datasets/{id}/convert", json={"x_source": "layers/counts"})
+    assert other.status_code == 409 and other.json()["detail"]["code"] == "conversion_running"
+    assert _wait(c, first["id"], c.app)["state"] == "done"
+    again = c.post(f"/api/datasets/{id}/convert", json={})
+    assert again.status_code == 409 and again.json()["detail"]["code"] == "already_converted"
+    forced = c.post(
+        f"/api/datasets/{id}/convert", json={"x_source": "layers/counts", "force": True}
+    ).json()
+    assert _wait(c, forced["id"], c.app)["state"] == "done"
+    detail = c.get(f"/api/catalog/datasets/{id}").json()["conversion"]
+    assert detail["converted"] and detail["x_source"] == "layers/counts"
+    # the new store is described (counts converted; X from the source file)
+    names = {
+        m["name"]: m["converted"] for m in c.get(f"/api/datasets/{id}/meta").json()["matrices"]
+    }
+    assert names == {"counts": True, "X": False}
+
+
+def test_raw_x_uses_raw_var_and_strings_stay_strings(tmp_path: Path) -> None:
+    n, g = 50, 8
+    rng = np.random.default_rng(0)
+    a = ad.AnnData(X=sparse.csr_matrix(rng.random((n, g), dtype=np.float32)))
+    a.var_names = [f"g{i}" for i in range(g)]
+    a.raw = ad.AnnData(
+        X=sparse.csr_matrix(rng.random((n, g), dtype=np.float32)),
+        var=pd.DataFrame(index=[f"g{i}" for i in reversed(range(g))]),
+    )
+    a.obs["text"] = [["y", "x"][i % 2] for i in range(n)]
+    src = tmp_path / "raw.h5ad"
+    a.write_h5ad(src, convert_strings_to_categoricals=False)
+    r = convert_anndata(
+        src,
+        inspect_path(src),
+        tmp_path / "cache",
+        ConvertOptions(x_source="raw/X"),
+        lambda s, f: None,
+    )
+    b = ad.read_zarr(r.store / "tables" / "table")
+    assert list(b.var_names) == [f"g{i}" for i in reversed(range(g))]
+    np.testing.assert_array_equal(dense(b.X), dense(a.raw.X))
+    assert not isinstance(b.obs["text"].dtype, pd.CategoricalDtype)
+    assert "text" not in r.manifest.tables["table"].categorical
+
+
+def test_conversion_warns_about_non_finite_and_large_integers(tmp_path: Path) -> None:
+    x = np.zeros((40, 3), dtype=np.int64)
+    x[0, 0] = 123_456_789
+    a = ad.AnnData(X=sparse.csr_matrix(x))
+    src = tmp_path / "big.h5ad"
+    a.write_h5ad(src)
+    r = convert_anndata(
+        src, inspect_path(src), tmp_path / "cache", ConvertOptions(), lambda s, f: None
+    )
+    assert "integers_above_2_24" in r.warnings
+    y = np.zeros((40, 3), dtype=np.float32)
+    y[1, 1] = np.nan
+    src2 = tmp_path / "nan.h5ad"
+    ad.AnnData(X=sparse.csr_matrix(y)).write_h5ad(src2)
+    r2 = convert_anndata(
+        src2, inspect_path(src2), tmp_path / "cache", ConvertOptions(), lambda s, f: None
+    )
+    assert "non_finite_values:1" in r2.warnings
+
+
+def test_a_source_changed_since_inspection_is_refused(tmp_path: Path) -> None:
+    import os
+
+    src = tmp_path / "src.h5ad"
+    source(src)
+    fp = inspect_path(src)
+    os.utime(src, (time.time() + 5, time.time() + 5))
+    with pytest.raises(ConversionError) as e:
+        convert_anndata(src, fp, tmp_path / "cache", ConvertOptions(), lambda s, f: None)
+    assert e.value.code == "source_changed"
+
+
+def test_downsampling_with_more_groups_than_cells_to_keep() -> None:
+    groups = np.repeat(np.arange(100), 3)
+    idx = downsample_indices(len(groups), 64, groups)
+    assert len(idx) == 64 and len(np.unique(groups[idx])) == 64
+    sparse_codes = np.concatenate([np.zeros(10, int), np.full(5, 7)])  # categories 1–6 unused
+    assert len(downsample_indices(len(sparse_codes), 1, sparse_codes)) == 1
+    assert len(downsample_indices(len(sparse_codes), 12, sparse_codes)) == 12
+
+
+def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
+    from typer.testing import CliRunner
+
+    from dbx.cli import app as cli
+
+    source(cfg.data_roots[0].path / "m.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "m.h5ad")
+    job = c.post(f"/api/datasets/{id}/convert", json={}).json()
+    assert _wait(c, job["id"], c.app)["state"] == "done"
+    old = cfg.cache_dir / "0123456789abcdef" / "c0"
+    old.mkdir(parents=True)
+    (old / "manifest.json").write_text("{}")
+    conf = cfg.cache_dir.parent / "dbx.toml"
+    conf.write_text(
+        f'cache_dir = "{cfg.cache_dir}"\n[[data_roots]]\nname = "data"\n'
+        f'path = "{cfg.data_roots[0].path}"\n[logging]\ndir = "{cfg.logging.dir}"\n'
+    )
+    # the test's own server holds the cache lock in this process, so prune may run here
+    out = CliRunner().invoke(cli, ["cache", "prune", "--config", str(conf)])
+    assert out.exit_code == 0, out.output
+    assert not old.parent.exists()
+    version = c.get(f"/api/catalog/datasets/{id}").json()["version"]
+    assert has_store(cfg.cache_dir, version)
