@@ -68,12 +68,25 @@ with `DBX_DEMO_PORT=8766 pixi run -e dev demo` and open `http://127.0.0.1:8766`.
 | 8 | **Embedding** → `X_pca`, then pick dimensions, e.g. x = 3, y = 4 | The plot changes to the chosen PCA components and is refitted. |
 | 9 | Move **Point size** and **Opacity** | The points change as you drag. |
 | 10 | Click **dissociated.h5ad**, **Open** | A second view; both share the canvas side by side and each fits its own data. |
-| 11 | Click **202302171205_region_1…**; under **Table** choose `table_cells` (or the other table); **Open** | A third view from the SpatialData table's UMAP, coloured by its cluster column (e.g. `leiden_1.0`). |
-| 12 | Open **region_3** too, then click each view's title | Four views in a 2 × 2 grid; legends start folded in small views (click the legend title to unfold); the right panel follows the selected view. |
+| 11 | Click **202302171205_region_1…**; under **Table** choose `table_cells`; **Open** | A third view: the UMAP of the segmented cells of this spatial dataset, coloured by its cluster column (e.g. `leiden_1.0`). A spatial dataset can hold several tables, one per kind of object (here cells and tiles); hover the **?** next to *Table* for the explanation. |
+| 12 | Open **region_3** too, so that **four plots** are open; then click each plot's title | The centre shows the four plots in a 2 × 2 grid; legends start folded in small plots (click the legend title to unfold); the right panel shows the settings of the plot whose title you clicked. |
 | 13 | Zoom into one view, then close another with **×** | The grid rearranges; the view you zoomed keeps its place, untouched views refit. **⤢** (next to ×) fits a view to its data again. |
-| 14 | Reload the page (Cmd+R) | The same views come back, with your settings. |
+| 14 | Reload the browser page (Cmd+R) | The same plots come back, with your settings. (A plot you close with × is gone: opening that dataset again starts from the default settings.) |
 | 15 | Click **Theme** (auto → light → dark) | The whole app switches between light and dark. |
 | 16 | Click **Refresh** (top right) | "Scanning…" briefly, then a new "Indexed" time. |
+
+## 3b. Optional: larger datasets
+
+The examples are small (at most 52 k cells), so they say little about speed. To try 1 M and 3 M
+cells (synthetic: 40 clusters, made up on this Mac, about 1.1 GB, generated once in ~1 minute):
+
+```bash
+DBX_DEMO_LARGE=1 pixi run -e dev demo
+```
+
+A third folder, **synthetic**, appears. Measured on this MacBook (M2, Chrome): open → picture in
+about 0.5 s for both; panning is smooth when zoomed in, but with all 3 M cells on screen it drops
+to about 15 frames per second (S5 adds drawing a representative subset when zoomed out).
 
 ## 4. Not built yet (please don't report these as missing)
 

@@ -101,8 +101,19 @@ def write_anndata(
         obs = _frame(spec.obs, spec.n_obs, "cell", spec.obs_index_name, rng)
         var = _frame(spec.var, spec.n_vars, "gene", spec.var_index_name, rng)
         adata = ad.AnnData(obs=obs, var=var)
+        # Embeddings: one blob per category of the first categorical column, so a plot of them
+        # looks like clusters (and the colours line up with them).
+        groups = next(
+            (obs[c.name].cat.codes.to_numpy() for c in spec.obs if c.kind == "categorical"), None
+        )
         for name, dims in spec.obsm.items():
-            adata.obsm[name] = rng.normal(size=(spec.n_obs, dims)).astype("float32")
+            emb = rng.normal(size=(spec.n_obs, dims)).astype("float32")
+            if groups is not None:
+                centres = rng.normal(scale=6.0, size=(int(groups.max()) + 1, dims)).astype(
+                    "float32"
+                )
+                emb += centres[groups]
+            adata.obsm[name] = emb
         for c in spec.obs:
             if c.kind == "categorical" and c.colors:
                 adata.uns[f"{c.name}_colors"] = _palette(len(obs[c.name].cat.categories), rng)

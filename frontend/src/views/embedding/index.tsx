@@ -301,7 +301,15 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
 
   return (
     <div className="panel-fields">
-      <Field label="Embedding">
+      <Field
+        label="Embedding"
+        help={
+          <p>
+            The cell coordinates stored with the dataset (in <code>obsm</code>), e.g. a UMAP, t-SNE or PCA. Those with more
+            than two dimensions let you choose which two to plot.
+          </p>
+        }
+      >
         <Select
           label="Embedding"
           testId="embedding-select"

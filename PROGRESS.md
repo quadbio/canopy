@@ -132,3 +132,15 @@ Resume rule: read this file, then continue with the first unchecked step.
     view contract, per-type view options) before S6.
   - Next: user tries the demo (docs/demo/S4-demo-guide.md) and sends feedback; then S5.
 
+- 2026-10-11 S4 demo feedback (docs/demo/feedback-S4.md): all 16 steps worked, no correctness
+  issue. Batch F1 (triage: docs/demo/S4-feedback-triage.md): `?` help (Radix Tooltip) for Table
+  and Embedding; table hint (rows, annotated region); dataset notes in plain language with
+  take-home (ui/notes.tsx); guide steps 11/12/14 reworded; `DBX_DEMO_LARGE=1` adds synthetic 1M/3M
+  h5ad; synth embeddings clustered by the first categorical column. 8 e2e tests.
+  - Measured (Chrome, M2 GPU via ANGLE Metal): 1M/3M open -> ready 0.45/0.41 s; idle 58 fps;
+    3M zoomed out ~60 ms/frame at 1440x900 (144 ms at 720x450: overdraw), zoomed in ~18 ms.
+    Headless software GL is not representative (3M first draw 49 s).
+  - Planned: R2 now also covers palette choice for categories and more colour maps; S5 subset
+    drawing when zoomed out (frame budget target: 3M cells, zoomed out, < 20 ms).
+  - Open question to user: remember last view settings per dataset on re-open?
+  - Next: S5, starting with R2.

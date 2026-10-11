@@ -10,7 +10,8 @@ import type { DatasetEntry } from '../api/types';
 import { MAX_VIEWS, useWorkspace } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { viewTypes } from '../views/registry';
-import { formatBytes, formatCount } from './controls';
+import { formatBytes, formatCount, Help } from './controls';
+import { DatasetNotes, type Notice } from './notes';
 
 const KIND_LABEL: Record<string, string> = { h5ad: 'h5ad', anndata_zarr: 'zarr', spatialdata_zarr: 'spatial' };
 
@@ -67,6 +68,17 @@ function Folder({ root, path, name, depth, count }: { root: string; path: string
   );
 }
 
+/** "6.1 k rows · one per object in boundaries_cells" */
+function describeTable(
+  sd: { tables?: Record<string, { n_obs?: number }>; table_refs?: Record<string, { region?: string[] }> } | undefined,
+  table: string,
+): string {
+  const n = sd?.tables?.[table]?.n_obs;
+  const region = sd?.table_refs?.[table]?.region ?? [];
+  const parts = [n !== undefined ? `${formatCount(n)} rows` : null, region.length ? `one per object in ${region.join(', ')}` : null];
+  return parts.filter(Boolean).join(' · ');
+}
+
 function Details({ id }: { id: string }) {
   const q = useDatasetDetail(id);
   const addView = useWorkspace((s) => s.addView);
@@ -77,7 +89,13 @@ function Details({ id }: { id: string }) {
   if (!q.data) return <div className="details muted">{q.error ? String(q.error.message) : 'Loading…'}</div>;
   const d = q.data;
   const s = d.summary;
-  const fp = d.fingerprint as { spatialdata?: { tables?: Record<string, unknown> } } | null;
+  const fp = d.fingerprint as {
+    warnings?: Notice[];
+    spatialdata?: {
+      tables?: Record<string, { n_obs?: number }>;
+      table_refs?: Record<string, { region?: string[] }>;
+    };
+  } | null;
   const tables = Object.keys(fp?.spatialdata?.tables ?? {});
   const chosenTable = d.kind === 'spatialdata_zarr' ? (table ?? tables[0] ?? null) : null;
 
@@ -144,15 +162,31 @@ function Details({ id }: { id: string }) {
           </>
         )}
       </dl>
-      {tables.length > 1 && (
-        <label className="field">
-          <span className="field-label">Table</span>
-          <select className="native-select" value={chosenTable ?? ''} onChange={(e) => setTable(e.target.value)}>
+      {tables.length > 1 && chosenTable && (
+        <div className="field">
+          <span className="field-label">
+            Table
+            <Help label="About “Table”">
+              <p>
+                A spatial dataset can hold several tables. Each one lists a different kind of object with its own
+                measurements, one row per object: for example one row per segmented cell, or one row per tile (a
+                square bin of the tissue).
+              </p>
+              <p>Pick the table whose objects you want to plot. You can open the others as separate views.</p>
+            </Help>
+          </span>
+          <select
+            className="native-select"
+            aria-label="Table"
+            value={chosenTable}
+            onChange={(e) => setTable(e.target.value)}
+          >
             {tables.map((t) => (
               <option key={t}>{t}</option>
             ))}
           </select>
-        </label>
+          <span className="muted small">{describeTable(fp?.spatialdata, chosenTable)}</span>
+        </div>
       )}
       {d.state !== 'inspected' ? (
         <p className="error small">
@@ -164,18 +198,7 @@ function Details({ id }: { id: string }) {
         </button>
       )}
       {problem && <p className="error small">{problem}</p>}
-      {!!s.warnings?.length && (
-        <details className="small">
-          <summary>{s.warnings.length} notes</summary>
-          <ul>
-            {s.warnings.map((w) => (
-              <li key={w}>
-                <code>{w}</code>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      <DatasetNotes notices={fp?.warnings ?? []} />
     </div>
   );
 }

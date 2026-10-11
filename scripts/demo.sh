@@ -2,6 +2,7 @@
 # Start the demo on this Mac: builds the frontend, unpacks the example SpatialData archives
 # (once), and runs `dbx serve` on the example datasets. Stop with Ctrl+C.
 #   URL:   http://127.0.0.1:${DBX_DEMO_PORT:-8765}
+#   DBX_DEMO_LARGE=1 also generates synthetic 1 M and 3 M cell datasets (once; ~1.1 GB) to try speed.
 #   Logs:  .cache/demo/logs/        Index + cache: .cache/demo/cache/
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,6 +35,16 @@ for archive in sorted(src.glob("*.zarr.tar.gz")):
         tar.extractall(dst, filter="data")
 PY
 
+large="$repo/.cache/demo-large"
+if [ "${DBX_DEMO_LARGE:-0}" = "1" ]; then
+  echo "   Generating the synthetic large datasets (first run only, about a minute)…"
+  mkdir -p "$large"
+  for n in 1000000 3000000; do
+    f="$large/synthetic_$((n / 1000000))M_cells.h5ad"
+    [ -f "$f" ] || { dbx synth anndata "$f.part.h5ad" --n-obs "$n" --n-vars 300 --density 0.02 --n-clusters 40 >/dev/null && mv "$f.part.h5ad" "$f"; }
+  done
+fi
+
 echo "2/3 Building the frontend…"
 (cd "$repo/frontend" && pnpm build >/dev/null)
 
@@ -48,6 +59,8 @@ path = "$examples"
 [[data_roots]]
 name = "extracted"
 path = "$extracted"
+
+$( [ "${DBX_DEMO_LARGE:-0}" = "1" ] && printf '[[data_roots]]\nname = "synthetic"\npath = "%s"\n' "$large" )
 
 [server]
 host = "127.0.0.1"

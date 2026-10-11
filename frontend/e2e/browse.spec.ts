@@ -13,6 +13,25 @@ test('file browser lists the example datasets', async ({ page }) => {
   await expect(page.getByTestId('dataset-row')).toHaveCount(1);
 });
 
+test('dataset details explain tables and storage notes in plain words', async ({ page }) => {
+  await freshPage(page);
+  await page.getByTestId('dataset-row').filter({ hasText: 'region_1' }).click();
+  const details = page.getByTestId('details');
+  await expect(details).toContainText('one per object in boundaries_cells');
+  await details.locator('select').selectOption('table_tiles');
+  await expect(details).toContainText('one per object in boundaries_tiles');
+  await page.getByLabel('About “Table”').hover();
+  await expect(page.getByRole('tooltip')).toContainText('one row per object');
+  await page.mouse.move(800, 400, { steps: 5 });
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  const notes = page.getByTestId('dataset-notes');
+  await expect(notes).toContainText('nothing to do');
+  await notes.locator('summary').click();
+  await expect(notes).toContainText('Image without zoom levels');
+  await expect(notes).not.toContainText('single_level'); // codes are not shown
+  await page.screenshot({ path: 'test-results/screens/details-notes.png' });
+});
+
 test('open spatial.h5ad and colour its UMAP by cell type', async ({ page }) => {
   const errors = collectErrors(page);
   await freshPage(page);
