@@ -72,18 +72,34 @@ def _write_matrix(
     else:
         per_block = max(1, int(_BLOCK_VALUES / expected_per_row))
         blocks = mat.row_blocks(per_block)
-    first = next(blocks)
     if m.encoding == "dense":
-        dense_kw = dict(kw)
-        if m.chunk:
-            dense_kw["chunks"] = (min(m.chunk, n_obs), n_vars)
-        write_elem(group, key, first.toarray(), dataset_kwargs=dense_kw)
-        arr = group[key]
-        start = first.shape[0]
+        # The full-size array first (anndata's write_elem would fix its shape to the first
+        # block), then the blocks into it: X is streamed, never whole in memory.
+        chunks = (min(m.chunk, n_obs), n_vars) if m.chunk else None
+        if is_zarr:
+            arr = group.create_array(
+                key,
+                shape=(n_obs, n_vars),
+                dtype=m.dtype,
+                chunks=chunks or (min(n_obs, 65_536), n_vars),
+                **({"compressors": None} if m.compression == "none" else {}),
+            )
+        else:
+            arr = group.create_dataset(
+                key,
+                shape=(n_obs, n_vars),
+                dtype=m.dtype,
+                chunks=chunks,
+                compression=kw.get("compression"),
+            )
+        arr.attrs["encoding-type"] = "array"
+        arr.attrs["encoding-version"] = "0.2.0"
+        start = 0
         for blk in blocks:
             arr[start : start + blk.shape[0]] = blk.toarray()
             start += blk.shape[0]
         return
+    first = next(blocks)
     write_elem(group, key, first if m.encoding == "csr" else first.tocsc(), dataset_kwargs=kw)
     ds: Any = sparse_dataset(group[key])  # CSR and CSC datasets both support append
     for blk in blocks:
@@ -108,7 +124,7 @@ def write_anndata(
         )
         for name, dims in spec.obsm.items():
             emb = rng.normal(size=(spec.n_obs, dims)).astype("float32")
-            if groups is not None:
+            if groups is not None and len(groups):
                 centres = rng.normal(scale=6.0, size=(int(groups.max()) + 1, dims)).astype(
                     "float32"
                 )

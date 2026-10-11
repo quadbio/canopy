@@ -20,6 +20,8 @@ export interface ViewOutput {
   error?: string;
   /** A short note shown on the view, e.g. that a saved setting no longer applies. */
   notice?: string;
+  /** A part of the view failed (e.g. its colouring), the rest is still shown; with a retry. */
+  problem?: { message: string; retry?: () => void };
   tooltip?: (index: number) => string | null;
   /** Number of items drawn, for telemetry. */
   n?: number;

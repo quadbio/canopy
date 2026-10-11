@@ -66,6 +66,45 @@ export async function drawnColours(
 /** Colours covering at least `min` of the drawn pixels. */
 export const mainColours = (c: Record<string, number>, min = 0.005) => Object.keys(c).filter((k) => c[k] >= min);
 
+/** Share of drawn pixels within `tol` (sum of channel differences) of an RGB colour. */
+export async function colourShare(
+  page: Page,
+  target: Locator,
+  rgb: [number, number, number],
+  tol = 60,
+  clip?: { x0: number; x1: number },
+): Promise<number> {
+  const png = (await target.screenshot()).toString('base64');
+  return page.evaluate(
+    async ({ png, rgb, tol, clip }) => {
+      const blob = await (await fetch(`data:image/png;base64,${png}`)).blob();
+      const bmp = await createImageBitmap(blob);
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const ctx = c.getContext('2d')!;
+      ctx.drawImage(bmp, 0, 0);
+      const x0 = Math.round((clip?.x0 ?? 0) * bmp.width);
+      const x1 = Math.round((clip?.x1 ?? 1) * bmp.width);
+      const top = 40;
+      const { data } = ctx.getImageData(x0, top, x1 - x0, bmp.height - top - 2);
+      const bg = ctx.getImageData(2, bmp.height - 3, 1, 1).data;
+      let drawn = 0;
+      let near = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const d = Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]);
+        if (d <= 60) continue;
+        drawn += 1;
+        const e = Math.abs(data[i] - rgb[0]) + Math.abs(data[i + 1] - rgb[1]) + Math.abs(data[i + 2] - rgb[2]);
+        if (e <= tol) near += 1;
+      }
+      return near / (drawn || 1);
+    },
+    { png, rgb, tol, clip },
+  );
+}
+
+/** "rgb(r, g, b)" as numbers. */
+export const parseRgb = (css: string) => (css.match(/\d+/g) ?? []).slice(0, 3).map(Number) as [number, number, number];
+
 export async function freshPage(page: Page) {
   await page.goto('/');
   await page.evaluate(() => localStorage.clear());

@@ -21,8 +21,9 @@ const EXPLAIN: Record<string, Explained> = {
   x_csr: {
     title: 'Expression is stored cell by cell',
     text: (n) =>
-      `The expression matrix${n ? ` of ${n}` : ''} is stored one cell after another (CSR). Fine for everything you can do now. ` +
-      'Colouring by a gene (coming next) reads one gene across all cells: for a large file dbx will make a one-time converted copy first.',
+      `The expression matrix${n ? ` of ${n}` : ''} is stored one cell after another (CSR). Colouring by a gene reads one gene ` +
+      'across all cells, so dbx loads the matrix into memory once (fast for files up to a few GB). Larger files need a ' +
+      'one-time conversion, which is not available in this version yet.',
     level: 'info',
   },
   x_dtype: {

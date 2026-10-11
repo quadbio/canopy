@@ -168,3 +168,14 @@ Resume rule: read this file, then continue with the first unchecked step.
   then 50–200 ms per gene switch.
   - Next: cold code review round (S5 part 1, R2, F1/F2) with two subagents; then converter +
     jobs + memory guard, subset drawing.
+- 2026-10-11 Cold code review S5a (2 subagents; ../reviews/code_review_S5a/). A: gene backend 6.5,
+  tests 6, demo backend 8; B: GPU colour 7, colours by name 5, gene UX 6.5, demo changes 7.5.
+  0 blocker, 10 major. All accepted; batch R4 DONE (SUMMARY §4): chunk-aware dense access,
+  single-flight + memory reservation (503 memory_busy), block-wise float32 CSR->CSC (radix sort;
+  300k x 20k first gene 19.5 s -> 8.6 s, peak 2.14 -> 1.65 GB), gene log lines, exact
+  quantisation, unique gene names, errno in logs; frontend: hash-based colours by name, never-blank
+  views with Retry, depth only on the points layer (option), stronger e2e, faster gene search,
+  safe throttled storage, help popover. bench/genes.py. 206 backend, 41 frontend unit, 14 e2e.
+  - Deferred: subset drawing (S5 next), shared colour state (R3), colour range + zero grey (S7).
+  - Next: S5 converter + jobs + memory guard (reuse block-wise build and reservation), then
+    subset drawing.

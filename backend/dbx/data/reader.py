@@ -24,7 +24,7 @@ import pandas as pd
 from anndata.io import read_elem
 from scipy import sparse
 
-from dbx.data.genes import GeneValues, from_column, from_dense, from_scipy_csc, matrices
+from dbx.data.genes import GeneValues, from_column, from_dense, matrices
 from dbx.inspect.models import AnnDataInfo, MatrixInfo
 
 # Categories beyond this are not sent (and the column cannot be coloured by category).
@@ -194,8 +194,9 @@ class Source:
         """Gene `i` of a CSC or dense matrix, read directly."""
         raise NotImplementedError
 
-    def matrix_csc(self, matrix: str) -> Any:
-        """The whole matrix as a scipy CSC matrix in memory (for CSR matrices)."""
+    def matrix_columns(self, matrix: str) -> Any:
+        """The whole matrix in memory, in a form where a gene is one cheap slice: float32 scipy
+        CSC (sparse input) or a column-major float32 ndarray (dense input)."""
         raise NotImplementedError
 
     def close(self) -> None:
@@ -209,6 +210,59 @@ def _check_gene(info: AnnDataInfo, matrix: str, i: int) -> MatrixInfo:
     if not 0 <= i < info.n_vars:
         raise UnknownElementError("gene")
     return m
+
+
+# Input read per block while building an in-memory copy (bounds the extra memory of a load).
+BLOCK_VALUES = 4_000_000
+
+
+def block_bytes(m: MatrixInfo) -> int:
+    """Memory used besides the result while building it: one input block, its sorted and
+    position arrays (about 8 int64 arrays of the block's length) and the read buffers, twice
+    (measured: 300 k × 20 k, 0.96 GB copy, peak +1.42 GB)."""
+    return 2 * BLOCK_VALUES * (np.dtype(m.dtype).itemsize + 8 * 8)
+
+
+def csr_to_csc_blocks(
+    indptr: np.ndarray,
+    n_vars: int,
+    read: Any,
+) -> sparse.csc_matrix:
+    """A float32 CSC copy of a CSR matrix, built block by block: `read(lo, hi)` returns the
+    (indices, data) slices of the stored entries lo..hi. Two passes over the indices (count per
+    column, then fill), so the peak is the result plus one block, never CSR + CSC together."""
+    indptr = np.asarray(indptr, dtype=np.int64)
+    n_obs = len(indptr) - 1
+    nnz = int(indptr[-1])
+    per_row = max(1.0, nnz / max(n_obs, 1))
+    rows_per_block = max(1, int(BLOCK_VALUES / per_row))
+    blocks = [(a, min(a + rows_per_block, n_obs)) for a in range(0, n_obs, rows_per_block)]
+    counts = np.zeros(n_vars, dtype=np.int64)
+    for a, b in blocks:
+        idx, _ = read(int(indptr[a]), int(indptr[b]), values=False)
+        counts += np.bincount(np.asarray(idx, dtype=np.int64), minlength=n_vars)
+    col_ptr = np.zeros(n_vars + 1, dtype=np.int64)
+    np.cumsum(counts, out=col_ptr[1:])
+    out_idx = np.empty(nnz, dtype=np.int32 if n_obs < 2**31 else np.int64)
+    out_data = np.empty(nnz, dtype=np.float32)
+    fill = col_ptr[:-1].copy()
+    for a, b in blocks:
+        lo, hi = int(indptr[a]), int(indptr[b])
+        idx, data = read(lo, hi, values=True)
+        # Group the block's entries by column, rows staying ascending within a column (a stable
+        # sort). With at most 65,536 genes the keys fit 16 bits, where numpy's stable sort is a
+        # linear-time radix sort.
+        keys = np.asarray(idx, dtype=np.uint16 if n_vars <= 2**16 else np.int64)
+        order = np.argsort(keys, kind="stable")
+        idx_s = keys[order].astype(np.int64)
+        cnts = np.bincount(idx_s, minlength=n_vars)
+        first = np.cumsum(cnts) - cnts  # where each column's entries start in this block
+        pos = fill[idx_s] + (np.arange(len(idx_s)) - first[idx_s])
+        rows = np.repeat(np.arange(a, b, dtype=np.int64), np.diff(indptr[a : b + 1]))
+        out_idx[pos] = rows[order]
+        out_data[pos] = np.asarray(data, dtype=np.float32)[order]
+        fill += cnts
+    return sparse.csc_matrix((out_data, out_idx, col_ptr), shape=(n_obs, n_vars))
 
 
 def _check_dims(info: AnnDataInfo, key: str, dims: list[int]) -> None:
@@ -293,16 +347,35 @@ class LazySource(Source):
             if m.encoding == "dense":
                 return from_dense(node[:, i])
             if m.encoding != "csc":
-                raise NeedsConversionError("x_csr")
+                raise NeedsConversionError("matrix_csr")
             a, b = (int(x) for x in node["indptr"][i : i + 2])
             return from_column(node["indices"][a:b], node["data"][a:b], n)
 
         return self._read(read)  # type: ignore[no-any-return]
 
-    def matrix_csc(self, matrix: str) -> Any:
-        _check_gene(self.info, matrix, 0)
-        mat = self._read(lambda: read_elem(self._matrix_node(matrix)))
-        return _to_csc(mat)
+    def matrix_columns(self, matrix: str) -> Any:
+        m = _check_gene(self.info, matrix, 0)
+        n_obs, n_vars = m.shape
+        if m.encoding == "dense":
+            out = np.empty((n_obs, n_vars), dtype=np.float32, order="F")
+            rows = max(1, BLOCK_VALUES // max(n_vars, 1))
+            for a in range(0, n_obs, rows):
+                b = min(a + rows, n_obs)
+                # one block per lock hold: other requests on this dataset get turns in between
+                out[a:b] = self._read(lambda a=a, b=b: self._matrix_node(matrix)[a:b, :])
+            return out
+        if m.encoding == "csc":
+            return _to_columns(self._read(lambda: read_elem(self._matrix_node(matrix))))
+        indptr = self._read(lambda: np.asarray(self._matrix_node(matrix)["indptr"][:]))
+
+        def read(lo: int, hi: int, *, values: bool) -> tuple[Any, Any]:
+            def get() -> tuple[Any, Any]:
+                node = self._matrix_node(matrix)
+                return node["indices"][lo:hi], (node["data"][lo:hi] if values else None)
+
+            return self._read(get)  # type: ignore[no-any-return]
+
+        return csr_to_csc_blocks(indptr, n_vars, read)
 
     def _uns_colors(self, name: str) -> Any:
         uns = self.group.get("uns")
@@ -368,17 +441,18 @@ class MemorySource(Source):
         mat = self._matrix(matrix)
         if sparse.issparse(mat):
             if mat.format != "csc":
-                raise NeedsConversionError("x_csr")
-            return from_scipy_csc(mat, i)
+                raise NeedsConversionError("matrix_csr")
+            a, b = int(mat.indptr[i]), int(mat.indptr[i + 1])
+            return from_column(mat.indices[a:b], mat.data[a:b], mat.shape[0])
         return from_dense(np.asarray(mat[:, i]))
 
-    def matrix_csc(self, matrix: str) -> Any:
+    def matrix_columns(self, matrix: str) -> Any:
         _check_gene(self.info, matrix, 0)
-        return _to_csc(self._matrix(matrix))
+        return _to_columns(self._matrix(matrix))
 
 
-def _to_csc(mat: Any) -> Any:
-    """A loaded matrix (scipy sparse or dense) as scipy CSC."""
+def _to_columns(mat: Any) -> Any:
+    """A loaded matrix as float32 CSC (sparse) or column-major float32 ndarray (dense)."""
     if sparse.issparse(mat):
-        return mat.tocsc()
-    return sparse.csc_matrix(np.asarray(mat))
+        return sparse.csc_matrix(mat, dtype=np.float32)
+    return np.asfortranarray(np.asarray(mat, dtype=np.float32))

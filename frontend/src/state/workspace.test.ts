@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { DatasetMeta } from '../api/types';
 import { effectiveParams, normaliseParams } from '../views/embedding';
 import { registerView, viewType } from '../views/registry';
 import { defaultPointSize } from '../views/embedding';
-import { MAX_REMEMBERED, rememberKey, restoreRemembered, restoreViews, useWorkspace } from './workspace';
+import { MAX_REMEMBERED, rememberKey, restoreRemembered, restoreViews, safeStorage, useWorkspace } from './workspace';
 
 describe('restoreViews', () => {
   it('drops unknown view types and repairs parameters from older builds', () => {
@@ -97,5 +97,32 @@ describe('default point size', () => {
   it('shrinks with the number of cells', () => {
     expect(defaultPointSize(5_000)).toBeGreaterThan(defaultPointSize(100_000));
     expect(defaultPointSize(100_000)).toBeGreaterThan(defaultPointSize(3_000_000));
+  });
+});
+
+describe('settings storage', () => {
+  it('writes at most every few hundred ms, the latest value', () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const st = safeStorage({ getItem: () => null, setItem: (_k, v) => void writes.push(v), removeItem: () => {} });
+    for (let i = 0; i < 20; i += 1) st.setItem('k', String(i));
+    expect(st.getItem('k')).toBe('19'); // reads see the pending value
+    vi.advanceTimersByTime(400);
+    expect(writes).toEqual(['19']);
+    vi.useRealTimers();
+  });
+
+  it('keeps working in memory when the browser store is full', () => {
+    const full = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('full', 'QuotaExceededError');
+      },
+      removeItem: () => {},
+    };
+    const st = safeStorage(full);
+    st.setItem('k', 'v');
+    expect(() => st.flush()).not.toThrow();
+    expect(st.getItem('k')).toBe('v');
   });
 });

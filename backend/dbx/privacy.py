@@ -38,7 +38,8 @@ KEEP = frozenset(
 )
 
 MESSAGE_LIMIT = 300
-_QUOTED = re.compile(r"""(['"])((?:(?!\1)[^\n]){1,500}?)\1""")
+# A quote opens only where a word does not continue (the apostrophe in "Can't" is not a quote).
+_QUOTED = re.compile(r"""(?<!\w)(['"])((?:(?!\1)[^\n]){1,500}?)\1(?!\w)""")
 # Absolute POSIX paths of at least two components (/home/u/x.h5ad, /data/a/b).
 _PATH = re.compile(r"(?<![\w.])/(?:[^\s/'\"():,]+/)+[^\s/'\"():,]*")
 

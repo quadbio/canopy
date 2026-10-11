@@ -11,8 +11,9 @@ import { type Layer, LayerExtension, type UpdateParameters } from '@deck.gl/core
 import type { Texture } from '@luma.gl/core';
 import type { ShaderModule } from '@luma.gl/shadertools';
 
-/** Stands for "no value" in the numbers sent to the GPU (NaN does not survive shaders reliably). */
-export const MISSING_VALUE = Math.fround(-3.0e38);
+import { MISSING_VALUE } from './missing';
+
+export { MISSING_VALUE };
 
 export interface ValueColour {
   /** RGBA entries, 4 bytes each: categories by code, or a colour map (256 entries). */

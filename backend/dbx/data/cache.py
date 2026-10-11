@@ -1,9 +1,15 @@
 """Open datasets and loaded arrays, kept within the memory budget.
 
 One LRU holds both: open sources (an open file costs nothing, a fully loaded legacy file costs
-its estimated size) and arrays already served (embeddings, obs columns). Entries are evicted
-when the total exceeds `memory.cache_gb`, when more than `MAX_OPEN` files are open, or after
-`memory.idle_minutes` without use. Every open, load and eviction is logged with its size.
+its estimated size) and arrays already served (embeddings, obs columns, genes, in-memory matrix
+copies). Entries are evicted when the total exceeds `memory.cache_gb`, when more than
+`MAX_OPEN` files are open, or after `memory.idle_minutes` without use. Every open, load and
+eviction is logged with its size.
+
+Loads are single-flight: concurrent requests for the same array wait for one load. A large load
+first reserves its peak memory (`reserve`): older entries are evicted to make room, and the load
+is refused (`MemoryBusyError`) when the cache plus all reservations would exceed
+`memory.budget_gb`, or the host has less memory available than the load needs.
 """
 
 from __future__ import annotations
@@ -12,12 +18,15 @@ import threading
 import time
 import warnings
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 import anndata
+import psutil
 import zarr
 
 from dbx.config import Config
@@ -35,6 +44,10 @@ from dbx.logs import get_logger, timed
 
 T = TypeVar("T")
 MAX_OPEN = 64
+
+
+class MemoryBusyError(Exception):
+    """A load would exceed the memory budget or the host's available memory; try again later."""
 
 
 @dataclass
@@ -82,7 +95,10 @@ def open_source(fp: Fingerprint, path: Path, table: str | None, small_file_bytes
 class DatasetCache:
     def __init__(self, cfg: Config) -> None:
         self.budget = int(cfg.memory.cache_gb * 2**30)
+        self.total_budget = int(cfg.memory.budget_gb * 2**30)
         self.small_file = int(cfg.memory.small_file_gb * 2**30)
+        self._inflight: dict[tuple[Any, ...], Future[Any]] = {}
+        self._reserved = 0
         self.idle = cfg.memory.idle_minutes * 60
         self._lru: OrderedDict[tuple[Any, ...], _Entry] = OrderedDict()
         self._lock = threading.Lock()
@@ -119,16 +135,86 @@ class DatasetCache:
         key: tuple[Any, ...],
         load: Callable[[], T],
         nbytes: Callable[[T], int],
+        *,
+        reserve: int = 0,
+        outcome: dict[str, Any] | None = None,
         **log_fields: Any,
     ) -> T:
-        """A cached array; on a miss `load()` runs as a timed `load_array` stage."""
-        hit = self._get(("array", *key))
+        """A cached array; on a miss `load()` runs as a timed `load_array` stage, once even when
+        several requests miss at the same time. `reserve`: peak bytes the load needs (see the
+        module docstring). `outcome["cache"]` is set to hit, miss or waited (for logging)."""
+        k = ("array", *key)
+        out = outcome if outcome is not None else {}
+        hit = self._get(k)
         if hit is not None:
+            out["cache"] = "hit"
             return hit  # type: ignore[no-any-return]
-        with timed("load_array", **log_fields) as extra:
-            value = load()
-            extra["nbytes"] = nbytes(value)
-        return self._put(("array", *key), value, extra["nbytes"], is_source=False)  # type: ignore[no-any-return]
+        with self._lock:
+            fut = self._inflight.get(k)
+            owner = fut is None
+            if owner:
+                fut = self._inflight[k] = Future()
+        assert fut is not None
+        if not owner:
+            out["cache"] = "waited"
+            return fut.result()  # type: ignore[no-any-return]  # re-raises the loader's error
+        out["cache"] = "miss"
+        try:
+            with self.reserve(reserve, **log_fields), timed("load_array", **log_fields) as extra:
+                value = load()
+                extra["nbytes"] = nbytes(value)
+                if reserve:
+                    extra["reserved"] = reserve
+            value = self._put(k, value, extra["nbytes"], is_source=False)
+            fut.set_result(value)
+            return value
+        except BaseException as e:
+            fut.set_exception(e)
+            raise
+        finally:
+            with self._lock:
+                self._inflight.pop(k, None)
+
+    @contextmanager
+    def reserve(self, nbytes: int, **log_fields: Any) -> Iterator[None]:
+        """Hold `nbytes` of the memory budget while a large load runs (no-op for 0)."""
+        if nbytes <= 0:
+            yield
+            return
+        evicted: list[tuple[tuple[Any, ...], _Entry]] = []
+        with self._lock:
+            cached = sum(e.nbytes for e in self._lru.values())
+            # make room in the cache first (the result is cached there afterwards)
+            for key in list(self._lru):
+                if cached + self._reserved + nbytes <= self.budget:
+                    break
+                if self._lru[key].nbytes == 0:
+                    continue  # open files cost nothing: closing them frees no memory
+                e = self._lru.pop(key)
+                cached -= e.nbytes
+                evicted.append((key, e))
+            available = psutil.virtual_memory().available
+            busy = cached + self._reserved + nbytes > self.total_budget or nbytes > available
+            if not busy:
+                self._reserved += nbytes
+        for key, e in evicted:
+            self._close(key, e, "reserve")
+        if busy:
+            self.log.warning(
+                "memory_busy",
+                need=nbytes,
+                cache_bytes=cached,
+                reserved=self._reserved,
+                budget=self.total_budget,
+                available=available,
+                **log_fields,
+            )
+            raise MemoryBusyError
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._reserved -= nbytes
 
     def sweep(self) -> None:
         """Drop entries idle for longer than `memory.idle_minutes` (also run by a timer)."""
@@ -140,6 +226,8 @@ class DatasetCache:
                 "entries": len(self._lru),
                 "open": sum(e.is_source for e in self._lru.values()),
                 "bytes": sum(e.nbytes for e in self._lru.values()),
+                "reserved": self._reserved,
+                "loading": len(self._inflight),
             }
 
     def clear(self) -> None:

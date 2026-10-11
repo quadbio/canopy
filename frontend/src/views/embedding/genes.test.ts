@@ -8,6 +8,7 @@ const genes: GeneList = {
   names: ['ENSG01', 'ENSG02', 'ENSG03', 'ENSG04'],
   symbols: ['CD3E', 'CD3EAP', 'XCD3', 'MS4A1'],
   symbol_column: 'gene_symbols',
+  duplicates: 0,
   matrices: [],
 };
 
@@ -27,6 +28,21 @@ describe('gene search', () => {
     expect(matchGenes(genes, 'CD3E').map((m) => m.label)).toEqual(['CD3E', 'CD3EAP']);
     expect(matchGenes(genes, 'ensg04')[0]).toEqual({ index: 3, label: 'MS4A1', name: 'ENSG04' });
     expect(matchGenes(genes, '  ')).toEqual([]);
+  });
+
+  it('stays fast for 60 k Ensembl ids with symbols', () => {
+    const big: GeneList = {
+      names: Array.from({ length: 60_000 }, (_, i) => `ENSG${String(i).padStart(11, '0')}`),
+      symbols: Array.from({ length: 60_000 }, (_, i) => `GENE${i}`),
+      symbol_column: 'gene_symbols',
+      duplicates: 0,
+      matrices: [],
+    };
+    matchGenes(big, 'x'); // first call lower-cases the list once
+    const t0 = performance.now();
+    for (const q of ['e', 'en', 'ens', 'gene1', 'gene12']) expect(matchGenes(big, q).length).toBeGreaterThan(0);
+    expect((performance.now() - t0) / 5).toBeLessThan(25);
+    expect(matchGenes(big, 'gene12')[0].label).toBe('GENE12');
   });
 
   it('labels genes by symbol when there is one', () => {

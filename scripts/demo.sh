@@ -41,7 +41,9 @@ if [ "${DBX_DEMO_LARGE:-0}" = "1" ]; then
   mkdir -p "$large"
   for n in 1000000 3000000; do
     f="$large/synthetic_$((n / 1000000))M_cells.h5ad"
-    [ -f "$f" ] || { dbx synth anndata "$f.part.h5ad" --n-obs "$n" --n-vars 300 --density 0.02 --n-clusters 40 >/dev/null && mv "$f.part.h5ad" "$f"; }
+    # written outside the data root first, so an interrupted run leaves no broken dataset
+    part="$repo/.cache/demo-large-part.h5ad"
+    [ -f "$f" ] || { dbx synth anndata "$part" --n-obs "$n" --n-vars 300 --density 0.02 --n-clusters 40 >/dev/null && mv "$part" "$f"; }
   done
 fi
 

@@ -86,10 +86,12 @@ function ResetView({ spec }: { spec: ViewSpec }) {
   const qc = useQueryClient();
   const setParams = useWorkspace((s) => s.setParams);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const reset = async () => {
     const t = viewType(spec.type);
     if (!t) return;
     setBusy(true);
+    setFailed(null);
     try {
       const meta = await qc.fetchQuery(metaQuery(spec.datasetId, spec.table));
       const params = t.create(meta);
@@ -97,6 +99,8 @@ function ResetView({ spec }: { spec: ViewSpec }) {
         setParams(spec.id, params as Record<string, unknown>);
         event('view_reset', null, { type: spec.type });
       }
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -106,6 +110,7 @@ function ResetView({ spec }: { spec: ViewSpec }) {
       <button className="ghost" onClick={() => void reset()} disabled={busy} data-testid="reset-view">
         Reset to defaults
       </button>
+      {failed && <p className="error small">{failed}</p>}
     </div>
   );
 }

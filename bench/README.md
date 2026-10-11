@@ -17,4 +17,18 @@ with file size, and 5 GB fixtures take proportionally longer (~5 min).
 
 ## Results
 
-(none yet; first runs in S5)
+### 2026-10-11 · gene requests (`bench/genes.py`) · MacBook Pro M2, 16 GB, local SSD · S5 R4
+
+Fixtures: `dbx synth anndata <f> --n-obs 300000 --n-vars 20000 --density 0.02` (120 M values,
+0.96 GB as a float32 CSC copy), once `--encoding csr`, once `--encoding csc` (gzip, ~0.43 GB
+each). Requests with `q=16`; 20 genes after the first, then 8 new genes in parallel.
+
+| file | layout / access | first gene | next genes (median, max) | 8 parallel new genes (wall) | KB per gene | peak RSS MB |
+|---|---|---|---|---|---|---|
+| csc_300k_20k.h5ad | csc / direct | 0.00 s | 3 ms, 4 ms | 0.02 s | 35 | 232 |
+| csr_300k_20k.h5ad | csr / memory | 8.62 s | 2 ms, 5 ms | 0.02 s | 35 | 1651 |
+
+The first CSR gene builds the in-memory CSC copy block by block: about 4.7 s reading and
+decompressing (indices twice, values once), the rest grouping by gene. Before the radix-sort
+change it took 19.5 s and peaked at 2.14 GB. On network storage expect the reading part to grow
+with the link speed; CSC files are unaffected.

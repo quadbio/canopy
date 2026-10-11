@@ -357,3 +357,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 }
 .gene-match { display: flex; justify-content: space-between; gap: var(--space-2); padding: 4px 10px; cursor: pointer; }
 .gene-match.active { background: var(--accent-soft); }
+
+.check { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); cursor: pointer; }
+.view-notice.problem { border-color: var(--danger); }

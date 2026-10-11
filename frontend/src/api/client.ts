@@ -1,5 +1,6 @@
 // Typed access to the dbx backend. Views never call fetch directly; they go through here.
 
+import { MISSING_VALUE } from '../colour/missing';
 import type { BinaryArray, GeneVector, TypedArray } from './types';
 
 export interface Health {
@@ -85,7 +86,8 @@ export async function getBinary(path: string, fetchImpl: typeof fetch = fetch, i
 export const getHealth = (fetchImpl?: typeof fetch) => getJson<Health>('/api/health', fetchImpl);
 
 /** A gene reply (backend dbx/data/genes.py): sparse (uint32 cell indices, then values) or dense;
- * float32, or uint16 codes with value = offset + code * scale (65535 = missing). */
+ * float32, or uint16 codes with value = offset + code * scale (65535 = missing). Decoded straight
+ * into the form the GPU takes: missing values as MISSING_VALUE (see colour/missing.ts). */
 export function decodeGene(buf: ArrayBuffer, header: (name: string) => string | null): GeneVector {
   const num = (k: string) => Number(header(`x-dbx-${k}`) ?? 'NaN');
   const n = num('n');
@@ -99,17 +101,16 @@ export function decodeGene(buf: ArrayBuffer, header: (name: string) => string | 
     const offset = num('offset');
     const scale = num('scale');
     vals = new Float32Array(count);
-    for (let k = 0; k < count; k += 1) vals[k] = codes[k] === 65535 ? NaN : offset + codes[k] * scale;
+    for (let k = 0; k < count; k += 1) vals[k] = codes[k] === 65535 ? MISSING_VALUE : offset + codes[k] * scale;
   } else {
-    vals = new Float32Array(buf, off, count);
+    vals = new Float32Array(buf, off, count).slice();
+    for (let k = 0; k < count; k += 1) if (Number.isNaN(vals[k])) vals[k] = MISSING_VALUE;
   }
   let values = vals;
   if (sparse) {
     const idx = new Uint32Array(buf, 0, nnz);
     values = new Float32Array(n);
     for (let k = 0; k < nnz; k += 1) values[idx[k]] = vals[k];
-  } else if (vals.byteOffset !== 0 || vals.length !== n) {
-    values = vals.slice();
   }
   return { values, min: num('min'), max: num('max'), p99: num('p99'), nnz };
 }

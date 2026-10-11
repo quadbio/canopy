@@ -19,7 +19,7 @@ import hashlib
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 from fastapi import APIRouter, Query, Request, Response
@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from dbx.catalog import Catalog, PathEscapeError
 from dbx.catalog.db import Row
 from dbx.data import genes
-from dbx.data.cache import DatasetCache, table_info
+from dbx.data.cache import DatasetCache, MemoryBusyError, table_info
 from dbx.data.reader import (
     ColumnMeta,
     InvalidDimsError,
@@ -37,11 +37,13 @@ from dbx.data.reader import (
     Source,
     SourceClosedError,
     UnknownElementError,
+    block_bytes,
     embedding_dims,
 )
 from dbx.errors import ApiError
 from dbx.inspect.core import version_stamp
 from dbx.inspect.models import AnnDataInfo, Fingerprint
+from dbx.logs import get_logger
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -81,6 +83,7 @@ class GeneListReply(BaseModel):
     names: list[str]
     symbols: list[str] | None
     symbol_column: str | None
+    duplicates: int  # var names that were made unique (`A`, `A-1`)
     matrices: list[Matrix]
 
 
@@ -151,7 +154,13 @@ def _with_source[T](
                 409, f"needs_conversion:{e.code}", "Convert the dataset to view this."
             ) from e
         except UnknownElementError as e:
-            raise ApiError(404, "unknown_element", f"No such {e.args[0]} in this dataset.") from e
+            what = e.args[0]
+            code = f"unknown_{what}" if what in ("matrix", "gene") else "unknown_element"
+            raise ApiError(404, code, f"No such {what} in this dataset.") from e
+        except MemoryBusyError as e:
+            raise ApiError(
+                503, "memory_busy", "The server is short of memory right now; try again soon."
+            ) from e
         except InvalidDimsError as e:
             raise ApiError(
                 400, "invalid_dims", "dims must be distinct columns of the embedding."
@@ -212,7 +221,7 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
     def describe(src: Source) -> tuple[str, list[ColumnMeta]]:
         return src.mode, [src.column_meta(c.name) for c in info.obs.columns]
 
-    mode, columns = _with_source(request, row, fp, path, table, describe)
+    mode, columns = _with_source(request, row, fp, path, name, describe)
     return DatasetMeta(
         id=row.id,
         version=str(row.version),
@@ -253,6 +262,7 @@ def _obs_values(
 @router.get("/{id}/obs")
 def obs(request: Request, id: str, column: NameQ, table: TableQ = None) -> Response:
     row, fp, path = _dataset(request, id)
+    table, _ = _table(fp, table)  # the resolved name: one cache entry per table
     etag = _etag([str(row.version), str(table), "obs", column])
     if (r := _not_modified(request, etag)) is not None:
         return r
@@ -265,6 +275,7 @@ def obs_labels(request: Request, id: str, column: NameQ, table: TableQ = None) -
     """The category labels behind a column's codes, also for plain string columns (whose labels
     are only known after reading the column; categorical columns have them in /meta too)."""
     row, fp, path = _dataset(request, id)
+    table, _ = _table(fp, table)
     values = _obs_values(request, row, fp, path, table, column)
     return Labels(kind=values.kind, categories=values.categories)
 
@@ -278,6 +289,7 @@ def obsm(
     table: TableQ = None,
 ) -> Response:
     row, fp, path = _dataset(request, id)
+    table, _ = _table(fp, table)
     etag = _etag([str(row.version), str(table), "obsm", key, dims])
     if (r := _not_modified(request, etag)) is not None:
         return r
@@ -304,8 +316,8 @@ def obsm(
 
 
 def _memory_limit(request: Request) -> int:
-    """Largest CSR matrix loaded whole for gene queries: the small-file limit, and at most half
-    the cache budget (the CSC copy is cached like any array)."""
+    """Largest in-memory matrix copy built for gene queries: the small-file limit, and at most
+    half the cache budget (the copy is cached like any array)."""
     _, cache = _state(request)
     return min(cache.small_file, cache.budget // 2)
 
@@ -319,31 +331,40 @@ def _matrices(request: Request, info: AnnDataInfo) -> list[Matrix]:
 
 
 @router.get("/{id}/genes")
-def gene_list(request: Request, id: str, table: TableQ = None) -> GeneListReply:
-    """Gene names (the var index), readable symbols when the index holds ids, and the matrices
-    genes can be read from."""
+def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
+    """Gene names (the var index, made unique), readable symbols when the index holds ids, and
+    the matrices genes can be read from."""
     row, fp, path = _dataset(request, id)
-    _, info = _table(fp, table)
+    tname, info = _table(fp, table)
+    etag = _etag([str(row.version), str(tname), "genes"])
+    if (r := _not_modified(request, etag)) is not None:
+        return r
     _, cache = _state(request)
     found = _with_source(
         request,
         row,
         fp,
         path,
-        table,
+        tname,
         lambda src: cache.array(
-            (str(row.version), str(table), "genes"),
+            (str(row.version), str(tname), "genes"),
             lambda: genes.gene_list(src.var()),
             lambda g: 64 * len(g.names),
             what="genes",
             dataset_id=row.id,
         ),
     )
-    return GeneListReply(
+    reply = GeneListReply(
         names=found.names,
         symbols=found.symbols,
         symbol_column=found.symbol_column,
+        duplicates=found.duplicates,
         matrices=_matrices(request, info),
+    )
+    return Response(
+        content=reply.model_dump_json(),
+        media_type="application/json",
+        headers={"etag": etag, "cache-control": "private, no-cache"},
     )
 
 
@@ -360,54 +381,83 @@ def gene(
     if q not in (0, 16):
         raise ApiError(400, "invalid_q", "q must be 0 or 16.")
     row, fp, path = _dataset(request, id)
-    etag = _etag([str(row.version), str(table), "gene", matrix, str(i), str(q)])
+    tname, info = _table(fp, table)
+    etag = _etag([str(row.version), str(tname), "gene", matrix, str(i), str(q)])
     if (r := _not_modified(request, etag)) is not None:
         return r
-    _, info = _table(fp, table)
     m = genes.matrices(info).get(matrix)
     if m is None:
-        raise ApiError(404, "unknown_element", "No such matrix in this dataset.")
+        raise ApiError(404, "unknown_matrix", "No such matrix in this dataset.")
     if i >= info.n_vars:
-        raise ApiError(404, "unknown_element", "No such gene in this dataset.")
+        raise ApiError(404, "unknown_gene", "No such gene in this dataset.")
     acc = genes.access(m, _memory_limit(request))
+    # Facts for the log line of this request (names only as name fields: tokenised at strict).
+    facts: dict[str, Any] = {
+        "element": matrix,
+        "gene_index": i,
+        "layout": m.encoding,
+        "access": acc,
+        "est_read_bytes": genes.column_read_bytes(m) if acc == "direct" else 0,
+    }
+    log = get_logger("dbx.genes")
     if acc == "needs_conversion":
+        log.info("gene_refused", dataset_id=row.id, loaded_bytes=genes.loaded_bytes(m), **facts)
         raise ApiError(
             409,
-            f"needs_conversion:x_{m.encoding}",
-            "Gene expression for this dataset needs a one-time conversion.",
+            f"needs_conversion:matrix_{m.encoding}",
+            "Gene expression from this matrix needs a one-time conversion.",
         )
     _, cache = _state(request)
     version = str(row.version)
+    loaded: dict[str, object] = {}
 
     def read(src: Source) -> genes.GeneValues:
         if acc == "direct":
             return src.gene(matrix, i)
-        csc = cache.array(
-            (version, str(table), "csc", matrix),
-            lambda: src.matrix_csc(matrix),
-            lambda c: int(c.data.nbytes + c.indices.nbytes + c.indptr.nbytes),
-            what="matrix_csc",
+        copy = cache.array(
+            (version, str(tname), "columns", matrix),
+            lambda: src.matrix_columns(matrix),
+            _columns_bytes,
+            reserve=genes.load_peak_bytes(m, block_bytes(m)),
+            outcome=loaded,
+            what="matrix_columns",
             dataset_id=row.id,
-            encoding=m.encoding,
+            layout=m.encoding,
+            element=matrix,
         )
-        return genes.from_scipy_csc(csc, i)
+        return genes.from_loaded(copy, i)
 
+    outcome: dict[str, object] = {}
     values = _with_source(
         request,
         row,
         fp,
         path,
-        table,
+        tname,
         lambda src: cache.array(
-            (version, str(table), "gene", matrix, i),
+            (version, str(tname), "gene", matrix, i),
             lambda: read(src),
             lambda g: int(g.indices.nbytes + g.values.nbytes),
+            outcome=outcome,
             what="gene",
             dataset_id=row.id,
-            access=acc,
+            **facts,
         ),
     )
-    enc = genes.encode(values, quantise=q == 16)
+    enc = genes.encode(values, quantise_values=q == 16)
+    log.info(
+        "gene_served",
+        dataset_id=row.id,
+        cache=outcome.get("cache"),
+        matrix_cache=loaded.get("cache"),
+        q=q,
+        encoding=enc.headers["x-dbx-encoding"],
+        n_cells=values.n,
+        nnz=len(values.indices),
+        n_expressing=int(enc.headers["x-dbx-n-expressing"]),
+        reply_bytes=len(enc.body),
+        **facts,
+    )
     return Response(
         content=enc.body,
         media_type="application/octet-stream",
@@ -418,6 +468,13 @@ def gene(
             **enc.headers,
         },
     )
+
+
+def _columns_bytes(copy: object) -> int:
+    if isinstance(copy, np.ndarray):
+        return int(copy.nbytes)
+    c: Any = copy
+    return int(c.data.nbytes + c.indices.nbytes + c.indptr.nbytes)
 
 
 def _table(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataInfo]:

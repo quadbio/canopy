@@ -44,6 +44,8 @@ export const useMeta = (id: string, table: string | null) => useQuery(metaQuery(
 // Arrays (10–40 MB each at 10 M cells) are dropped 30 s after no view uses them, and keyed by the
 // dataset version, so a rewritten file is never answered from an old copy.
 const ARRAY_GC_MS = 30_000;
+// Genes are browsed quickly, one after another: keep only the last few around.
+const GENE_GC_MS = 5_000;
 
 export const useObs = (id: string, table: string | null, column: string | null, version: string | undefined) =>
   useQuery({
@@ -107,6 +109,6 @@ export const useGene = (
       })),
     enabled: index !== null && index >= 0 && !!version,
     staleTime: Infinity,
-    gcTime: ARRAY_GC_MS,
+    gcTime: GENE_GC_MS,
     retry: false,
   });

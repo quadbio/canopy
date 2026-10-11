@@ -1,7 +1,7 @@
 // Gene search: type part of a gene symbol or id, pick from the matches (mouse or arrow keys +
 // Enter). Matching runs over the whole gene list in the browser (30–60 k names: < 5 ms).
 
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { GeneList } from '../api/types';
 
@@ -13,23 +13,47 @@ export interface GeneMatch {
   name: string; // var index name
 }
 
-/** Best matches first: exact, then prefix, then substring; symbols and ids both searched. */
+// Lower-cased names and symbols, computed once per gene list.
+const lowered = new WeakMap<GeneList, { names: string[]; symbols: string[] | null; labels: string[] }>();
+
+function lower(genes: GeneList) {
+  let l = lowered.get(genes);
+  if (!l) {
+    l = {
+      names: genes.names.map((n) => n.toLowerCase()),
+      symbols: genes.symbols?.map((x) => x.toLowerCase()) ?? null,
+      labels: genes.names.map((n, i) => genes.symbols?.[i] || n),
+    };
+    lowered.set(genes, l);
+  }
+  return l;
+}
+
+/** Best matches first: exact, then prefix, then substring (shorter, then alphabetical, within
+ * each); symbols and ids both searched. Only the best `limit` are sorted. */
 export function matchGenes(genes: GeneList, query: string, limit = MAX_SHOWN): GeneMatch[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const ranked: [number, number][] = [];
-  for (let i = 0; i < genes.names.length; i += 1) {
-    const sym = genes.symbols?.[i]?.toLowerCase() ?? '';
-    const name = genes.names[i].toLowerCase();
-    let rank = -1;
-    if (sym === q || name === q) rank = 0;
-    else if (sym.startsWith(q) || name.startsWith(q)) rank = 1;
-    else if (sym.includes(q) || name.includes(q)) rank = 2;
-    if (rank >= 0) ranked.push([rank, i]);
+  const l = lower(genes);
+  const buckets: number[][] = [[], [], []];
+  for (let i = 0; i < l.names.length; i += 1) {
+    const sym = l.symbols?.[i] ?? '';
+    const name = l.names[i];
+    if (sym === q || name === q) buckets[0].push(i);
+    else if (sym.startsWith(q) || name.startsWith(q)) buckets[1].push(i);
+    else if (buckets[0].length + buckets[1].length < limit && (sym.includes(q) || name.includes(q))) buckets[2].push(i);
   }
-  const label = (i: number) => genes.symbols?.[i] || genes.names[i];
-  ranked.sort((a, b) => a[0] - b[0] || label(a[1]).length - label(b[1]).length || label(a[1]).localeCompare(label(b[1])));
-  return ranked.slice(0, limit).map(([, i]) => ({ index: i, label: label(i), name: genes.names[i] }));
+  const byLabel = (a: number, b: number) => {
+    const x = l.labels[a];
+    const y = l.labels[b];
+    return x.length - y.length || (x < y ? -1 : x > y ? 1 : 0);
+  };
+  const out: number[] = [];
+  for (const b of buckets) {
+    if (out.length >= limit) break;
+    out.push(...b.sort(byLabel).slice(0, limit - out.length));
+  }
+  return out.map((i) => ({ index: i, label: l.labels[i], name: genes.names[i] }));
 }
 
 export function GeneSearch({
@@ -46,6 +70,11 @@ export function GeneSearch({
   const [open, setOpen] = useState(false);
   const listId = useId();
   const matches = useMemo(() => matchGenes(genes, query), [genes, query]);
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    // keep the option chosen with the arrow keys in view
+    listRef.current?.querySelector(`[data-k="${active}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
   const pick = (m: GeneMatch) => {
     onPick(m.name);
     setQuery('');
@@ -80,12 +109,17 @@ export function GeneSearch({
         }}
       />
       {open && query.trim() && (
-        <ul className="gene-matches" id={listId} role="listbox" aria-label="Matching genes">
-          {matches.length === 0 && <li className="muted small pad">No gene matches.</li>}
+        <ul className="gene-matches" id={listId} role="listbox" aria-label="Matching genes" ref={listRef}>
+          {matches.length === 0 && (
+            <li className="muted small pad" role="presentation">
+              <span role="status">No gene matches.</span>
+            </li>
+          )}
           {matches.map((m, k) => (
             <li
               key={m.index}
               id={`${listId}-${k}`}
+              data-k={k}
               role="option"
               aria-selected={k === active}
               className={`gene-match${k === active ? ' active' : ''}`}
@@ -97,7 +131,11 @@ export function GeneSearch({
               {m.label !== m.name && <span className="muted small">{m.name}</span>}
             </li>
           ))}
-          {matches.length === MAX_SHOWN && <li className="muted small pad">Type more to narrow down.</li>}
+          {matches.length === MAX_SHOWN && (
+            <li className="muted small pad" role="presentation">
+              Type more to narrow down.
+            </li>
+          )}
         </ul>
       )}
     </div>

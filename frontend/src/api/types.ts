@@ -91,12 +91,13 @@ export interface GeneList {
   names: string[]; // the var index (used in requests and saved settings)
   symbols: string[] | null; // readable symbols when the index holds ids
   symbol_column: string | null;
+  duplicates: number; // var names made unique by the server (`A`, `A-1`)
   matrices: MatrixInfo[];
 }
 
 /** One gene across all cells, dense, with statistics from the server. */
 export interface GeneVector {
-  values: Float32Array; // NaN = missing
+  values: Float32Array; // MISSING_VALUE (colour/missing.ts) = missing
   min: number;
   max: number;
   p99: number; // 99th percentile of the non-zero values

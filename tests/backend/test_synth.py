@@ -81,3 +81,19 @@ def test_mock_round_trip_examples(cfg: Config, tmp_path: Path, example, name: st
     fp2 = inspect_path(mock)
     assert structure_signature(fp2) == structure_signature(fp)
     assert fp2.size_bytes < fp.size_bytes
+
+
+@pytest.mark.parametrize("suffix", [".h5ad", ".zarr"])
+def test_dense_matrix_larger_than_one_block(
+    tmp_path: Path, suffix: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anndata as ad
+
+    from dbx.synth import anndata_gen
+
+    monkeypatch.setattr(anndata_gen, "_BLOCK_VALUES", 500)  # several row blocks
+    spec = AnnDataSpec(n_obs=230, n_vars=10, X=MatrixSpec(encoding="dense", density=0.3, chunk=40))
+    path = write_anndata(spec, tmp_path / f"d{suffix}")
+    a = ad.read_zarr(path) if suffix == ".zarr" else ad.read_h5ad(path)
+    x = np.asarray(a.X)
+    assert x.shape == (230, 10) and np.count_nonzero(x[200:]) > 0  # the last block was written

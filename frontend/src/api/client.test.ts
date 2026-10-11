@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MISSING_VALUE } from '../colour/missing';
 import { ApiError, decodeGene, getJson } from './client';
 
 const fakeFetch = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -42,7 +43,7 @@ describe('decodeGene', () => {
       }),
     );
     expect(Array.from(g.values.slice(0, 5))).toEqual([0, 1, 0, 0, 2]);
-    expect(Number.isNaN(g.values[5])).toBe(true);
+    expect(g.values[5]).toBe(MISSING_VALUE); // missing, in the GPU's form
     expect(g.nnz).toBe(3);
   });
 

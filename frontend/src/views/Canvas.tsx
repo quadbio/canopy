@@ -28,7 +28,7 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
   useEffect(
     () => publish(spec.id, out),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.legend],
+    [spec.id, out.layers, out.bounds, out.status, out.error, out.notice, out.problem?.message, out.legend],
   );
   return null;
 });
@@ -102,6 +102,16 @@ const ViewCell = memo(function ViewCell({
       {output?.status === 'error' && (
         <div className="view-error" role="alert">
           {output.error}
+        </div>
+      )}
+      {output?.problem && (
+        <div className="view-notice problem" role="alert" data-testid="view-problem">
+          {output.problem.message}
+          {output.problem.retry && (
+            <button className="link" onClick={output.problem.retry}>
+              Retry
+            </button>
+          )}
         </div>
       )}
       {notice && notice !== dismissed && (
@@ -271,6 +281,9 @@ export function Canvas() {
             reportEnvironment(info ?? null);
           }}
           onError={(e) => event('deck_error', null, { type: e?.name ?? 'Error' })}
+          // No depth test by default: layers draw in order. A layer that needs depth (the points'
+          // "higher values on top") sets it on itself, so it never hides layers drawn later.
+          parameters={{ depthCompare: 'always', depthWriteEnabled: false }}
           style={{ background: 'var(--canvas-bg)' }}
         />
       )}

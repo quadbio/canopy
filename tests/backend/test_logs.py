@@ -187,6 +187,8 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
     a = ad.AnnData(X=np.zeros((4, 2), np.float32))
     a.obs["SECRETCOLUMN"] = pd.Categorical(["SECRETVALUE", "b", "b", "SECRETVALUE"])
     a.obsm["X_umap"] = np.zeros((4, 2), np.float32)
+    a.var_names = ["SECRETGENE1", "SECRETGENE2"]
+    a.layers["SECRETLAYER"] = np.ones((4, 2), np.float32)
     a.write_h5ad(data / "SECRETFOLDER" / "SECRETFILE.h5ad")
     (data / "SECRETBROKEN.h5ad").write_bytes(b"\x89HDF\r\n\x1a\n" + b"\0" * 64)
     cfg = Config(
@@ -209,6 +211,9 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
         c.get(f"/api/datasets/{id}/obs", params={"column": "SECRETCOLUMN"})
         c.get(f"/api/datasets/{id}/obs", params={"column": "SECRETMISSING"})
         c.get(f"/api/datasets/{id}/obsm", params={"key": "SECRETKEY"})
+        c.get(f"/api/datasets/{id}/genes")
+        c.get(f"/api/datasets/{id}/gene", params={"i": 1, "matrix": "SECRETLAYER", "q": 16})
+        c.get(f"/api/datasets/{id}/gene", params={"i": 0, "matrix": "SECRETNOPE"})
         c.post(
             "/api/telemetry",
             json={"session": "s", "events": [{"name": "x", "fields": {"label": "SECRETTEL"}}]},
@@ -217,3 +222,39 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
     leaks = [w for w in ("SECRET", str(tmp_path)) if w in text]
     assert leaks == [], [line for line in text.splitlines() if "SECRET" in line][:3]
     assert id in text  # the dataset id (a hash) is kept: it is how requests are traced
+
+
+def test_io_errors_keep_their_errno_at_every_level(tmp_path: Path) -> None:
+    from dbx.privacy import redact_text
+
+    for level in ("strict", "standard"):
+        setup_logging(
+            LoggingConfig(dir=tmp_path / level, privacy=level),
+            role="test",
+            salt="s",
+            to_console=False,
+        )
+        log = get_logger("dbx.test")
+        try:
+            raise OSError(5, "Input/output error")
+        except OSError:
+            log.error("read_failed", exc_info=True)
+        try:  # h5py puts the errno into its message only
+            raise OSError(
+                "Can't read data (file read failed, errno = 116, "
+                "error message = 'Stale file handle')"
+            )
+        except OSError:
+            log.error("read_failed_h5", exc_info=True)
+        events = {e["event"]: e for e in log_events()}
+        assert events["read_failed"]["exc_errno"] == 5
+        assert events["read_failed_h5"]["exc_errno"] == 116
+    # the apostrophe in "Can't" does not start a quote that swallows the message
+    text = redact_text(
+        "Can't read data (errno = 5, error message = 'Input/output error')", "standard", "s"
+    )
+    assert (
+        text is not None
+        and text.startswith("Can't read data (errno = 5")
+        and "Input/output error" not in text
+    )

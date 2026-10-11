@@ -1,6 +1,15 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
-import { collectErrors, drawnColours, drawnFraction, freshPage, mainColours, openDataset } from './helpers';
+import {
+  collectErrors,
+  colourShare,
+  drawnColours,
+  drawnFraction,
+  freshPage,
+  mainColours,
+  openDataset,
+  parseRgb,
+} from './helpers';
 
 // The S4 demo path: find a dataset, open it, see its embedding coloured by cell type.
 
@@ -20,10 +29,10 @@ test('dataset details explain tables and storage notes in plain words', async ({
   await expect(details).toContainText('one per object in boundaries_cells');
   await details.locator('select').selectOption('table_tiles');
   await expect(details).toContainText('one per object in boundaries_tiles');
-  await page.getByLabel('About “Table”').hover();
-  await expect(page.getByRole('tooltip')).toContainText('one row per object');
-  await page.mouse.move(800, 400, { steps: 5 });
-  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await page.getByLabel('About “Table”').click(); // a click (or tap) opens the help
+  await expect(page.getByRole('dialog')).toContainText('one row per object');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   const notes = page.getByTestId('dataset-notes');
   await expect(notes).toContainText('nothing to do');
   await notes.locator('summary').click();
@@ -51,7 +60,9 @@ test('open spatial.h5ad and colour its UMAP by cell type', async ({ page }) => {
   await expect(page.getByTestId('legend')).toContainText('total_counts');
   await expect(page.getByTestId('legend').locator('.colourbar')).toBeVisible();
   await page.waitForTimeout(300);
-  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 })).length).toBeGreaterThan(4); // a gradient
+  // a gradient: both ends of viridis are on screen
+  expect(await colourShare(page, cell, [253, 231, 37], 90, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.002);
+  expect(await colourShare(page, cell, [68, 1, 84], 90, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.002);
   await page.screenshot({ path: 'test-results/screens/spatial-umap-total-counts.png' });
   expect(errors).toEqual([]);
 });
@@ -200,54 +211,77 @@ test('reopening a dataset continues with its last settings; reset goes back to d
   await expect(page.getByTestId('legend')).toContainText('celltype');
 });
 
-test('palettes: colours follow the label name across datasets; changes send no point data', async ({ page }) => {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __uploaded: number };
-    w.__uploaded = 0;
-    const proto = WebGL2RenderingContext.prototype;
-    const sub = proto.bufferSubData as (...a: unknown[]) => void;
-    proto.bufferSubData = function (this: unknown, ...a: unknown[]) {
-      w.__uploaded += (a[2] as ArrayBufferView | undefined)?.byteLength ?? 0;
-      return sub.apply(this, a);
-    } as typeof proto.bufferSubData;
-    const data = proto.bufferData as (...a: unknown[]) => void;
-    proto.bufferData = function (this: unknown, ...a: unknown[]) {
-      const src = a[1];
-      w.__uploaded += typeof src === 'number' ? 0 : ((src as ArrayBufferView | null)?.byteLength ?? 0);
-      return data.apply(this, a);
-    } as typeof proto.bufferData;
-  });
-  await freshPage(page);
-  await openDataset(page, 'region_1', 'table_cells');
-  const legends = page.getByTestId('legend');
-  const swatch = async (view: number, label: string) => {
-    const lg = legends.nth(view);
-    const toggle = lg.locator('.legend-toggle');
-    if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click(); // small views start folded
-    const item = lg.locator('.legend-item').filter({ has: page.locator('.legend-name', { hasText: new RegExp(`^${label}$`) }) });
-    return item.locator('.swatch').evaluate((e) => getComputedStyle(e).backgroundColor);
-  };
-  // region_1 brings its own colours; the default palette is chosen explicitly to share colours by name
-  await page.getByTestId('palette-select').click();
-  await page.getByRole('option', { name: /^Default/ }).click();
-  const first = await swatch(0, '1');
-  await openDataset(page, 'region_3', 'table_cells');
-  await page.getByTestId('palette-select').click();
-  await page.getByRole('option', { name: /^Default/ }).click();
-  expect(await swatch(1, '1')).toBe(first); // cluster "1" has the same colour in both datasets
+const countUploads = () => {
+  const w = window as unknown as { __uploaded: number };
+  w.__uploaded = 0;
+  const proto = WebGL2RenderingContext.prototype;
+  const sub = proto.bufferSubData as (...a: unknown[]) => void;
+  proto.bufferSubData = function (this: unknown, ...a: unknown[]) {
+    w.__uploaded += (a[2] as ArrayBufferView | undefined)?.byteLength ?? 0;
+    return sub.apply(this, a);
+  } as typeof proto.bufferSubData;
+  const data = proto.bufferData as (...a: unknown[]) => void;
+  proto.bufferData = function (this: unknown, ...a: unknown[]) {
+    const src = a[1];
+    w.__uploaded += typeof src === 'number' ? 0 : ((src as ArrayBufferView | null)?.byteLength ?? 0);
+    return data.apply(this, a);
+  } as typeof proto.bufferData;
+};
 
-  const cell = page.getByTestId('view-cell').nth(1);
+async function legendSwatch(page: Page, view: number, label: string): Promise<string> {
+  const lg = page.getByTestId('legend').nth(view);
+  const toggle = lg.locator('.legend-toggle');
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click(); // small views start folded
+  const item = lg.locator('.legend-item').filter({ has: page.locator('.legend-name', { hasText: new RegExp(`^${label}$`) }) });
+  return item.locator('.swatch').evaluate((e) => getComputedStyle(e).backgroundColor);
+}
+
+async function colourBy(page: Page, view: number, column: string, palette?: RegExp) {
+  await page.getByTestId('view-cell').nth(view).locator('.view-title').click(); // select the view
+  await page.getByTestId('colour-select').click();
+  await page.getByRole('option', { name: new RegExp(`^${column}`) }).click();
+  if (palette) {
+    await page.getByTestId('palette-select').click();
+    await page.getByRole('option', { name: palette }).click();
+  }
+  await expect(page.getByTestId('legend').nth(view)).toContainText(column);
+}
+
+test('colours follow the label name across datasets, whatever their order in each', async ({ page }) => {
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await colourBy(page, 0, 'celltype_harmonized', /^Default/);
+  await openDataset(page, 'dissociated.h5ad');
+  await colourBy(page, 1, 'celltype_harmonized', /^Default/);
+  // "Erythroid" is the 9th category in one dataset and the 7th in the other
+  for (const label of ['Erythroid', 'NMP', 'Spinal cord']) {
+    expect(await legendSwatch(page, 1, label)).toBe(await legendSwatch(page, 0, label));
+  }
+});
+
+test('hiding a category and changing the palette send no point data', async ({ page }) => {
+  await page.addInitScript(countUploads);
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await colourBy(page, 0, 'celltype_harmonized', /^Default/);
+  const cell = page.getByTestId('view-cell').first();
   const uploaded = () => page.evaluate(() => (window as unknown as { __uploaded: number }).__uploaded);
   await page.waitForTimeout(300);
   const before = await uploaded();
+  // hide one category: its colour leaves the plot
+  const ery = parseRgb(await legendSwatch(page, 0, 'Erythroid'));
+  const shareBefore = await colourShare(page, cell, ery, 30);
+  expect(shareBefore).toBeGreaterThan(0.002);
+  await page.getByTestId('legend').locator('.legend-item', { hasText: /^Erythroid/ }).click();
+  await page.waitForTimeout(300);
+  expect(await colourShare(page, cell, ery, 30)).toBeLessThan(shareBefore / 5);
+  // change the palette: the colours change
   const coloursBefore = mainColours(await drawnColours(page, cell));
   await page.getByTestId('palette-select').click();
   await page.getByRole('option', { name: /^Colour-blind/ }).click();
-  await legends.nth(1).locator('.legend-item').first().click(); // hide one category
   await page.waitForTimeout(300);
-  const coloursAfter = mainColours(await drawnColours(page, cell));
-  expect(coloursAfter.join()).not.toBe(coloursBefore.join());
-  // 7.8 k cells: positions are 62 KB, values 31 KB. Only the colour table and uniforms may move.
+  expect(mainColours(await drawnColours(page, cell)).join()).not.toBe(coloursBefore.join());
+  // 52 k cells: positions are 414 KB, values 207 KB. Only the colour table and uniforms may move.
   expect((await uploaded()) - before).toBeLessThan(10_000);
 });
 
@@ -268,7 +302,9 @@ test('colour by a gene: search, gradient, tooltip, values from a layer', async (
   const cell = page.getByTestId('view-cell').first();
   await expect(cell).toHaveAttribute('data-status', 'ready');
   await page.waitForTimeout(300);
-  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 })).length).toBeGreaterThan(4); // a gradient
+  // a gradient: both ends of viridis are on screen (a one-colour plot has neither)
+  expect(await colourShare(page, cell, [253, 231, 37], 90, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.005);
+  expect(await colourShare(page, cell, [68, 1, 84], 90, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.005);
   // every cell is still drawn (expressing cells are moved in front, not out of view)
   expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.85 * covered);
   await page.screenshot({ path: 'test-results/screens/spatial-gene.png' });
@@ -295,4 +331,50 @@ test('colour by a gene: search, gradient, tooltip, values from a layer', async (
   await expect(page.getByTestId('legend').nth(1)).toContainText('(counts)');
   await expect(page.getByTestId('view-cell').nth(1)).toHaveAttribute('data-status', 'ready');
   expect(errors).toEqual([]);
+});
+
+test('higher values are drawn on top, and only when asked', async ({ page }) => {
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  await page.getByTestId('gene-search').fill('Plek'); // expressed in 1 cell of 10
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(page.getByTestId('legend')).toContainText('Plek');
+  const cell = page.getByTestId('view-cell').first();
+  await page.waitForTimeout(300);
+  const top = (await colourShare(page, cell, [253, 231, 37], 90)) + (await colourShare(page, cell, [94, 201, 98], 90));
+  await page.getByTestId('sort-by-value').locator('input').uncheck();
+  await page.waitForTimeout(300);
+  const mixed = (await colourShare(page, cell, [253, 231, 37], 90)) + (await colourShare(page, cell, [94, 201, 98], 90));
+  expect(top).toBeGreaterThan(mixed * 1.2);
+});
+
+test('a slow or failing gene keeps the plot on screen; Retry recovers', async ({ page }) => {
+  await freshPage(page);
+  await openDataset(page, 'spatial.h5ad');
+  const cell = page.getByTestId('view-cell').first();
+  await page.waitForTimeout(300);
+  const covered = await drawnFraction(page, cell, { x0: 0, x1: 0.6 });
+  // slow
+  await page.route('**/api/datasets/*/gene?*', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.getByTestId('gene-search').fill('Lin28a');
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(cell).toHaveAttribute('data-status', 'loading');
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.85 * covered);
+  await expect(page.getByTestId('legend')).toContainText('Lin28a');
+  await page.unroute('**/api/datasets/*/gene?*');
+  // failing
+  await page.route('**/api/datasets/*/gene?*', (route) =>
+    route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":{"code":"x","message":"boom"}}' }),
+  );
+  await page.getByTestId('gene-search').fill('Plek');
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(page.getByTestId('view-problem')).toContainText('boom');
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.85 * covered);
+  await page.unroute('**/api/datasets/*/gene?*');
+  await page.getByTestId('view-problem').getByRole('button', { name: 'Retry' }).click();
+  await expect(page.getByTestId('legend')).toContainText('Plek');
+  await expect(page.getByTestId('view-problem')).toHaveCount(0);
 });

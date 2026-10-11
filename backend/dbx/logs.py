@@ -58,6 +58,7 @@ NAME_FIELDS = frozenset(
         "element",
         "column",
         "gene",
+        "gene_index",  # with the public gene list, an index names a gene
         "config_file",
         "log_dir",
         "cache_dir",
@@ -176,8 +177,22 @@ def _names(value: Any, salt: str) -> Any:
     return value
 
 
+_ERRNO_TEXT = re.compile(r"errno\s*=\s*(\d{1,4})")
+
+
+def _errno(exc: BaseException) -> int | None:
+    """The OS error number of an exception: its `errno`, or the one HDF5 puts in its message."""
+    n = getattr(exc, "errno", None)
+    if isinstance(n, int):
+        return n
+    m = _ERRNO_TEXT.search(str(exc))
+    return int(m.group(1)) if m else None
+
+
 def _exception_fields(exc: BaseException, privacy: str, salt: str) -> dict[str, Any]:
     out: dict[str, Any] = {"exc_type": type(exc).__qualname__}
+    if (n := _errno(exc)) is not None:
+        out["exc_errno"] = n  # a number: kept at every level (EIO, ESTALE, … on network storage)
     # str(KeyError('x')) is "'x'" (quoted), which would be tokenised whole: use the key itself.
     text = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
     msg = redact_text(text, privacy, salt)
@@ -189,6 +204,8 @@ def _exception_fields(exc: BaseException, privacy: str, salt: str) -> dict[str, 
     cur = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
     while cur is not None and len(chain) < _MAX_CHAIN:
         link: dict[str, Any] = {"exc_type": type(cur).__qualname__}
+        if (n := _errno(cur)) is not None:
+            link["exc_errno"] = n
         m = redact_text(str(cur), privacy, salt)
         if m:
             link["exc_message"] = m

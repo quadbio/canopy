@@ -1,7 +1,7 @@
 // Small form controls on Radix primitives (keyboard and screen-reader support built in),
 // styled only through design tokens (styles/app.css).
 
-import { Select as RSelect, Slider as RSlider, Tooltip as RTooltip } from 'radix-ui';
+import { Popover as RPopover, Select as RSelect, Slider as RSlider } from 'radix-ui';
 import type { ReactNode } from 'react';
 
 export interface Option {
@@ -104,23 +104,21 @@ export function Slider({
   );
 }
 
-/** A small "?" that explains a term on hover or keyboard focus. */
+/** A small "?" that explains a term: opens on click or tap (Escape or a click outside closes it). */
 export function Help({ children, label = 'What is this?' }: { children: ReactNode; label?: string }) {
   return (
-    <RTooltip.Provider delayDuration={150}>
-      <RTooltip.Root>
-        <RTooltip.Trigger asChild>
-          <button type="button" className="help" aria-label={label} onClick={(e) => e.preventDefault()}>
-            ?
-          </button>
-        </RTooltip.Trigger>
-        <RTooltip.Portal>
-          <RTooltip.Content className="help-content" side="top" align="start" sideOffset={6} collisionPadding={8}>
-            {children}
-          </RTooltip.Content>
-        </RTooltip.Portal>
-      </RTooltip.Root>
-    </RTooltip.Provider>
+    <RPopover.Root>
+      <RPopover.Trigger asChild>
+        <button type="button" className="help" aria-label={label}>
+          ?
+        </button>
+      </RPopover.Trigger>
+      <RPopover.Portal>
+        <RPopover.Content className="help-content" side="top" align="start" sideOffset={6} collisionPadding={8}>
+          {children}
+        </RPopover.Content>
+      </RPopover.Portal>
+    </RPopover.Root>
   );
 }
 

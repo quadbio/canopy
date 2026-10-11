@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { categoryColouring, displayRange, lookup, numberColouring, robustRange } from './colouring';
 import { gpuValues, MISSING_VALUE } from './gpu';
 import { categoryColours, colormapLut, coloursRepeat, hexToRgb, PALETTES, resolvePalette } from './palettes';
-import { assignSlots, MAX_SLOTS, mergeSlots } from './slots';
+import { assignSlots, hashLabel } from './slots';
 
 describe('colouring (CPU reference of the shader)', () => {
   it('colours categories, greys missing codes and hides hidden categories', () => {
@@ -84,38 +84,33 @@ describe('palettes', () => {
 describe('colour slots (colours by name)', () => {
   const nat = (n: number) => Array.from({ length: n }, (_, i) => i);
 
-  it('gives new labels the lowest free slots and keeps known ones', () => {
-    const known = new Map([['B cell', 3]]);
-    const { slots, added } = assignSlots(['T cell', 'B cell', 'NK'], nat(3), known, 54);
-    expect(slots).toEqual([0, 3, 1]);
-    expect(added).toEqual([
-      ['T cell', 0],
-      ['NK', 1],
-    ]);
+  it('gives a label the same slot in every column, whatever was seen before', () => {
+    const a = ['Astrocyte', 'Neuron'];
+    const b = ['Microglia', 'Oligodendrocyte'];
+    const all = ['Astrocyte', 'Microglia', 'Neuron', 'Oligodendrocyte'];
+    const slotOf = (labels: string[]) => Object.fromEntries(labels.map((l, k) => [l, assignSlots(labels, nat(labels.length), 54)[k]]));
+    const sa = slotOf(a);
+    const sb = slotOf(b);
+    const sAll = slotOf(all);
+    // without collisions inside a column, a label's slot is its hash: the same everywhere
+    for (const l of all) expect(sAll[l]).toBe(hashLabel(l) % 54);
+    expect(sa.Astrocyte).toBe(sAll.Astrocyte);
+    expect(sb.Microglia).toBe(sAll.Microglia);
   });
 
   it('never gives two labels of one column the same slot while slots are free', () => {
-    const known = new Map([
-      ['a', 0],
-      ['b', 0], // learnt from different datasets
-    ]);
-    const { slots, added } = assignSlots(['a', 'b'], nat(2), known, 54);
-    expect(new Set(slots).size).toBe(2);
-    expect(added).toEqual([]); // the known slot of "b" is not overwritten
+    const labels = Array.from({ length: 54 }, (_, i) => `cluster ${i}`);
+    expect(new Set(assignSlots(labels, nat(54), 54)).size).toBe(54);
   });
 
   it('repeats colours only beyond the palette size', () => {
     const labels = nat(10).map(String);
-    const { slots } = assignSlots(labels, nat(10), new Map(), 7);
-    expect(slots.slice(0, 7)).toEqual(nat(7));
-    expect(slots.slice(7)).toEqual([0, 1, 2]);
+    const slots = assignSlots(labels, nat(10), 7);
+    expect(new Set(slots.slice(0, 7)).size).toBe(7);
   });
 
-  it('keeps at most MAX_SLOTS labels, dropping the oldest', () => {
-    const many = Array.from({ length: MAX_SLOTS + 3 }, (_, i) => [`l${i}`, i % 54] as [string, number]);
-    const merged = mergeSlots([], many);
-    expect(merged).toHaveLength(MAX_SLOTS);
-    expect(merged[0][0]).toBe('l3');
-    expect(mergeSlots([['x', 1]], [['x', 2]])).toEqual([['x', 1]]);
+  it('is stable across runs (part of the colour contract)', () => {
+    expect(hashLabel('T cell')).toBe(hashLabel('T cell'));
+    expect(hashLabel('')).toBe(0x811c9dc5);
   });
 });
