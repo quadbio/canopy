@@ -139,7 +139,13 @@ class Config(_Strict):
 
 
 class ConfigError(ValueError):
-    """The configuration file is invalid; the message lists every problem."""
+    """The configuration file is invalid; the message lists every problem. `code` names the
+    kind (config_syntax, config_invalid, config_paths) for the start-up failure record."""
+
+    def __init__(self, message: str, code: str = "config_invalid", **facts: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.facts = facts
 
 
 def check_paths(cfg: Config) -> None:
@@ -157,14 +163,23 @@ def check_paths(cfg: Config) -> None:
         elif real.is_relative_to(cache):
             problems.append(f"data root {root.name!r} is inside cache_dir {cache}")
     if problems:
-        raise ConfigError("; ".join(problems))
+        raise ConfigError("; ".join(problems), "config_paths", n_problems=len(problems))
 
 
 def load_config(path: Path | None) -> Config:
     """Load and check a config file; relative paths in it are resolved against its folder."""
     if path is None:
         return Config()
-    raw = tomllib.loads(path.read_text())
+    try:
+        raw = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as e:
+        line, col = getattr(e, "lineno", 0), getattr(e, "colno", 0)
+        raise ConfigError(
+            f"{path}: not valid TOML at line {line}, column {col}: {e.msg}",  # type: ignore[attr-defined]
+            "config_syntax",
+            line=line,
+            column=col,
+        ) from e
     try:
         cfg = Config.model_validate(raw)
     except ValueError as e:

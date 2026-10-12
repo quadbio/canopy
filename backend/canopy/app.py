@@ -3,6 +3,7 @@ gzip), error envelope, and the housekeeping thread (slow-request watchdog, idle 
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -41,7 +42,18 @@ from canopy.stores import stats as store_stats
 from canopy.telemetry import router as telemetry_router
 
 # Built frontend (pnpm build) is served from here when present.
-FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+# The built frontend: a source checkout's frontend/dist, or CANOPY_FRONTEND_DIST (a release).
+FRONTEND_DIST = Path(
+    os.environ.get("CANOPY_FRONTEND_DIST")
+    or Path(__file__).resolve().parents[2] / "frontend" / "dist"
+)
+
+NO_FRONTEND_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Canopy</title>
+</head><body style="font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:15vh auto">
+<h1>Canopy</h1><p>The server runs, but its web page was not found (the frontend is not built or
+not installed). See the host guide: install from a release archive, which contains it.</p>
+</body></html>"""
 # Client-supplied request ids are kept only if short and plain (they end up in every log line).
 REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
@@ -368,7 +380,13 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     def version_info() -> dict[str, object]:
         return environment_snapshot()
 
-    if FRONTEND_DIST.is_dir():
+    if (FRONTEND_DIST / "index.html").is_file():
         app.mount("/", SpaStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    else:
+        log.error("frontend_missing")
+
+        @app.get("/", include_in_schema=False)
+        def no_frontend() -> HTMLResponse:
+            return HTMLResponse(NO_FRONTEND_PAGE, status_code=503)
 
     return app

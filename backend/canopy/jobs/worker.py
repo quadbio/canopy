@@ -24,7 +24,7 @@ import psutil
 
 from canopy.config import Config, apply_file_access
 from canopy.jobs.db import DB_FILE, HEARTBEAT_S, JobsDB
-from canopy.logs import MemorySampler, get_logger, setup_logging, timed
+from canopy.logs import MemorySampler, get_logger, install_stack_dumps, setup_logging, timed
 from canopy.privacy import installation_salt
 
 GB = 2**30
@@ -112,7 +112,10 @@ def run(job_id: int, config_file: Path) -> int:
     signal.signal(signal.SIGTERM, _on_term)  # first: a cancel during start-up is not lost
     cfg = Config.model_validate_json(config_file.read_text())
     apply_file_access(cfg)
-    setup_logging(cfg.logging, role="worker", salt=installation_salt(cfg.state), to_console=False)
+    log_dir = setup_logging(
+        cfg.logging, role="worker", salt=installation_salt(cfg.state), to_console=False
+    )
+    install_stack_dumps(log_dir)  # a crash (e.g. in HDF5) leaves its stack in the log folder
     log = get_logger("canopy.jobs")
     db = JobsDB(cfg.state / DB_FILE, wal=_wal(cfg))
     if not db.claim(job_id, os.getpid()):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -61,11 +62,71 @@ def main(
     os.umask(0o077)  # private until a config says otherwise
 
 
-def _load(config: Path | None) -> Config:
+def _configured_log_dir(config: Path) -> Path | None:
+    """The `[logging] dir` of a config file, also when the file is not valid TOML (line scan)."""
+    import re
+    import tomllib
+
+    try:
+        text = config.read_text()
+    except OSError:
+        return None
+    raw: str | None
+    try:
+        raw = tomllib.loads(text).get("logging", {}).get("dir")
+    except ValueError:
+        raw, section = None, ""
+        for line in text.splitlines():
+            head = re.match(r"\s*\[([^\]]+)\]", line)
+            if head:
+                section = head.group(1).strip()
+            m = re.match(r'\s*dir\s*=\s*"([^"]+)"', line)
+            if m and section == "logging":
+                raw = m.group(1)
+                break
+    if not raw:
+        return None
+    return Path(raw) if Path(raw).is_absolute() else config.parent / raw
+
+
+def _startup_failure(code: str, config: Path | None, cfg: Config | None, **facts: object) -> None:
+    """A start-up failure leaves a record in the log folder (the configured one, else the
+    per-user fallback), so it reaches the developer with the copied logs, not only the terminal.
+    Codes and numbers only: no paths or messages."""
+    import datetime
+
+    log_dir = cfg.logging.dir if cfg else None
+    if log_dir is None and config is not None:
+        log_dir = _configured_log_dir(config)
+    for d in (log_dir, default_log_dir()):
+        if d is None:
+            continue
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            line = {
+                "event": "startup_failed",
+                "code": code,
+                **facts,
+                "build": build_id(),
+                "pid": os.getpid(),
+                "role": "server",
+                "level": "error",
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            }
+            with (d / f"canopy-startup-{os.getpid()}.jsonl").open("a") as f:
+                f.write(json.dumps(line) + "\n")
+            return
+        except OSError:
+            continue
+
+
+def _load(config: Path | None, *, serving: bool = False) -> Config:
     try:
         cfg = load_config(config)
     except ConfigError as e:
         typer.echo(f"config error: {e}", err=True)
+        if serving:
+            _startup_failure(e.code, config, None, **e.facts)
         raise typer.Exit(2) from e
     apply_file_access(cfg)
     return cfg
@@ -74,7 +135,16 @@ def _load(config: Path | None) -> Config:
 @app.command()
 def serve(config: ConfigOpt = None) -> None:
     """Start the web server."""
-    cfg = _load(config)
+    cfg = _load(config, serving=True)
+    port_problem = _port_free(cfg.server.host, cfg.server.port)
+    if port_problem is not None:
+        typer.echo(
+            f"port {cfg.server.port} cannot be used (errno {port_problem}): another program "
+            "uses it, or choose server.port",
+            err=True,
+        )
+        _startup_failure("port_in_use", config, cfg, port=cfg.server.port, errno=port_problem)
+        raise typer.Exit(1)
     log_dir = setup_logging(cfg.logging, role="server", salt=_salt(cfg))
     stacks = install_stack_dumps(log_dir)
     get_logger("canopy.config").info(
@@ -85,12 +155,20 @@ def serve(config: ConfigOpt = None) -> None:
         config=cfg.model_dump(mode="json"),
         build=build_info(),
     )
-    from canopy.jobs.manager import CacheInUseError
+    from canopy.jobs.manager import CacheInUseError, LockUnsupportedError
 
     try:
         server = create_app(cfg)
     except CacheInUseError as e:
         typer.echo(str(e), err=True)
+        get_logger("canopy.app").error("startup_failed", code="cache_locked")
+        _startup_failure("cache_locked", config, cfg)
+        raise typer.Exit(1) from e
+    except LockUnsupportedError as e:
+        typer.echo(str(e), err=True)
+        errno_ = getattr(e.__cause__, "errno", None)
+        get_logger("canopy.app").error("startup_failed", code="lock_unsupported", errno=errno_)
+        _startup_failure("lock_unsupported", config, cfg, errno=errno_)
         raise typer.Exit(1) from e
     if cfg.server.auth == "token":
         url = link(cfg.server.host, cfg.server.port, access_token(cfg.state))
@@ -188,6 +266,46 @@ def token_find(
         typer.echo(
             f"{t}  →  {candidates.get(t, 'not found (a gene name, or a name not in the index)')}"
         )
+
+
+def _port_free(host: str, port: int) -> int | None:
+    """None if the server can listen on host:port, else the errno."""
+    import socket
+
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+        except OSError as e:
+            return e.errno or -1
+    return None
+
+
+@app.command()
+def bundle(
+    config: ConfigOpt = None,
+    since_days: Annotated[float, typer.Option("--since-days", help="Logs of the last N days")] = 3,
+    out: Annotated[Path | None, typer.Option("--out", help="Archive to write")] = None,
+) -> None:
+    """Collect logs, environment, jobs and index summaries for the developer, at strict privacy,
+    into one archive (checked for names known on this host before it is written)."""
+    from canopy.bundle import build_bundle
+
+    cfg = _load(config)
+    stamp = time.strftime("%Y%m%d-%H%M")
+    target = out or Path.cwd() / f"canopy-bundle-{stamp}.tar.gz"
+    try:
+        path, notes = build_bundle(cfg, target, since_days)
+    except RuntimeError as e:
+        typer.echo(f"not written: {e}", err=True)
+        raise typer.Exit(1) from e
+    for n in notes:
+        typer.echo(f"note: {n}")
+    typer.echo(
+        f"wrote {path} ({path.stat().st_size // 1024} KB). Open it and read MANIFEST.md before"
+    )
+    typer.echo("copying it; it holds no names (checked), only codes, numbers and tokens.")
 
 
 @app.command("link")

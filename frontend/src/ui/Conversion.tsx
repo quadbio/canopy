@@ -51,6 +51,7 @@ const ERRORS: Record<string, string> = {
 export function describeError(code: string | null): string {
   if (!code) return 'Failed.';
   if (ERRORS[code]) return ERRORS[code];
+  if (code === 'worker_killed:oom') return 'The system stopped the conversion: it ran out of memory (lower jobs.memory_gb or free memory).';
   if (code.startsWith('worker_killed')) return 'The conversion process was stopped by the system (out of memory?).';
   return `Failed (${code}).`;
 }

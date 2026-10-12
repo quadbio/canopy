@@ -22,6 +22,7 @@ each launch, whatever ended them (also a kill that left no chance to clean up).
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import os
 import shutil
@@ -36,7 +37,13 @@ from typing import Any
 
 from canopy.config import Config
 from canopy.jobs.db import ACTIVE, DB_FILE, Job, JobsDB
-from canopy.logs import get_logger, memory_headroom, memory_total
+from canopy.logs import (
+    cgroup_memory_limit,
+    current_log_file,
+    get_logger,
+    memory_headroom,
+    memory_total,
+)
 
 GB = 2**30
 _LOCKS: dict[str, Any] = {}  # cache folders this process holds the lock of
@@ -46,8 +53,13 @@ class CacheInUseError(RuntimeError):
     """Another server process uses this cache folder."""
 
 
+class LockUnsupportedError(RuntimeError):
+    """File locks do not work where the state folder is (some network file systems)."""
+
+
 def lock_cache(cache_dir: Path) -> None:
-    """Take the cache's server lock for this process (re-entrant within the process)."""
+    """Take the server lock in this folder for this process (re-entrant within the process).
+    Only "would block" means another server holds it; other errors mean locks do not work there."""
     key = str(cache_dir.resolve())
     if key in _LOCKS:
         return
@@ -56,10 +68,17 @@ def lock_cache(cache_dir: Path) -> None:
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as e:
+        f.seek(0)
+        holder = f.read().strip()
         f.close()
-        raise CacheInUseError(
-            f"another canopy server uses the cache folder {cache_dir}; stop it or use another "
-            "cache_dir"
+        if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+            raise CacheInUseError(
+                f"another canopy server (pid {holder or '?'}) uses the folder {cache_dir}; stop "
+                "it or use another cache_dir / state_dir"
+            ) from e
+        raise LockUnsupportedError(
+            f"file locks do not work in {cache_dir} (errno {e.errno}); put state_dir on a local "
+            "disk"
         ) from e
     f.seek(0)
     f.truncate()
@@ -99,6 +118,7 @@ class JobManager:
         self.on_done = on_done
         self.log = get_logger("canopy.jobs")
         self.procs: dict[int, subprocess.Popen[bytes]] = {}
+        self._oom_at_start: dict[int, int | None] = {}  # cgroup OOM kills when a worker started
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -215,6 +235,11 @@ class JobManager:
                 else:
                     state = "failed"
                     error = f"worker_killed:{-code}" if code < 0 else f"worker_exit:{code}"
+                    # killed by the kernel for lack of memory (the cgroup counted an OOM kill)
+                    before = self._oom_at_start.get(id)
+                    after = cgroup_memory_limit().get("oom_kills")
+                    if code == -9 and before is not None and after is not None and after > before:
+                        error = "worker_killed:oom"
                 self.db.update(id, state=state, error=error, finished=time.time())
                 self.log.error("job_worker_ended", job=id, returncode=code, state=state)
                 job = self.db.get(id)
@@ -227,6 +252,8 @@ class JobManager:
                 error=job.error,
                 seconds=round((job.finished or time.time()) - (job.started or job.created), 1),
             )
+            # the job's config copy holds real paths: not kept once the job ended
+            (self.cfg.state / "jobs" / f"job-{id}.json").unlink(missing_ok=True)
             if job.state == "done" and self.on_done:
                 self.on_done(job)
 
@@ -274,17 +301,40 @@ class JobManager:
         part.write_text(self.cfg.model_dump_json())
         part.replace(conf)
         cmd = [sys.executable, "-m", "canopy.jobs.worker", str(job.id), str(conf)]
-        env = dict(os.environ, PYTHONUNBUFFERED="1")
-        proc = subprocess.Popen(  # noqa: S603 (our own interpreter and module, no shell)
-            cmd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=None,
-            start_new_session=True,
+        threads = str(self.cfg.jobs.threads)
+        env = dict(
+            os.environ,
+            PYTHONUNBUFFERED="1",
+            # numeric libraries (MKL, OpenBLAS, numexpr) would otherwise use every core of the host
+            OMP_NUM_THREADS=threads,
+            MKL_NUM_THREADS=threads,
+            OPENBLAS_NUM_THREADS=threads,
+            NUMEXPR_NUM_THREADS=threads,
         )
+        # The worker's own messages before its logging starts, and fatal errors of libraries
+        # (HDF5, compression) land in the log folder, not on the server's terminal.
+        log_file = current_log_file()
+        log_dir = log_file.parent if log_file else self.cfg.logging.dir
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            err: Any = (log_dir / f"canopy-worker-job{job.id}.stderr.txt").open("ab")
+        except OSError:
+            err = None
+        try:
+            proc = subprocess.Popen(  # noqa: S603 (our own interpreter and module, no shell)
+                cmd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=err,
+                start_new_session=True,
+            )
+        finally:
+            if err is not None:
+                err.close()  # the child keeps its own descriptor
         with self._lock:
             self.procs[job.id] = proc
+        self._oom_at_start[job.id] = cgroup_memory_limit().get("oom_kills")
         self.db.update(job.id, stage=None, info=None)
         self.log.info("job_started", job=job.id, worker_pid=proc.pid, kind=job.kind)
 

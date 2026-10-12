@@ -12,6 +12,7 @@ locations and a message redacted to the level; Python warnings are captured the 
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import faulthandler
 import logging
@@ -474,47 +475,97 @@ def memory_snapshot(cache_dir: Path | None = None) -> dict[str, Any]:
     return snap
 
 
-def memory_headroom() -> int:
-    """Bytes this process could still use: the host's available memory, or less if the cgroup
-    (e.g. a systemd slice with MemoryMax) leaves less."""
-    avail = int(psutil.virtual_memory().available)
+UNLIMITED = 2**60  # cgroup v1 reports "no limit" as a huge number
+
+
+def cgroup_memory_limit(
+    proc_cgroup: Path = Path("/proc/self/cgroup"), sys_root: Path = Path("/sys/fs/cgroup")
+) -> dict[str, Any]:
+    """This process's cgroup memory limit: version (v2, hybrid, v1 or None), the smallest limit
+    along the path to the root (a per-user or service slice often sets it on a parent), the
+    current usage, the folder the limit comes from (as a depth: 0 = own cgroup) and the
+    out-of-memory kill counter. Empty values where unknown (macOS, containers without cgroups)."""
+    out: dict[str, Any] = {"version": None, "limit_bytes": None, "usage_bytes": None}
     try:
-        rel = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
-        base = Path("/sys/fs/cgroup") / rel.lstrip("/")
-        usage = int((base / "memory.current").read_text())
-        limit_raw = (base / "memory.max").read_text().strip()
-        if limit_raw != "max":
-            avail = min(avail, int(limit_raw) - usage)
-    except (OSError, IndexError, ValueError):
+        lines = proc_cgroup.read_text().splitlines()
+    except OSError:
+        return out
+    entries = [ln.split(":", 2) for ln in lines if ln.count(":") >= 2]
+    v2 = next((e[2] for e in entries if e[0] == "0" and e[1] == ""), None)
+    v1 = next((e[2] for e in entries if "memory" in e[1].split(",")), None)
+    if v1 is not None:  # cgroup v1 (or hybrid): the memory controller is a v1 one
+        out["version"] = "hybrid" if v2 is not None else "v1"
+        base = sys_root / "memory"
+        files = ("memory.limit_in_bytes", "memory.usage_in_bytes")
+        rel = v1
+    elif v2 is not None:
+        out["version"] = "v2"
+        base = sys_root if (sys_root / "cgroup.controllers").exists() else sys_root / "unified"
+        files = ("memory.max", "memory.current")
+        rel = v2
+    else:
+        return out
+    here = base / rel.lstrip("/")
+    limit, depth, d = None, None, here
+    for i in range(64):
+        try:
+            raw = (d / files[0]).read_text().strip()
+            if raw != "max" and int(raw) < UNLIMITED and (limit is None or int(raw) < limit):
+                limit, depth = int(raw), i
+        except (OSError, ValueError):
+            pass
+        if d == base or d.parent == d:
+            break
+        d = d.parent
+    with contextlib.suppress(OSError, ValueError):
+        out["usage_bytes"] = int((here / files[1]).read_text())
+    out["limit_bytes"] = limit
+    out["limit_depth"] = depth
+    out["oom_kills"] = cgroup_oom_kills(here, out["version"])
+    return out
+
+
+def cgroup_oom_kills(here: Path, version: str | None) -> int | None:
+    """Out-of-memory kills counted for the cgroup (v2 memory.events, v1 memory.oom_control)."""
+    name = "memory.oom_control" if version in ("v1", "hybrid") else "memory.events"
+    try:
+        for line in (here / name).read_text().splitlines():
+            k, _, v = line.partition(" ")
+            if k == "oom_kill":
+                return int(v)
+    except (OSError, ValueError):
         pass
+    return None
+
+
+def memory_headroom() -> int:
+    """Bytes this process could still use: the host's available memory, or less if its cgroup
+    (e.g. a systemd slice with MemoryMax, on this cgroup or a parent) leaves less."""
+    avail = int(psutil.virtual_memory().available)
+    cg = cgroup_memory_limit()
+    if cg["limit_bytes"] is not None:
+        avail = min(avail, cg["limit_bytes"] - (cg["usage_bytes"] or 0))
     return max(avail, 0)
 
 
 def memory_total() -> int:
     """Bytes of memory this process could ever have: the host's, or its cgroup limit."""
     total = int(psutil.virtual_memory().total)
-    try:
-        rel = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
-        limit_raw = (Path("/sys/fs/cgroup") / rel.lstrip("/") / "memory.max").read_text().strip()
-        if limit_raw != "max":
-            total = min(total, int(limit_raw))
-    except (OSError, IndexError, ValueError):
-        pass
-    return total
+    limit = cgroup_memory_limit()["limit_bytes"]
+    return min(total, limit) if limit is not None else total
 
 
-def _cgroup_memory() -> dict[str, float]:
-    """cgroup v2 usage and limit of this process (Linux only; empty elsewhere)."""
-    try:
-        rel = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
-        base = Path("/sys/fs/cgroup") / rel.lstrip("/")
-        usage = int((base / "memory.current").read_text())
-        limit_raw = (base / "memory.max").read_text().strip()
-    except (OSError, IndexError, ValueError):
+def _cgroup_memory() -> dict[str, Any]:
+    """cgroup usage and limit of this process, for memory samples (Linux only)."""
+    cg = cgroup_memory_limit()
+    if cg["version"] is None:
         return {}
-    out = {"cgroup_usage_gb": round(usage / 2**30, 2)}
-    if limit_raw != "max":
-        out["cgroup_limit_gb"] = round(int(limit_raw) / 2**30, 2)
+    out: dict[str, Any] = {"cgroup_version": cg["version"]}
+    if cg["usage_bytes"] is not None:
+        out["cgroup_usage_gb"] = round(cg["usage_bytes"] / 2**30, 2)
+    if cg["limit_bytes"] is not None:
+        out["cgroup_limit_gb"] = round(cg["limit_bytes"] / 2**30, 2)
+        out["cgroup_limit_depth"] = cg["limit_depth"]
     return out
 
 
