@@ -53,6 +53,10 @@ class CacheInUseError(RuntimeError):
     """Another server process uses this cache folder."""
 
 
+class QueueFullError(RuntimeError):
+    """jobs.max_queued jobs wait already."""
+
+
 class LockUnsupportedError(RuntimeError):
     """File locks do not work where the state folder is (some network file systems)."""
 
@@ -119,15 +123,36 @@ class JobManager:
         self.log = get_logger("canopy.jobs")
         self.procs: dict[int, subprocess.Popen[bytes]] = {}
         self._oom_at_start: dict[int, int | None] = {}  # cgroup OOM kills when a worker started
+        # memory each running job may use (its admission need): part of the server's account
+        self.reserved: dict[int, int] = {}
+        # workers of an earlier server process that still run (it crashed or was killed):
+        # watched through the database, counted as running
+        self.adopted: dict[int, Job] = {}
+        self._silent_since: dict[int, float] = {}
+        self.cache_bytes: Callable[[], int] = lambda: 0  # set by the app (the dataset cache)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = threading.Thread(target=self._run, name="jobs", daemon=True)
         for id in self.db.mark_interrupted():
             self.log.warning("job_interrupted", job=id)
+        for j in self.db.find(states=("running",)):
+            if j.process_alive():
+                self.adopted[j.id] = j
+                self.reserved[j.id] = self.need(j)
+                self.log.warning("job_adopted", job=j.id, worker_pid=j.pid)
         for id in self.db.requeue_stopped():
             self.log.info("job_requeued", job=id, reason="server_stopped")
         self.clean_tmp()
+
+    def need(self, job: Job) -> int:
+        """Memory a job is admitted with: its working memory with margin plus what it reads
+        whole (the same estimate the watchdog's limit is built on)."""
+        return int(1.5 * self.cfg.jobs.memory_gb * GB) + table_bytes(job, self.cfg.jobs.threads)
+
+    def reserved_bytes(self) -> int:
+        with self._lock:
+            return sum(self.reserved.values())
 
     # ------------------------------------------------------------ API
     def submit(
@@ -139,6 +164,8 @@ class JobManager:
             for j in self.db.find(dataset=dataset, states=ACTIVE):
                 if j.version == version and j.kind == kind:
                     return j
+            if len(self.db.find(states=("queued",))) >= self.cfg.jobs.max_queued:
+                raise QueueFullError(self.cfg.jobs.max_queued)
             id = self.db.add(kind, dataset, version, options, str(source), fp)
         self.log.info("job_queued", job=id, kind=kind, dataset_id=dataset, options=options)
         self._wake.set()
@@ -171,9 +198,41 @@ class JobManager:
     def tick(self) -> None:
         """One scheduling round (also called directly by tests)."""
         self._reap()
+        self._watch_adopted()
+        self._stop_silent()
         for id in self.db.mark_interrupted():
             self.log.warning("job_interrupted", job=id)
+            with self._lock:
+                self.reserved.pop(id, None)
         self._start_queued()
+
+    def _watch_adopted(self) -> None:
+        for id in list(self.adopted):
+            j = self.db.get(id)
+            if j is None or j.state != "running" or not j.process_alive():
+                self.adopted.pop(id, None)
+                with self._lock:
+                    self.reserved.pop(id, None)
+                self.log.info("job_adopted_ended", job=id, state=j.state if j else None)
+                if j is not None and j.state == "done" and self.on_done:
+                    self.on_done(j)
+
+    def _stop_silent(self) -> None:
+        """A worker that lives but stays silent is asked to stop, then killed after a minute."""
+        now = time.time()
+        silent = {j.id: j for j in self.db.silent(now=now)}
+        for id in list(self._silent_since):
+            if id not in silent:
+                self._silent_since.pop(id)
+        for id, j in silent.items():
+            first = self._silent_since.setdefault(id, now)
+            sig = signal.SIGTERM if now - first < 60 else signal.SIGKILL
+            if j.stop_reason != "no_heartbeat":
+                self.db.update(id, stop_reason="no_heartbeat")
+                self.log.warning("job_silent_stopping", job=id, worker_pid=j.pid)
+            with contextlib.suppress(OSError):
+                if j.pid:
+                    os.killpg(j.pid, sig)
 
     def clean_tmp(self) -> None:
         """Remove temporary stores and spill folders of jobs that are not running."""
@@ -252,29 +311,40 @@ class JobManager:
                 error=job.error,
                 seconds=round((job.finished or time.time()) - (job.started or job.created), 1),
             )
+            with self._lock:
+                self.reserved.pop(id, None)
             # the job's config copy holds real paths: not kept once the job ended
             (self.cfg.state / "jobs" / f"job-{id}.json").unlink(missing_ok=True)
             if job.state == "done" and self.on_done:
                 self.on_done(job)
 
     def _start_queued(self) -> None:
-        """Start the oldest queued job that fits in memory now. A job that can never fit (it
-        needs more than the host or its cgroup has in total) fails; a job waiting for memory
-        does not hold back smaller ones behind it."""
+        """Start the oldest queued job that fits now. A job that can never fit (more than the
+        host or its cgroup has in total, or more than memory.budget_gb) fails; a job waiting for
+        memory does not hold back smaller ones behind it. The budget is shared with the dataset
+        cache: cache + running jobs' reservations + this job must stay within it."""
         with self._lock:
-            running = len(self.procs)
+            running = len(self.procs) + len(self.adopted)
         if running >= self.cfg.jobs.max_running:
             return
-        launched = set(self.procs)
+        launched = set(self.procs) | set(self.adopted)
         queued = sorted(self.db.find(states=("queued",)), key=lambda j: j.id)
         available = memory_headroom()
         total = memory_total()
+        budget = int(self.cfg.memory.budget_gb * GB)
         for job in queued:
             if job.id in launched:
                 continue
-            need = int(1.5 * self.cfg.jobs.memory_gb * GB) + table_bytes(job, self.cfg.jobs.threads)
-            info = {"need_bytes": need, "available_bytes": available, "total_bytes": total}
-            if need > total:
+            need = self.need(job)
+            in_use = self.cache_bytes() + self.reserved_bytes()
+            info = {
+                "need_bytes": need,
+                "available_bytes": available,
+                "total_bytes": total,
+                "budget_bytes": budget,
+                "in_use_bytes": in_use,
+            }
+            if need > total or need > budget:
                 self.db.update(
                     job.id,
                     state="failed",
@@ -282,16 +352,40 @@ class JobManager:
                     finished=time.time(),
                     info=info,
                 )
-                self.log.error("job_needs_more_memory_than_host", job=job.id, **info)
+                self.log.error("job_needs_more_memory_than_allowed", job=job.id, **info)
                 continue
-            if available < need:
+            if available < need or in_use + need > budget:
                 if job.stage != "waiting_for_memory":
                     self.log.warning("job_waiting_for_memory", job=job.id, **info)
                 self.db.update(job.id, stage="waiting_for_memory", info=info)
                 continue
+            if self._over_store_cap(job):
+                continue
             self.clean_tmp()
+            with self._lock:
+                self.reserved[job.id] = need
             self._launch(job)
             return
+
+    def _over_store_cap(self, job: Job) -> bool:
+        """The job would push the converted copies above jobs.stores_max_gb: it fails."""
+        cap = self.cfg.jobs.stores_max_gb
+        if cap is None:
+            return False
+        from canopy.convert.anndata import store_disk_estimate
+
+        used = sum(
+            _size(d)
+            for d in self.cfg.cache_dir.glob("*/c[0-9]*")
+            if d.is_dir() and "." not in d.name
+        )
+        need = store_disk_estimate(job.fingerprint, str(job.options.get("x_source", "X")))
+        if used + need <= cap * GB:
+            return False
+        info = {"stores_bytes": used, "need_bytes": need, "cap_bytes": int(cap * GB)}
+        self.db.update(job.id, state="failed", error="stores_full", finished=time.time(), info=info)
+        self.log.error("job_stores_full", job=job.id, **info)
+        return True
 
     def _launch(self, job: Job) -> None:
         # The worker gets this server's configuration in a file of its own (written atomically).

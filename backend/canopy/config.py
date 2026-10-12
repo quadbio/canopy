@@ -80,7 +80,10 @@ class CatalogConfig(_Strict):
 
 
 class MemoryConfig(_Strict):
-    # Upper bound for everything the browser holds (cache + jobs), in GB.
+    # Upper bound for everything the server holds, in GB: cached data and loads in progress plus
+    # the memory reserved by running conversions (each: 1.5 × jobs.memory_gb + what it reads
+    # whole). A conversion starts only within it; one that needs more fails at once. Keep it
+    # below the account's cgroup limit on a shared host.
     budget_gb: float = 8.0
     cache_gb: float = 4.0
     # Legacy-layout files (anndata < 0.8) whose estimated in-memory size is below this are loaded
@@ -106,6 +109,11 @@ class JobsConfig(_Strict):
     # Threads of one conversion for block-wise work (image and mask pyramids). Each thread holds
     # one source block, so this bounds memory and CPU use on a shared host.
     threads: int = Field(default=4, ge=1, le=64)
+    # At most this many jobs wait in the queue; more are refused.
+    max_queued: int = Field(default=10, ge=1, le=1000)
+    # Upper bound for all converted copies in the cache, in GB (None: only free disk counts).
+    # A conversion that would exceed it fails; `canopy cache prune` removes old copies.
+    stores_max_gb: float | None = Field(default=None, gt=0)
     # Temporary files of conversions (about the size of the expression matrix); default
     # <cache_dir>/tmp.
     tmp_dir: Path | None = None

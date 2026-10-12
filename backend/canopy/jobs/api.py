@@ -19,7 +19,7 @@ from canopy.catalog import PathEscapeError
 from canopy.convert.anndata import has_store
 from canopy.errors import ApiError
 from canopy.jobs.db import ACTIVE
-from canopy.jobs.manager import JobManager
+from canopy.jobs.manager import JobManager, QueueFullError
 
 router = APIRouter(tags=["jobs"])
 
@@ -59,7 +59,12 @@ def convert(request: Request, id: str, body: ConvertRequest | None = None) -> di
     options: dict[str, Any] = {"x_source": body.x_source}
     if body.feature_key:
         options["feature_key"] = body.feature_key
-    job = _jobs(request).submit("convert", row.id, row.version, options, path, row.fingerprint)
+    try:
+        job = _jobs(request).submit("convert", row.id, row.version, options, path, row.fingerprint)
+    except QueueFullError as e:
+        raise ApiError(
+            429, "queue_full", f"{e.args[0]} conversions wait already; try again later."
+        ) from e
     if job.options != options:
         raise ApiError(
             409, "conversion_running", "A conversion of this dataset with other options runs."

@@ -370,3 +370,26 @@ def test_non_finite_manifest_numbers_fail_and_problems_hide_names(
         {"element": "tables/my_table", "problem": "obs/<name> missing"},
         {"element": "images/img", "problem": "channel <name> window [0, 1] outside uint8"},
     ]
+
+
+def test_csc_row_check_is_per_block_and_exact(tmp_path: Path) -> None:
+    """Rows must be sorted within a gene; a gene boundary may go down. Checked block by block,
+    across block edges, without an array as long as all values."""
+    from canopy.contract import validate as v
+
+    ip = np.array([0, 3, 3, 6], np.int64)  # genes of 3, 0 and 3 values
+    for rows, ok in (
+        ([0, 2, 5, 1, 4, 5], True),
+        ([0, 2, 2, 1, 4, 5], False),
+        ([0, 2, 5, 1, 4, 3], False),
+    ):
+        g = zarr.open_group(tmp_path / f"s{len(list(tmp_path.iterdir()))}", mode="w")
+        a = g.create_array("i", data=np.array(rows, np.int32), chunks=(2,))
+        rep = v.Report(store="x")
+        old = v.SCAN_ROWS
+        v.SCAN_ROWS = 2  # blocks of 2: boundaries inside and between genes
+        try:
+            v._csc_rows(rep, "t", a, ip, n_obs=10)
+        finally:
+            v.SCAN_ROWS = old
+        assert rep.ok is ok, rows

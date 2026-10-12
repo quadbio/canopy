@@ -235,8 +235,9 @@ def _layout(
         _codec(rep, w, a, name)
 
 
-def _blocks(a: zarr.Array[Any], rows: int = SCAN_ROWS) -> Iterator[tuple[int, np.ndarray]]:
+def _blocks(a: zarr.Array[Any], rows: int | None = None) -> Iterator[tuple[int, np.ndarray]]:
     """(start, block) along the first axis; bounded memory."""
+    rows = rows or SCAN_ROWS
     for s in range(0, a.shape[0], rows):
         yield s, np.asarray(a[s : s + rows])
 
@@ -387,9 +388,10 @@ def _table(
 
 
 def _csc_rows(rep: Report, w: str, indices: zarr.Array[Any], ip: np.ndarray, n_obs: int) -> None:
-    """Row indices in range, and sorted and unique within each gene (column), chunk by chunk."""
-    col_start = np.zeros(int(ip[-1]) + 1, dtype=bool)
-    col_start[ip] = True  # position p starts a new column (p == ip[j] for some j)
+    """Row indices in range, and sorted and unique within each gene (column), chunk by chunk.
+    Memory stays per block: the column starts inside a block are found in `ip` (no array as
+    long as all stored values)."""
+    ip = np.asarray(ip, np.int64)
     prev: int | None = None
     for s, blk in _blocks(indices):
         b = blk.astype(np.int64)
@@ -398,8 +400,11 @@ def _csc_rows(rep: Report, w: str, indices: zarr.Array[Any], ip: np.ndarray, n_o
             return
         seq = b if prev is None else np.concatenate([[prev], b])
         first = s if prev is None else s - 1
-        bad = np.diff(seq) <= 0
-        bad &= ~col_start[first + 1 : first + 1 + bad.size]
+        bad = np.diff(seq) <= 0  # bad[k] compares positions first+k and first+k+1
+        # position p starts a new column when p == ip[j]: no order needed across that step
+        lo, hi = np.searchsorted(ip, [first + 1, first + 1 + bad.size])
+        starts = ip[lo:hi] - (first + 1)
+        bad[starts[(starts >= 0) & (starts < bad.size)]] = False
         if bad.any():
             rep.error(w, "X/indices not sorted and unique within a gene (not canonical CSC)")
             return

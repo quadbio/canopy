@@ -360,9 +360,76 @@ def test_dead_or_silent_workers_are_interrupted_and_stopped_jobs_requeued(cfg: C
     db.update(b, pid_start=1.0)  # the pid now belongs to another process
     c = db.add("convert", "d3", "v3", {}, "/x", "{}")
     db.update(c, state="interrupted", error="server_stopped")
-    assert set(db.mark_interrupted()) == {a, b}
-    assert db.get(a).error == "no_heartbeat" and db.get(b).error == "interrupted"  # type: ignore[union-attr]
+    # the silent one lives: it is not marked (its files stay), the manager stops it instead
+    assert db.mark_interrupted() == [b] and db.get(b).error == "interrupted"  # type: ignore[union-attr]
+    assert [j.id for j in db.silent()] == [a] and db.get(a).state == "running"  # type: ignore[union-attr]
     assert db.requeue_stopped() == [c] and db.get(c).state == "queued"  # type: ignore[union-attr]
+
+
+def test_silent_workers_are_stopped_then_marked(cfg: Config) -> None:
+    import subprocess
+    import sys
+
+    from canopy.jobs.manager import JobManager
+
+    w = subprocess.Popen(  # a "worker" that hangs
+        [sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True
+    )
+    try:
+        jm = JobManager(cfg, wal=False)
+        a = jm.db.add("convert", "d", "v", {}, "/x", "{}")
+        jm.db.claim(a, w.pid)
+        jm.db.update(a, heartbeat=time.time() - 3600)
+        jm.adopted.clear()  # (claimed after start: not adopted)
+        jm.tick()
+        assert jm.db.get(a).stop_reason == "no_heartbeat"  # type: ignore[union-attr]
+        w.wait(timeout=10)  # SIGTERM to its process group
+        jm.tick()
+        assert jm.db.get(a).state == "interrupted" and jm.db.get(a).error == "no_heartbeat"  # type: ignore[union-attr]
+    finally:
+        w.kill()
+
+
+def test_workers_of_a_crashed_server_are_adopted(cfg: Config) -> None:
+    import subprocess
+    import sys
+
+    from canopy.jobs.manager import _LOCKS, JobManager
+
+    w = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        db = JobsDB(cfg.state / DB_FILE, wal=False)
+        a = db.add("convert", "d", "v", {}, "/x", "{}")
+        db.claim(a, w.pid)  # running, heartbeat now: a worker of an earlier server
+        b = db.add("convert", "d2", "v2", {}, "/x", "{}")
+        _LOCKS.clear()
+        jm = JobManager(cfg, wal=False)  # the restarted server
+        assert a in jm.adopted and jm.reserved_bytes() > 0
+        assert any(e["event"] == "job_adopted" for e in log_events())
+        jm.tick()  # max_running = 1: the adopted job counts, b waits
+        assert jm.db.get(b).state == "queued" and not jm.procs  # type: ignore[union-attr]
+        w.kill()
+        w.wait()
+        jm.tick()
+        assert a not in jm.adopted
+    finally:
+        w.kill()
+
+
+def test_cache_and_jobs_share_one_memory_budget(cfg: Config) -> None:
+    from canopy.config import MemoryConfig
+    from canopy.jobs.manager import JobManager
+
+    cfg.memory = MemoryConfig(budget_gb=1.0, cache_gb=0.5)
+    jm = JobManager(cfg, wal=False)
+    source(cfg.data_roots[0].path / "m.h5ad")
+    a = jm.db.add("convert", "d", "v", {}, "/x", "{}")
+    jm.cache_bytes = lambda: int(0.9 * 2**30)  # the cache holds most of the budget
+    jm.tick()
+    assert jm.db.get(a).stage == "waiting_for_memory"  # type: ignore[union-attr]
+    cfg.jobs.memory_gb = 2.0  # 1.5 × 2 GB can never fit a 1 GB budget
+    jm.tick()
+    assert jm.db.get(a).state == "failed" and jm.db.get(a).error == "not_enough_memory"  # type: ignore[union-attr]
 
 
 def test_one_server_per_cache(cfg: Config) -> None:
@@ -500,7 +567,10 @@ def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
 def test_a_job_larger_than_the_host_fails_and_does_not_block_others(
     cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from canopy.config import MemoryConfig
     from canopy.jobs import manager
+
+    cfg.memory = MemoryConfig(budget_gb=1000, cache_gb=4)  # the host's memory decides here
 
     source(cfg.data_roots[0].path / "big.h5ad")
     source(cfg.data_roots[0].path / "small.h5ad")
@@ -513,7 +583,7 @@ def test_a_job_larger_than_the_host_fails_and_does_not_block_others(
     assert done["state"] == "done"
     b = c.get(f"/api/jobs/{big['id']}").json()
     assert b["state"] == "failed" and b["error"] == "not_enough_memory"
-    assert any(e["event"] == "job_needs_more_memory_than_host" for e in log_events())
+    assert any(e["event"] == "job_needs_more_memory_than_allowed" for e in log_events())
 
     # one waiting for memory (too big just now) does not hold back a smaller one behind it
     sizes[entry_id("data", "big.h5ad")] = 2**33
@@ -529,3 +599,26 @@ def test_a_job_larger_than_the_host_fails_and_does_not_block_others(
     ).json()
     assert _wait(c, small2["id"], c.app)["state"] == "done"
     assert c.get(f"/api/jobs/{again['id']}").json()["stage"] == "waiting_for_memory"
+
+
+def test_queue_limit_and_stores_cap(cfg: Config) -> None:
+    from canopy.jobs.manager import JobManager, QueueFullError
+
+    cfg.jobs.max_queued = 1
+    jm = JobManager(cfg, wal=False)
+    jm.submit("convert", "d1", "v1", {}, Path("/x"), "{}")
+    with pytest.raises(QueueFullError):
+        jm.submit("convert", "d2", "v2", {}, Path("/x"), "{}")
+
+    # converted copies already fill the cap: the next conversion fails with stores_full
+    cfg.jobs.max_queued = 10
+    cfg.jobs.stores_max_gb = 1e-6
+    big = cfg.cache_dir / "0123456789abcdef" / "c0"
+    big.mkdir(parents=True)
+    (big / "x.bin").write_bytes(b"0" * 10_000)
+    source(cfg.data_roots[0].path / "m.h5ad")
+    c = client_for(cfg)
+    job = c.post(f"/api/datasets/{entry_id('data', 'm.h5ad')}/convert", json={}).json()
+    c.app.state.jobs.tick()  # type: ignore[attr-defined]
+    j = c.get(f"/api/jobs/{job['id']}").json()
+    assert j["state"] == "failed" and j["error"] == "stores_full"

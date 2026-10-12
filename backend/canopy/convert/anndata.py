@@ -80,9 +80,10 @@ def table_memory_estimate(info: AnnDataInfo) -> int:
     index of strings plus the columns (text values counted at 64 bytes each)."""
 
     def frame(n: int, cols: list[Any]) -> int:
-        per = 80  # index: one Python string per row
+        # measured (review A-m2, 2 M cells): an index string ≈120 B, a text value ≈150 B
+        per = 120
         for c in cols:
-            per += {"categorical": 4, "numeric": 8, "boolean": 1}.get(c.kind, 64)
+            per += {"categorical": 4, "numeric": 8, "boolean": 1}.get(c.kind, 150)
         return n * per
 
     return frame(info.n_obs, info.obs.columns) + frame(info.n_vars, info.var.columns)
@@ -358,6 +359,26 @@ def _matrix_info(info: AnnDataInfo, x_source: str) -> MatrixInfo:
 SPILL_BYTES_PER_VALUE = 12
 STORE_BYTES_PER_VALUE = 8
 DISK_MARGIN = 1.1
+
+
+def store_disk_estimate(fingerprint: str, x_source: str) -> int:
+    """Bytes a conversion's store will take (for jobs.stores_max_gb)."""
+    from canopy.inspect.models import Fingerprint
+
+    try:
+        fp = Fingerprint.model_validate_json(fingerprint)
+    except ValueError:
+        return 0
+    if fp.anndata is not None:
+        try:
+            return disk_need(_matrix_info(fp.anndata, x_source))[0]
+        except ConversionError:
+            return 0
+    if fp.spatialdata is not None:
+        from canopy.convert.spatialdata import spatial_disk_estimate
+
+        return spatial_disk_estimate(fp, x_source)[0]
+    return 0
 
 
 def disk_need(m: MatrixInfo) -> tuple[int, int]:

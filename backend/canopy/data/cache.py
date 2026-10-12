@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import anndata
-import psutil
 import zarr
 
 from canopy.config import Config
@@ -41,7 +40,7 @@ from canopy.data.reader import (
 )
 from canopy.inspect.core import open_h5
 from canopy.inspect.models import AnnDataInfo, Fingerprint
-from canopy.logs import get_logger, timed
+from canopy.logs import get_logger, memory_headroom, timed
 
 T = TypeVar("T")
 MAX_OPEN = 64
@@ -163,6 +162,8 @@ class DatasetCache:
     def __init__(self, cfg: Config) -> None:
         self.budget = int(cfg.memory.cache_gb * 2**30)
         self.total_budget = int(cfg.memory.budget_gb * 2**30)
+        # memory reserved by running conversion jobs (set by the app): one account for both
+        self.jobs_reserved: Callable[[], int] = lambda: 0
         self.small_file = int(cfg.memory.small_file_gb * 2**30)
         self.cache_dir = cfg.cache_dir
         self._inflight: dict[tuple[Any, ...], Future[Any]] = {}
@@ -302,8 +303,9 @@ class DatasetCache:
                 e = self._lru.pop(key)
                 cached -= e.nbytes
                 evicted.append((key, e))
-            available = psutil.virtual_memory().available
-            busy = cached + self._reserved + nbytes > self.total_budget or nbytes > available
+            available = memory_headroom()  # the host's, or less under a cgroup limit
+            jobs = self.jobs_reserved()
+            busy = cached + self._reserved + jobs + nbytes > self.total_budget or nbytes > available
             if not busy:
                 self._reserved += nbytes
         for key, e in evicted:
@@ -314,6 +316,7 @@ class DatasetCache:
                 need=nbytes,
                 cache_bytes=cached,
                 reserved=self._reserved,
+                jobs_bytes=jobs,
                 budget=self.total_budget,
                 available=available,
                 **log_fields,
@@ -324,6 +327,11 @@ class DatasetCache:
         finally:
             with self._lock:
                 self._reserved -= nbytes
+
+    def cached_bytes(self) -> int:
+        """Bytes held by cached arrays and loads in progress (for the jobs' admission)."""
+        with self._lock:
+            return sum(e.nbytes for e in self._lru.values()) + self._reserved
 
     def sweep(self) -> None:
         """Drop entries idle for longer than `memory.idle_minutes` (also run by a timer)."""

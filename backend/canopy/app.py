@@ -213,6 +213,9 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         log.info("dataset_converted", dataset_id=job.dataset, job=job.id)
 
     jobs = JobManager(cfg, wal=catalog.wal, on_done=converted)
+    # one memory account: the cache sees the jobs' reservations, jobs see the cache
+    jobs.cache_bytes = datasets.cached_bytes
+    datasets.jobs_reserved = jobs.reserved_bytes
     inflight = InFlight()
     housekeeper = Housekeeper(inflight, datasets, cfg.server.slow_request_s)
     allowed = {h.lower() for h in cfg.server.allowed_hosts}

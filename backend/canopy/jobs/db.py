@@ -193,18 +193,27 @@ class JobsDB:
             return cur.rowcount == 1
 
     def mark_interrupted(self, *, now: float | None = None) -> list[int]:
-        """Running jobs whose worker is gone (crash, kill, restart, reused pid), or that sent no
-        heartbeat for STALE_S although their process lives (hung): `interrupted`."""
+        """Running jobs whose worker is gone (crash, kill, restart, reused pid): `interrupted`
+        (`no_heartbeat` when the server had stopped it for being silent)."""
         now = now or time.time()
         out = []
         for j in self.find(states=("running",)):
-            alive = j.process_alive()
-            stale = (now - (j.heartbeat or j.started or j.created)) > STALE_S
-            if not alive or stale:
-                reason = "interrupted" if not alive else "no_heartbeat"
+            if not j.process_alive():
+                reason = "no_heartbeat" if j.stop_reason == "no_heartbeat" else "interrupted"
                 self.update(j.id, state="interrupted", error=reason, finished=now)
                 out.append(j.id)
         return out
+
+    def silent(self, *, now: float | None = None) -> list[Job]:
+        """Running jobs whose process lives but sent no heartbeat for STALE_S (hung, e.g. on a
+        stuck network read): the manager stops them; they stay `running` until they exit, so
+        their temporary files are not removed under them."""
+        now = now or time.time()
+        return [
+            j
+            for j in self.find(states=("running",))
+            if j.process_alive() and (now - (j.heartbeat or j.started or j.created)) > STALE_S
+        ]
 
     def requeue_stopped(self) -> list[int]:
         """Jobs stopped by a server shutdown run again at the next start (plan F8)."""
