@@ -24,11 +24,12 @@ from typing import Annotated, Any
 
 import numpy as np
 from fastapi import APIRouter, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from canopy.catalog import Catalog, PathEscapeError
 from canopy.catalog.db import Row
-from canopy.data import genes
+from canopy.data import genes, summary
 from canopy.data.cache import DatasetCache, MemoryBusyError, store_table, table_info
 from canopy.data.genes import quantise_columns
 from canopy.data.reader import (
@@ -46,7 +47,7 @@ from canopy.data.reader import (
 from canopy.errors import ApiError
 from canopy.inspect.core import version_stamp
 from canopy.inspect.models import AnnDataInfo, Fingerprint, MatrixInfo
-from canopy.logs import get_logger
+from canopy.logs import get_logger, timed
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -513,33 +514,18 @@ def gene_list(request: Request, id: str, table: TableQ = None) -> Response:
     )
 
 
-@router.get("/{id}/gene")
-def gene(
+def _gene_values(
     request: Request,
-    id: str,
-    i: Annotated[int, Query(ge=0, le=10_000_000)],
-    matrix: Annotated[str, Query(min_length=1, max_length=512)] = "X",
-    q: Annotated[int, Query(description="16: values as uint16 (see x-canopy-scale)")] = 0,
-    table: TableQ = None,
-) -> Response:
-    """One gene's values across all cells (binary, see canopy.data.genes for the encoding)."""
-    if q not in (0, 16):
-        raise ApiError(400, "invalid_q", "q must be 0 or 16.")
-    row, fp, path = _dataset(request, id)
-    tname, source_info = _table(fp, table)
-    etag = _etag(
-        [
-            str(row.version),
-            str(tname),
-            "gene",
-            matrix,
-            str(i),
-            str(q),
-            _store_mark(request, fp, tname),
-        ]
-    )
-    if (r := _not_modified(request, etag)) is not None:
-        return r
+    row: Row,
+    fp: Fingerprint,
+    path: Path,
+    tname: str | None,
+    source_info: AnnDataInfo,
+    matrix: str,
+    i: int,
+) -> tuple[genes.GeneValues, dict[str, Any], dict[str, object], dict[str, object]]:
+    """Gene `i` of `matrix` (read directly, or from the in-memory copy), cached; with the facts
+    for the request's log line."""
     info, served = _served(request, fp, source_info, tname)
     sv = served.get(matrix)
     if sv is None:
@@ -602,8 +588,41 @@ def gene(
         ),
         original=original,
     )
+    return values, facts, outcome, loaded
+
+
+@router.get("/{id}/gene")
+def gene(
+    request: Request,
+    id: str,
+    i: Annotated[int, Query(ge=0, le=10_000_000)],
+    matrix: Annotated[str, Query(min_length=1, max_length=512)] = "X",
+    q: Annotated[int, Query(description="16: values as uint16 (see x-canopy-scale)")] = 0,
+    table: TableQ = None,
+) -> Response:
+    """One gene's values across all cells (binary, see canopy.data.genes for the encoding)."""
+    if q not in (0, 16):
+        raise ApiError(400, "invalid_q", "q must be 0 or 16.")
+    row, fp, path = _dataset(request, id)
+    tname, source_info = _table(fp, table)
+    etag = _etag(
+        [
+            str(row.version),
+            str(tname),
+            "gene",
+            matrix,
+            str(i),
+            str(q),
+            _store_mark(request, fp, tname),
+        ]
+    )
+    if (r := _not_modified(request, etag)) is not None:
+        return r
+    values, facts, outcome, loaded = _gene_values(
+        request, row, fp, path, tname, source_info, matrix, i
+    )
     enc = genes.encode(values, quantise_values=q == 16)
-    log.info(
+    get_logger("canopy.genes").info(
         "gene_served",
         dataset_id=row.id,
         cache=outcome.get("cache"),
@@ -659,3 +678,86 @@ def _table(fp: Fingerprint, table: str | None) -> tuple[str | None, AnnDataInfo]
     except UnknownElementError as e:
         raise ApiError(404, "unknown_element", "No such table in this dataset.") from e
     return name, info
+
+
+# ---------------------------------------------------------------- plot summaries (ADR 0013)
+FeatureQ = Annotated[str, Query(pattern=r"^(obs:.{1,256}|gene:\d{1,8})$")]
+MatrixQ = Annotated[str, Query(min_length=1, max_length=512)]
+
+
+def _feature(
+    request: Request,
+    row: Row,
+    fp: Fingerprint,
+    path: Path,
+    tname: str | None,
+    source_info: AnnDataInfo,
+    spec: str,
+    matrix: str,
+) -> summary.Feature:
+    kind, _, name = spec.partition(":")
+    if kind == "obs":
+        v = _obs_values(request, row, fp, path, tname, name)
+        if v.kind == "numeric":
+            return summary.Feature("number", v.values)
+        return summary.Feature("category", v.values, list(v.categories or []))
+    i = int(name)
+    g, _, _, _ = _gene_values(request, row, fp, path, tname, source_info, matrix, i)
+    dense = np.zeros(g.n, np.float32)
+    dense[g.indices] = g.values
+    return summary.Feature("number", dense)
+
+
+@router.get("/{id}/summary")
+def plot_summary(
+    request: Request,
+    id: str,
+    kind: Annotated[str, Query(pattern=r"^(violin|bars|density)$")],
+    x: FeatureQ,
+    y: FeatureQ,
+    xm: MatrixQ = "X",
+    ym: MatrixQ = "X",
+    bins: Annotated[int, Query(ge=8, le=summary.MAX_BINS)] = 64,
+    log1p: Annotated[str, Query(pattern=r"^[01]{0,2}$")] = "",
+    table: TableQ = None,
+) -> Response:
+    """A plot's summary: per-category histograms (violin), a count table (bars) or a 2-D
+    histogram (density); see canopy.data.summary. Counts and statistics only, never values."""
+    row, fp, path = _dataset(request, id)
+    tname, source_info = _table(fp, table)
+    params = [kind, x, y, xm, ym, str(bins), log1p]
+    etag = _etag(
+        [str(row.version), str(tname), "summary", *params, _store_mark(request, fp, tname)]
+    )
+    if (r := _not_modified(request, etag)) is not None:
+        return r
+    _, cache = _state(request)
+    logs = [c == "1" for c in log1p.ljust(2, "0")]
+
+    def compute() -> dict[str, Any]:
+        fx = _feature(request, row, fp, path, tname, source_info, x, xm)
+        fy = _feature(request, row, fp, path, tname, source_info, y, ym)
+        if kind == "violin":
+            if fx.kind != "category" or fy.kind != "number":
+                raise ApiError(400, "invalid_features", "A violin needs categories × numbers.")
+            return summary.violin(fx, fy, bins, logs[1])
+        if kind == "bars":
+            if fx.kind != "category" or fy.kind != "category":
+                raise ApiError(400, "invalid_features", "Bars need two categorical features.")
+            return summary.bars(fx, fy)
+        if fx.kind != "number" or fy.kind != "number":
+            raise ApiError(400, "invalid_features", "A density needs two numbers.")
+        return summary.density(fx, fy, bins, logs[0], logs[1])
+
+    outcome: dict[str, object] = {}
+    with timed("summary", dataset_id=row.id, kind=kind, bins=bins) as extra:
+        result = cache.array(
+            (str(row.version), str(tname), "summary", *params),
+            compute,
+            lambda r: len(str(r)),
+            outcome=outcome,
+            what="summary",
+            dataset_id=row.id,
+        )
+        extra.update(cache=outcome.get("cache"), n_cells=source_info.n_obs)
+    return JSONResponse(result, headers={"etag": etag, "cache-control": "private, no-cache"})
