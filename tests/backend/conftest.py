@@ -26,7 +26,8 @@ def cfg(tmp_path: Path) -> Config:
         data_roots=[DataRoot(name="data", path=data)],
         cache_dir=tmp_path / "cache",
         # "testserver" is the Host header of FastAPI's TestClient.
-        server=ServerConfig(allowed_hosts=["testserver", "127.0.0.1", "localhost"]),
+        # access control has its own tests (test_auth.py)
+        server=ServerConfig(allowed_hosts=["testserver", "127.0.0.1", "localhost"], auth="none"),
         logging=LoggingConfig(dir=tmp_path / "logs", memory_sample_interval=0),
         # small: jobs must not wait for free memory on a busy test machine
         jobs=JobsConfig(memory_gb=0.25),

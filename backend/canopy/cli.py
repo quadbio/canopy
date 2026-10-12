@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -11,8 +12,9 @@ import typer
 import uvicorn
 
 from canopy.app import create_app
+from canopy.auth import access_token, link
 from canopy.build import build_id, build_info
-from canopy.config import Config, ConfigError, LoggingConfig, load_config
+from canopy.config import Config, ConfigError, LoggingConfig, apply_file_access, load_config
 from canopy.environment import environment_snapshot
 from canopy.logs import default_log_dir, get_logger, install_stack_dumps, setup_logging
 from canopy.privacy import installation_salt
@@ -55,15 +57,18 @@ def main(
         typer.Option("--version", callback=_version, is_eager=True, help="Show version and build"),
     ] = False,
 ) -> None:
-    """canopy data browser."""
+    """Canopy: single-cell and spatial data browser."""
+    os.umask(0o077)  # private until a config says otherwise
 
 
 def _load(config: Path | None) -> Config:
     try:
-        return load_config(config)
+        cfg = load_config(config)
     except ConfigError as e:
         typer.echo(f"config error: {e}", err=True)
         raise typer.Exit(2) from e
+    apply_file_access(cfg)
+    return cfg
 
 
 @app.command()
@@ -87,6 +92,15 @@ def serve(config: ConfigOpt = None) -> None:
     except CacheInUseError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
+    if cfg.server.auth == "token":
+        url = link(cfg.server.host, cfg.server.port, access_token(cfg.state))
+        typer.echo(
+            f"\nCanopy: open {url}\n(Keep this link private: it opens every dataset.)\n", err=True
+        )
+    else:
+        typer.echo(
+            'Canopy: server.auth = "none": anyone who reaches the port sees all data.', err=True
+        )
     # Requests are logged by our middleware, so uvicorn's access log is off.
     uvicorn.run(
         server,
@@ -95,6 +109,16 @@ def serve(config: ConfigOpt = None) -> None:
         log_config=None,
         access_log=False,
     )
+
+
+@app.command("link")
+def link_cmd(config: ConfigOpt = None) -> None:
+    """Print the access link of this installation (with its token) again."""
+    cfg = _load(config)
+    if cfg.server.auth != "token":
+        typer.echo('server.auth is "none": no token needed.')
+        return
+    typer.echo(link(cfg.server.host, cfg.server.port, access_token(cfg.state)))
 
 
 @app.command()
@@ -113,7 +137,7 @@ def _cli_logging(config: Path | None) -> Config | None:
 
 
 def _salt(cfg: Config | None) -> str:
-    return installation_salt(cfg.cache_dir if cfg else default_log_dir().parent)
+    return installation_salt(cfg.state if cfg else default_log_dir().parent)
 
 
 @app.command()
@@ -269,7 +293,7 @@ def catalog_scan(
     from canopy.catalog.db import DB_FILE
 
     cfg = _cli_logging(config) or _load(None)
-    db = CatalogDB(cfg.cache_dir / DB_FILE)
+    db = CatalogDB(cfg.state / DB_FILE)
     counts = scan(db, cfg.data_roots, cfg.catalog, full=full, trigger="cli")
     typer.echo(json.dumps(counts.as_dict(), indent=2))
 
@@ -293,7 +317,7 @@ def cache_prune(
 
     cfg = _cli_logging(config) or _load(None)
     try:
-        lock_cache(cfg.cache_dir)
+        lock_cache(cfg.state)
     except CacheInUseError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e

@@ -34,4 +34,6 @@ memory_sample_interval = 0
 memory_gb = 1.0  # the example conversions need well under 1 GB; keeps the memory guard satisfied
 CONF
 echo "e2e server: logs in $tmp/logs" >&2
+# a fixed access token, which playwright.config.ts gives the browser as a cookie
+export CANOPY_TOKEN=${CANOPY_TOKEN:-e2e-token}
 exec canopy serve --config "$tmp/config.toml"

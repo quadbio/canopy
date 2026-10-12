@@ -717,3 +717,20 @@ async function panelStates(page: Page) {
       .map((k) => ({ target: vs[k].target.map((v) => Math.round(v * 1000) / 1000), zoom: Math.round(vs[k].zoom * 1000) / 1000 }));
   });
 }
+
+test('without the access link nothing is shown; the link opens the app', async ({ browser }) => {
+  const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const page = await ctx.newPage();
+  const res = await page.goto('/');
+  expect(res?.status()).toBe(401);
+  await expect(page.locator('body')).toContainText('access link');
+  expect((await page.request.get('/api/catalog/roots')).status()).toBe(401);
+  await page.goto(`/?token=${process.env.CANOPY_TOKEN ?? 'e2e-token'}`);
+  await expect(page).toHaveURL(/\/$/); // the token left the address bar
+  await expect(page.getByTestId('dataset-row').first()).toBeVisible();
+  // a cleared cookie is explained, not shown as broken parts
+  await ctx.clearCookies();
+  await page.getByTestId('dataset-row').first().click();
+  await expect(page.getByTestId('auth-required')).toBeVisible();
+  await ctx.close();
+});

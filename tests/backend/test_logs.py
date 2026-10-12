@@ -194,7 +194,7 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
     cfg = Config(
         data_roots=[DataRoot(name="SECRETNAME", path=data)],
         cache_dir=tmp_path / "cache",
-        server=ServerConfig(allowed_hosts=["testserver"]),
+        server=ServerConfig(allowed_hosts=["testserver"], auth="none"),
         logging=LoggingConfig(dir=tmp_path / "logs", privacy="strict", memory_sample_interval=0),
         catalog=CatalogConfig(ignore=["SECRETIGNORE*"]),
     )

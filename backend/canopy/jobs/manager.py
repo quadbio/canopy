@@ -94,8 +94,8 @@ class JobManager:
         on_done: Callable[[Job], None] | None = None,
     ) -> None:
         self.cfg = cfg
-        lock_cache(cfg.cache_dir)
-        self.db = JobsDB(cfg.cache_dir / DB_FILE, wal=wal)
+        lock_cache(cfg.state)
+        self.db = JobsDB(cfg.state / DB_FILE, wal=wal)
         self.on_done = on_done
         self.log = get_logger("canopy.jobs")
         self.procs: dict[int, subprocess.Popen[bytes]] = {}
@@ -268,7 +268,7 @@ class JobManager:
 
     def _launch(self, job: Job) -> None:
         # The worker gets this server's configuration in a file of its own (written atomically).
-        conf = self.cfg.cache_dir / "jobs" / f"job-{job.id}.json"
+        conf = self.cfg.state / "jobs" / f"job-{job.id}.json"
         conf.parent.mkdir(exist_ok=True)
         part = conf.with_suffix(".part")
         part.write_text(self.cfg.model_dump_json())

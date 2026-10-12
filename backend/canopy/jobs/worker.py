@@ -22,7 +22,7 @@ from typing import Any
 
 import psutil
 
-from canopy.config import Config
+from canopy.config import Config, apply_file_access
 from canopy.jobs.db import DB_FILE, HEARTBEAT_S, JobsDB
 from canopy.logs import MemorySampler, get_logger, setup_logging, timed
 from canopy.privacy import installation_salt
@@ -111,11 +111,10 @@ class Control:
 def run(job_id: int, config_file: Path) -> int:
     signal.signal(signal.SIGTERM, _on_term)  # first: a cancel during start-up is not lost
     cfg = Config.model_validate_json(config_file.read_text())
-    setup_logging(
-        cfg.logging, role="worker", salt=installation_salt(cfg.cache_dir), to_console=False
-    )
+    apply_file_access(cfg)
+    setup_logging(cfg.logging, role="worker", salt=installation_salt(cfg.state), to_console=False)
     log = get_logger("canopy.jobs")
-    db = JobsDB(cfg.cache_dir / DB_FILE, wal=_wal(cfg))
+    db = JobsDB(cfg.state / DB_FILE, wal=_wal(cfg))
     if not db.claim(job_id, os.getpid()):
         log.warning("job_not_claimed", job=job_id)
         return 0

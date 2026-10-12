@@ -39,6 +39,14 @@ class ServerConfig(_Strict):
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
     # A request running longer than this is logged as `slow_request` while it runs.
     slow_request_s: float = 20.0
+    # Who may use the server. "token": only browsers that opened the link with the access token
+    # printed at start (kept as a cookie); "none": anyone who can reach the port (only for a
+    # machine nobody else uses). Whoever is let in sees every dataset in the data roots, with the
+    # rights of the user running the server.
+    auth: Literal["token", "none"] = "token"
+    # Files the server writes (converted copies, index, logs): "private" (only this user) or
+    # "group" (also readable by the user's group, e.g. a lab sharing one cache).
+    file_access: Literal["private", "group"] = "private"
 
 
 class LoggingConfig(_Strict):
@@ -58,7 +66,9 @@ class CatalogConfig(_Strict):
     # Glob patterns matched against names and root-relative paths; matches are not indexed.
     ignore: list[str] = Field(default_factory=list)
     # Minutes between automatic rescans in the server; 0 scans only at start-up and on demand.
-    rescan_minutes: float = 10.0
+    # Each rescan lists every folder of the roots: on a large share keep the roots narrow and
+    # the interval long.
+    rescan_minutes: float = 60.0
     # Datasets inspected in parallel during a scan.
     inspect_workers: int = Field(default=4, ge=1, le=64)
     # Count the files of zarr stores for their size (slow on network storage).
@@ -103,12 +113,21 @@ class JobsConfig(_Strict):
 
 class Config(_Strict):
     data_roots: list[DataRoot] = Field(default_factory=list)
+    # Converted copies (large; may be on shared storage).
     cache_dir: Path = Path("cache")
+    # Small state: the index and job databases, the server lock, the privacy salt and the access
+    # token. SQLite and file locks are unreliable on network storage: put this on a local disk.
+    # Default: the cache folder.
+    state_dir: Path | None = None
     server: ServerConfig = Field(default_factory=ServerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     catalog: CatalogConfig = Field(default_factory=CatalogConfig)
     jobs: JobsConfig = Field(default_factory=JobsConfig)
+
+    @property
+    def state(self) -> Path:
+        return self.state_dir or self.cache_dir
 
     @model_validator(mode="after")
     def _unique_root_names(self) -> Config:
@@ -155,7 +174,16 @@ def load_config(path: Path | None) -> Config:
         cfg.cache_dir = base / cfg.cache_dir
     if not cfg.logging.dir.is_absolute():
         cfg.logging.dir = base / cfg.logging.dir
+    if cfg.state_dir is not None and not cfg.state_dir.is_absolute():
+        cfg.state_dir = base / cfg.state_dir
     for root in cfg.data_roots:
         root.path = (base / root.path).resolve()
     check_paths(cfg)
     return cfg
+
+
+def apply_file_access(cfg: Config) -> None:
+    """Files this process creates: private to the user, or also readable by the group."""
+    import os
+
+    os.umask(0o077 if cfg.server.file_access == "private" else 0o027)

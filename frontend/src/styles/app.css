@@ -413,3 +413,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
 }
+
+/* the server needs its access link */
+.auth-required { max-width: 34rem; margin: 15vh auto; padding: 0 var(--space-4); color: var(--text); }
+.auth-required h1 { font-size: var(--text-lg); margin: var(--space-3) 0 var(--space-2); }
+.auth-required code { background: var(--surface); padding: 0 0.3em; border-radius: var(--radius-sm); }

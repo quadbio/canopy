@@ -18,6 +18,7 @@ name = "data"
 path = "data"
 [server]
 port = $port
+auth = "none"  # a throw-away server for the library check; access control has its own tests
 [logging]
 dir = "logs"
 memory_sample_interval = 0

@@ -11,15 +11,19 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import structlog
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import canopy
+from canopy.auth import COOKIE, LOGIN_PAGE, OPEN_PATHS, access_token
+from canopy.auth import valid as auth_valid
 from canopy.build import build_id
 from canopy.catalog import Catalog
 from canopy.catalog.api import router as catalog_router
@@ -155,6 +159,34 @@ def _route(request: Request) -> str:
     return str(getattr(route, "path", None) or "<static>")
 
 
+def _authorised(request: Request, token: str) -> bool:
+    return request.url.path in OPEN_PATHS or auth_valid(request, token)
+
+
+def _auth_required(request: Request) -> Response:
+    if request.url.path.startswith("/api/"):
+        return error_response(
+            request,
+            401,
+            "auth_required",
+            "Open the access link printed when the server started (canopy link shows it again).",
+        )
+    return HTMLResponse(LOGIN_PAGE, status_code=401)
+
+
+def _remember_token(request: Request, response: Response, token: str) -> Response:
+    """The link's token becomes a cookie; a page request is redirected to the address without
+    it, so the token does not stay in the address bar or the browser history."""
+    if not request.url.path.startswith("/api/") and request.method == "GET":
+        rest = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
+        url = request.url.path + (f"?{urlencode(rest)}" if rest else "")
+        response = RedirectResponse(url, status_code=303)
+    response.set_cookie(
+        COOKIE, token, httponly=True, samesite="strict", max_age=400 * 24 * 3600, path="/"
+    )
+    return response
+
+
 def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     """`background=False` (tests) skips the catalog's scan thread; scans are then run directly."""
     log = get_logger("canopy.app")
@@ -172,6 +204,7 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     inflight = InFlight()
     housekeeper = Housekeeper(inflight, datasets, cfg.server.slow_request_s)
     allowed = {h.lower() for h in cfg.server.allowed_hosts}
+    token = access_token(cfg.state) if cfg.server.auth == "token" else None
 
     def log_environment(event: str = "startup") -> None:
         log.info(
@@ -179,8 +212,22 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
             **environment_snapshot(cfg),
             data_roots=[r.name for r in cfg.data_roots],
             allowed_hosts=sorted(allowed),
+            auth=cfg.server.auth,
+            file_access=cfg.server.file_access,
             **memory_snapshot(cfg.cache_dir),
         )
+        open_to_others = [
+            name
+            for name, d in (
+                ("cache", cfg.cache_dir),
+                ("state", cfg.state),
+                ("logs", cfg.logging.dir),
+            )
+            if d.exists() and d.stat().st_mode & 0o007
+        ]
+        if open_to_others:
+            # created before file_access applied, or by hand: other users may read them
+            log.warning("folders_readable_by_others", folders=open_to_others)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -202,7 +249,15 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         store_stats.flush(log)
         log.info("shutdown")
 
-    app = FastAPI(title="canopy", version=canopy.__version__, lifespan=lifespan)
+    # no interactive API pages: they are a map of the API for anyone who reaches the port
+    app = FastAPI(
+        title="Canopy",
+        version=canopy.__version__,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.config = cfg
     app.state.catalog = catalog
     app.state.datasets = datasets
@@ -237,9 +292,12 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                     "host_not_allowed",
                     "This host name is not allowed; add it to server.allowed_hosts.",
                 )
-            elif request.method in ("POST", "PUT", "DELETE") and not request.headers.get(
-                "content-type", ""
-            ).startswith("application/json"):
+            elif token is not None and not _authorised(request, token):
+                response = _auth_required(request)
+            elif request.method in ("POST", "PUT", "DELETE") and (
+                request.headers.get("content-type", "").split(";")[0].strip().lower()
+                != "application/json"
+            ):
                 # Other sites can only send "simple" cross-site POSTs (form or text bodies);
                 # requiring JSON makes the browser ask first, and this server never agrees.
                 response = error_response(
@@ -247,6 +305,8 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                 )
             else:
                 response = await call_next(request)
+                if token is not None and request.query_params.get("token"):
+                    response = _remember_token(request, response, token)
         except Exception:
             # Every failure still gets a status, a duration and the request id in the reply,
             # so a user's screenshot of the error can be matched to the log.

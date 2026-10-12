@@ -4,6 +4,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
+import { AUTH_REQUIRED_EVENT } from '../api/client';
 import { catalog } from '../api/endpoints';
 import { metaQuery, useCatalogStatus } from '../api/queries';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
@@ -126,8 +127,32 @@ function ResetWorkspace() {
   );
 }
 
+/** The server refused a request for lack of the access token (e.g. the cookie was cleared). */
+function useAuthRequired() {
+  const [needed, setNeeded] = useState(false);
+  useEffect(() => {
+    const on = () => setNeeded(true);
+    window.addEventListener(AUTH_REQUIRED_EVENT, on);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, on);
+  }, []);
+  return needed;
+}
+
 export function App() {
   const [theme, cycleTheme] = useTheme();
+  const authRequired = useAuthRequired();
+  if (authRequired) {
+    return (
+      <div className="auth-required" role="alert" data-testid="auth-required">
+        <img src="/canopy-128.png" alt="" width={64} height={64} />
+        <h1>Canopy needs its access link</h1>
+        <p>
+          Open the link with <code>?token=…</code> that was printed when the server started. On the server,{' '}
+          <code>canopy link --config &lt;config&gt;</code> prints it again.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="app">
       <header className="header">

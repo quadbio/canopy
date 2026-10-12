@@ -23,7 +23,7 @@ def use_wal(cfg: Config) -> bool:
     `catalog.sqlite_wal` says otherwise."""
     wal = cfg.catalog.sqlite_wal
     if wal is None:
-        wal = filesystem(cfg.cache_dir).get("fstype") in LOCAL_FS
+        wal = filesystem(cfg.state).get("fstype") in LOCAL_FS
     return bool(wal)
 
 
@@ -32,7 +32,7 @@ class Catalog:
         self.cfg = cfg
         self.roots = {r.name: r for r in cfg.data_roots}
         self.wal = use_wal(cfg)
-        self.db = CatalogDB(cfg.cache_dir / DB_FILE, wal=self.wal)
+        self.db = CatalogDB(cfg.state / DB_FILE, wal=self.wal)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()

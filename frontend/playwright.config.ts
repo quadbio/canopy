@@ -15,6 +15,22 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
     colorScheme: 'light',
     trace: 'retain-on-failure',
+    // the server's access token (scripts/e2e-server.sh), as the link would set it
+    storageState: {
+      cookies: [
+        {
+          name: 'canopy_token',
+          value: process.env.CANOPY_TOKEN ?? 'e2e-token',
+          domain: '127.0.0.1',
+          path: '/',
+          expires: -1,
+          httpOnly: true,
+          secure: false,
+          sameSite: 'Strict',
+        },
+      ],
+      origins: [],
+    },
   },
   projects: [
     {

@@ -92,7 +92,8 @@ CONF
 
 echo "3/3 Starting the server."
 echo
-echo "    Open      http://127.0.0.1:$port   (Chrome, Firefox or Safari)"
+echo "    Open      $(canopy link --config "$demo/config.toml")"
+echo "              (Chrome, Firefox or Safari; the link holds this installation's access token)"
 echo "    Logs      $demo/logs/"
 echo "    Version   $(canopy --version)"
 echo "    Stop      Ctrl+C"

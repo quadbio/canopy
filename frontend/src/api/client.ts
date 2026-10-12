@@ -34,7 +34,11 @@ export function url(path: string, params?: Params): string {
   return s ? `${path}?${s}` : path;
 }
 
+/** Fired when the server refuses for lack of the access token (the app then explains). */
+export const AUTH_REQUIRED_EVENT = 'canopy:auth-required';
+
 async function fail(res: Response, path: string): Promise<never> {
+  if (res.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
   let detail: unknown = null;
   try {
     detail = ((await res.json()) as { detail?: unknown }).detail ?? null;
