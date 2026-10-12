@@ -7,7 +7,8 @@ the values, so plots of atlases stay fast (ADR 0013).
 - `density`: two numbers: counts on a grid of bins × bins over both ranges.
 
 Missing values (NaN, code −1) are left out of the shapes and counted. Values are never sent,
-only counts and statistics.
+only counts and statistics. Features with more than MAX_PLOT_CATEGORIES categories are refused
+(`check_categories`): e.g. a cell id column chosen by mistake would make tables of millions.
 """
 
 from __future__ import annotations
@@ -18,6 +19,17 @@ from typing import Any
 import numpy as np
 
 MAX_BINS = 256
+# More categories than this are not plotted (nor coloured by in the browser): the owner's limit,
+# far above real annotations, low enough that a table of two such columns stays small.
+MAX_PLOT_CATEGORIES = 1000
+
+
+class TooManyCategoriesError(ValueError):
+    """A categorical feature with more than MAX_PLOT_CATEGORIES categories."""
+
+    def __init__(self, n: int) -> None:
+        super().__init__(f"{n} categories (at most {MAX_PLOT_CATEGORIES})")
+        self.n = n
 
 
 @dataclass
@@ -28,6 +40,13 @@ class Feature:
     kind: str  # "number" | "category"
     values: np.ndarray
     labels: list[str] | None = None
+
+
+def check_categories(*features: Feature) -> None:
+    """Refuses before any table is allocated when a feature has too many categories."""
+    for f in features:
+        if f.kind == "category" and len(f.labels or []) > MAX_PLOT_CATEGORIES:
+            raise TooManyCategoriesError(len(f.labels or []))
 
 
 def _range(v: np.ndarray, log1p: bool) -> tuple[float, float]:
@@ -47,20 +66,26 @@ def _transform(v: np.ndarray, log1p: bool) -> np.ndarray:
 def violin(cat: Feature, num: Feature, bins: int = 64, log1p: bool = False) -> dict[str, Any]:
     """Per category of `cat`: histogram of `num` over the shared range and its statistics."""
     bins = int(min(max(bins, 8), MAX_BINS))
-    codes = cat.values.astype(np.int64, copy=False)
-    vals = num.values.astype(np.float64, copy=False)
+    check_categories(cat)
+    # the codes stay narrow (int8/int16): numpy sorts them by radix, ~40× faster than int64;
+    # float32 values are plenty for histograms and quartiles, and half the memory
+    codes = cat.values
+    vals = num.values.astype(np.float32, copy=False)
     labels = cat.labels or []
     k = len(labels)
     lo, hi = _range(vals, log1p)
     tv = _transform(vals, log1p)
-    ok = np.isfinite(tv) & (codes >= 0) & (codes < k)
+    in_cat = (codes >= 0) & (codes < k)
+    ok = np.isfinite(tv) & in_cat
+    c_ok = codes[ok]
+    tv_ok = tv[ok]
     # one pass: (category, bin) pairs counted together
-    b = np.clip(((tv[ok] - lo) / (hi - lo) * bins).astype(np.int64), 0, bins - 1)
-    hist = np.bincount(codes[ok] * bins + b, minlength=k * bins).reshape(k, bins)
+    b = np.clip(((tv_ok - lo) / (hi - lo) * bins).astype(np.int64), 0, bins - 1)
+    hist = np.bincount(c_ok.astype(np.int64) * bins + b, minlength=k * bins).reshape(k, bins)
     # quartiles per category: values sorted by category (stable sort on small integer codes)
-    order = np.argsort(codes[ok], kind="stable")
-    sorted_vals = tv[ok][order]
-    counts = np.bincount(codes[ok], minlength=k)
+    order = np.argsort(c_ok, kind="stable")
+    sorted_vals = tv_ok[order]
+    counts = np.bincount(c_ok, minlength=k)
     starts = np.concatenate([[0], np.cumsum(counts)])
     raw = vals[ok][order]
     groups = []
@@ -76,13 +101,14 @@ def violin(cat: Feature, num: Feature, bins: int = 64, log1p: bool = False) -> d
                     "q1": q1,
                     "median": med,
                     "q3": q3,
-                    "mean": float(g.mean()),
+                    "mean": float(g.mean(dtype=np.float64)),
                     "frac_above_zero": float((r > 0).mean()),
                 }
             )
         else:
             groups.append({"n": 0, "hist": hist[c].tolist()})
-    missing = int((~np.isfinite(vals)).sum())
+    # each missing cell counted once: no category first, else no value
+    missing = int((~np.isfinite(vals) & in_cat).sum())
     return {
         "kind": "violin",
         "categories": labels,
@@ -91,12 +117,13 @@ def violin(cat: Feature, num: Feature, bins: int = 64, log1p: bool = False) -> d
         "log1p": log1p,
         "groups": groups,
         "n_missing_value": missing,
-        "n_missing_category": int(((codes < 0) | (codes >= k)).sum()),
+        "n_missing_category": int((~in_cat).sum()),
     }
 
 
 def bars(a: Feature, b: Feature) -> dict[str, Any]:
     """Counts of cells per (category of a, category of b)."""
+    check_categories(a, b)
     ka, kb = len(a.labels or []), len(b.labels or [])
     ca = a.values.astype(np.int64, copy=False)
     cb = b.values.astype(np.int64, copy=False)

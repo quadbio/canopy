@@ -139,7 +139,7 @@ const ViewCell = memo(function ViewCell({
   onFit: (id: string) => void;
   panels: { key: string; title?: string; rect: Cell }[];
   /** Panels drawing an overlay (axes), with their current view states. */
-  overlays?: { key: string; rect: Cell; state: OrthoState; draw: (s: OrthoState, r: Cell) => ReactNode }[];
+  overlays?: { key: string; rect: Cell; state: OrthoState; taken: Insets; draw: (s: OrthoState, r: Cell, t: Insets) => ReactNode }[];
 }) {
   const select = useWorkspace((s) => s.select);
   const remove = useWorkspace((s) => s.removeView);
@@ -179,7 +179,7 @@ const ViewCell = memo(function ViewCell({
           className="view-overlay"
           style={{ left: o.rect.x - cell.x, top: o.rect.y - cell.y, width: o.rect.width, height: o.rect.height }}
         >
-          {o.draw(o.state, o.rect)}
+          {o.draw(o.state, o.rect, o.taken)}
         </div>
       ))}
       {output?.content && output.status !== 'error' && (
@@ -213,6 +213,11 @@ const ViewCell = memo(function ViewCell({
           </button>
         </span>
       </div>
+      {output?.status === 'idle' && (
+        <div className="view-error view-idle" role="status" data-testid="view-idle">
+          {output.error}
+        </div>
+      )}
       {output?.status === 'error' && (
         <div className="view-error" role="alert" data-testid="view-error">
           {output.error}
@@ -314,7 +319,11 @@ function overlaysFor(out: ViewOutput | undefined, l: Layout | null, states: Reco
   if (!panels.some((p) => p.overlay)) return undefined;
   return panels.flatMap((p, j) => {
     const st = states[l.keys[j]];
-    return p.overlay && st ? [{ key: l.keys[j], rect: l.rects[j], state: st, draw: p.overlay }] : [];
+    // the panel's insets without the view's own margins: what the title and legend take
+    const m = out.margins ?? {};
+    const f = l.fitInsets;
+    const taken = { top: (f.top ?? 0) - (m.top ?? 0), right: (f.right ?? 0) - (m.right ?? 0) };
+    return p.overlay && st ? [{ key: l.keys[j], rect: l.rects[j], state: st, taken, draw: p.overlay }] : [];
   });
 }
 
@@ -488,8 +497,13 @@ export function Canvas() {
   const setSize = useLod((s) => s.setSize);
   useEffect(() => {
     views.forEach((v, i) => {
-      const r = layouts[i]?.rects[0];
-      if (r) setSize(v.id, r.width, r.height);
+      // the area its data is fitted into: the first panel less the title row, an open legend
+      // and the view's own margins (axes), so views never re-derive the layout's constants
+      const l = layouts[i];
+      const r = l?.rects[0];
+      if (!r) return;
+      const { top = 0, right = 0, bottom = 0, left = 0 } = l.fitInsets;
+      setSize(v.id, Math.max(r.width - left - right, 1), Math.max(r.height - top - bottom, 1));
     });
   }, [views, layouts, setSize]);
   // One point budget for the whole canvas, shared by the views in proportion to their cells.

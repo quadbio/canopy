@@ -67,6 +67,21 @@ def _tokens(value: Any, salt: str) -> Any:
     return value
 
 
+_CODE = re.compile(r"[a-z0-9_.:]+")
+
+
+def _strict_event(event: dict[str, Any], salt: str) -> dict[str, Any]:
+    """A log line at strict. A third-party library's line (logger outside canopy) carries its
+    message as `event`, kept (partly redacted) at standard and raw at debug: dropped here
+    unless it is a plain code."""
+    out = _strictify(event, salt)
+    if isinstance(out, dict) and not str(out.get("logger", "canopy")).startswith("canopy"):
+        text = out.get("event")
+        if isinstance(text, str) and not _CODE.fullmatch(text):
+            out["event"] = "dropped_library_text"
+    return out  # type: ignore[no-any-return]
+
+
 def _log_lines(path: Path, salt: str) -> tuple[str, int]:
     out, dropped = [], 0
     for line in path.read_text(errors="replace").splitlines():
@@ -75,7 +90,7 @@ def _log_lines(path: Path, salt: str) -> tuple[str, int]:
         except ValueError:
             dropped += 1  # not a JSON line (should not happen): left out
             continue
-        out.append(json.dumps(_strictify(event, salt), separators=(",", ":")))
+        out.append(json.dumps(_strict_event(event, salt), separators=(",", ":")))
     return "\n".join(out) + ("\n" if out else ""), dropped
 
 
@@ -312,6 +327,8 @@ CODE_FIELDS = frozenset(
         "c_mode",
         "c_status",
         "c_layer",
+        "x_kind",
+        "y_kind",
         "c_where",
         "category",
         "location",
@@ -325,7 +342,11 @@ CODE_FIELDS = frozenset(
 
 
 def _values(value: Any, out: list[str], key: str = "") -> None:
-    """String values of a JSON document outside the program's own vocabulary fields."""
+    """String values of a JSON document outside the program's own vocabulary fields. An event
+    that is not a plain code (a library's message) is searched too."""
+    if key == "event" and isinstance(value, str) and not _CODE.fullmatch(value):
+        out.append(value)
+        return
     if key in CODE_FIELDS:
         return
     if isinstance(value, str):

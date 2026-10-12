@@ -45,3 +45,29 @@ def test_hybrid_and_v1_use_the_v1_memory_controller(tmp_path: Path) -> None:
 
 def test_no_cgroup_information(tmp_path: Path) -> None:
     assert cgroup_memory_limit(tmp_path / "missing", tmp_path)["version"] is None
+
+
+def test_headroom_is_read_where_the_limit_is_and_leaves_out_file_cache(tmp_path: Path) -> None:
+    """A per-user slice's limit is shared by all its sessions: the room left is the slice's
+    limit minus the slice's usage (not this session's), without reclaimable file cache."""
+    gib = 2**30
+    proc = tmp_path / "proc_cgroup"
+    proc.write_text("0::/user.slice/user-1000.slice/session-3.scope\n")
+    sys = tmp_path / "sys"
+    _write(sys / "cgroup.controllers", "memory")
+    slice_ = sys / "user.slice" / "user-1000.slice"
+    _write(slice_ / "session-3.scope" / "memory.max", "max\n")
+    _write(slice_ / "session-3.scope" / "memory.current", f"{2 * gib}\n")
+    _write(slice_ / "memory.max", f"{64 * gib}\n")
+    _write(slice_ / "memory.current", f"{60 * gib}\n")
+    _write(slice_ / "memory.stat", f"anon {50 * gib}\nfile {10 * gib}\ninactive_file {3 * gib}\n")
+    cg = cgroup_memory_limit(proc, sys)
+    assert cg["limit_bytes"] == 64 * gib and cg["limit_depth"] == 1
+    assert cg["usage_bytes"] == 57 * gib and cg["headroom_bytes"] == 7 * gib
+    # v1: total_inactive_file
+    proc.write_text("12:memory:/user.slice\n")
+    v1 = sys / "memory" / "user.slice"
+    _write(v1 / "memory.limit_in_bytes", f"{8 * gib}\n")
+    _write(v1 / "memory.usage_in_bytes", f"{8 * gib}\n")
+    _write(v1 / "memory.stat", f"cache {5 * gib}\ntotal_inactive_file {4 * gib}\n")
+    assert cgroup_memory_limit(proc, sys)["headroom_bytes"] == 4 * gib

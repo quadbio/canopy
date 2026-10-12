@@ -511,23 +511,49 @@ def cgroup_memory_limit(
     else:
         return out
     here = base / rel.lstrip("/")
-    limit, depth, d = None, None, here
+    stat_key = "total_inactive_file" if out["version"] in ("v1", "hybrid") else "inactive_file"
+    # every folder with a limit counts: usage is read from that same folder (a parent slice's
+    # limit is shared by all its children), less its inactive file cache (the kernel reclaims
+    # it before failing an allocation; as kubelet does)
+    limit, depth, headroom, d = None, None, None, here
     for i in range(64):
         try:
             raw = (d / files[0]).read_text().strip()
-            if raw != "max" and int(raw) < UNLIMITED and (limit is None or int(raw) < limit):
-                limit, depth = int(raw), i
+            if raw != "max" and int(raw) < UNLIMITED:
+                lim = int(raw)
+                used = _cgroup_used(d, files[1], stat_key)
+                room = lim - used if used is not None else lim
+                if headroom is None or room < headroom:
+                    headroom = room
+                    out["usage_bytes"] = used
+                if limit is None or lim < limit:
+                    limit, depth = lim, i
         except (OSError, ValueError):
             pass
         if d == base or d.parent == d:
             break
         d = d.parent
-    with contextlib.suppress(OSError, ValueError):
-        out["usage_bytes"] = int((here / files[1]).read_text())
+    if out["usage_bytes"] is None:
+        out["usage_bytes"] = _cgroup_used(here, files[1], stat_key)
     out["limit_bytes"] = limit
     out["limit_depth"] = depth
+    out["headroom_bytes"] = max(headroom, 0) if headroom is not None else None
     out["oom_kills"] = cgroup_oom_kills(here, out["version"])
     return out
+
+
+def _cgroup_used(d: Path, usage_file: str, stat_key: str) -> int | None:
+    """Memory used in cgroup folder `d`, without its inactive file cache (reclaimable)."""
+    try:
+        used = int((d / usage_file).read_text())
+    except (OSError, ValueError):
+        return None
+    with contextlib.suppress(OSError, ValueError):
+        for line in (d / "memory.stat").read_text().splitlines():
+            k, _, v = line.partition(" ")
+            if k == stat_key:
+                return max(used - int(v), 0)
+    return used
 
 
 def cgroup_oom_kills(here: Path, version: str | None) -> int | None:
@@ -548,8 +574,8 @@ def memory_headroom() -> int:
     (e.g. a systemd slice with MemoryMax, on this cgroup or a parent) leaves less."""
     avail = int(psutil.virtual_memory().available)
     cg = cgroup_memory_limit()
-    if cg["limit_bytes"] is not None:
-        avail = min(avail, cg["limit_bytes"] - (cg["usage_bytes"] or 0))
+    if cg.get("headroom_bytes") is not None:
+        avail = min(avail, cg["headroom_bytes"])
     return max(avail, 0)
 
 
@@ -571,6 +597,8 @@ def _cgroup_memory() -> dict[str, Any]:
     if cg["limit_bytes"] is not None:
         out["cgroup_limit_gb"] = round(cg["limit_bytes"] / 2**30, 2)
         out["cgroup_limit_depth"] = cg["limit_depth"]
+    if cg.get("headroom_bytes") is not None:
+        out["cgroup_headroom_gb"] = round(cg["headroom_bytes"] / 2**30, 2)
     return out
 
 

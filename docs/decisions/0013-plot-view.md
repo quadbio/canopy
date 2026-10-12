@@ -35,21 +35,37 @@ The full review (B-M6) noted that the view contract knew only zoomable maps.
   per-category histograms over one shared range (64 bins) with quartiles, mean and the share above
   0; bars as a count table; densities as a 128 × 128 grid. Counts and statistics only, never
   values; one pass over the same cached column and gene reads as colouring; cached, with an ETag;
-  logged as the `summary` stage. Measured on 10 M cells: violins (40 categories) 1.5 s, bars
-  0.1 s, density 0.2 s.
+  logged as the `summary` stage (with the features' kinds, categories, read time and reply
+  size). Measured on 10 M cells: violins (40 categories) 0.4 s (narrow category codes sort by
+  radix; float32 values), bars 0.1 s, density 0.2 s. At most two summaries are computed at once,
+  each reserving ~32 bytes per cell in the memory account.
+- **At most 1 000 categories** (owner, R8): a categorical feature with more is neither offered
+  for plotting nor for Colour by (a note says how many columns are left out), and the server
+  refuses such summaries (409 `too_many_categories`) before allocating anything. Real
+  annotations have far fewer; this catches a cell id column chosen by mistake. A text column
+  read whole (its count unknown before) is refused the same way once read. Columns with a value
+  per cell answer `too_many_values` (converting does not help, so it is not offered).
 - **Scatter**: drawn by the GPU like the embedding (same colouring, hover, point size). Points
   sit in `[0, aspect] × [0, 1]` (aspect of the drawing area), so one zoom serves both axes; the
   axes overlay maps back to each feature's values (or log1p values).
 - **Colours**: violins and bars are coloured by their category column through the shared
   colouring module; for the followed view's colour column with that view's own settings.
-- **Violin widths** are scaled to each category's busiest bin, leaving out a spike of zeros
-  (most cells for a gene), which would flatten the rest; that spike is drawn full width and the
-  share of cells above 0 is printed above each violin.
+- **Violin outlines** cover only the bins a group has (no line through values it lacks). Widths
+  are scaled to each group's busiest bin. For a gene, the cells at 0 (most cells) are left out
+  of the outline, which they would flatten, and drawn as a flat bar at 0 whose width is the
+  share of cells at 0; the share above 0 is printed above each violin. Categories follow the
+  legends' natural order (2 before 10); long labels are shortened in the middle (full name on
+  hover) and the axis makes room for them.
+- **Hidden categories** of the followed view leave violins and, as bars, the composition too
+  (owner, R8). A plot waiting for a choice shows a quiet instruction, not an error.
+- **Density map** colours are on a log scale (cells per bin); the legend says so.
 - **Log scales**: `log1p` per axis, applied on the server for summaries.
 
 ## Not yet
-- Axes for violins and bars do not zoom; categories beyond the width scroll sideways.
-- Violin and bar order follows the column's category order (the legend sorts by name).
+- Axes for violins and bars do not zoom; categories beyond the width scroll sideways (the
+  value axis scrolls with them).
+- Log scales on columns with negative values clamp them to 0 without a notice.
+- Violin and bar hover uses the browser's own tooltip (a short delay), not the canvas's.
 - Several datasets in one plot (S7's multi-dataset workspace).
 
 ## Evidence

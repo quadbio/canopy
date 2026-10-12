@@ -46,6 +46,24 @@ def test_bundle_is_strict_whatever_the_run_used(cfg: Config, tmp_path: Path) -> 
     assert "h5py/_hl/files.py:12" in text  # the crash's code location is kept
 
 
+@pytest.mark.parametrize("privacy", ["standard", "debug"])
+def test_library_log_text_does_not_reach_the_bundle(
+    cfg: Config, tmp_path: Path, privacy: str
+) -> None:
+    """A library's own log message (free text, possibly naming a column) is kept by a
+    standard or debug run; the bundle drops it and keeps that a line was logged."""
+    import logging
+
+    cfg.logging.privacy = privacy  # type: ignore[assignment]
+    setup_logging(cfg.logging, role="server", salt="x", to_console=False)
+    logging.getLogger("numcodecs.some").warning("column patient_cohort of secret_study is odd")
+    out, _ = build_bundle(cfg, tmp_path / "b.tar.gz", since_days=1)
+    with tarfile.open(out) as tar:
+        text = "".join(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.isfile())  # type: ignore[union-attr]
+    assert "patient_cohort" not in text and "secret_study" not in text
+    assert "dropped_library_text" in text and "numcodecs.some" in text
+
+
 def test_bundle_refuses_when_a_known_name_slips_through(cfg: Config, tmp_path: Path) -> None:
     setup_logging(cfg.logging, role="server", salt="x", to_console=False)
     # a field the filter does not know, holding a root name

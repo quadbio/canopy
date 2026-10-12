@@ -192,6 +192,8 @@ class DatasetCache:
             items = [(k, e) for k, e in self._lru.items() if len(k) > 1 and k[1] == version]
             for k, _ in items:
                 del self._lru[k]
+            for r in [r for r in self.refused if r and r[0] == version]:
+                del self.refused[r]
         for k, e in items:
             self._close(k, e, "converted")
 

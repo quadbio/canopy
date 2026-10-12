@@ -73,12 +73,14 @@ export const BASE_RGB: RGB = [80, 110, 160];
 export const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 // Columns with more categories than this are listed but not chosen by default.
 const DEFAULT_MAX_CATEGORIES = 60;
-// Columns with more categories cannot be told apart by colour (and their legend would be huge).
-const MAX_COLOUR_CATEGORIES = 5_000;
+// Columns with more categories are neither coloured by nor plotted (the owner's limit: real
+// annotations have far fewer; a cell id column chosen by mistake would not); the server
+// refuses plot summaries beyond it too (summary.MAX_PLOT_CATEGORIES).
+export const MAX_CATEGORIES = 1_000;
 
 export function colourable(c: ColumnMeta): boolean {
   if (c.kind === 'numeric' || c.kind === 'boolean' || c.kind === 'string') return true;
-  return c.kind === 'categorical' && c.categories !== null && c.categories.length <= MAX_COLOUR_CATEGORIES;
+  return c.kind === 'categorical' && c.categories !== null && c.categories.length <= MAX_CATEGORIES;
 }
 
 // Names that usually hold the annotation people want to see first.
@@ -283,12 +285,21 @@ export function useColouring(
     return out;
   }, [values, gene]);
 
+  // a text column's labels are known once read: too many and it is not coloured
+  const textCount = column?.kind === 'string' ? (labelsQ.data?.categories?.length ?? 0) : 0;
+  const tooMany = useMemo(
+    () =>
+      textCount > MAX_CATEGORIES
+        ? new Error(`“${column!.name}” has ${textCount.toLocaleString()} different values: at most ${MAX_CATEGORIES.toLocaleString()} categories are coloured.`)
+        : null,
+    [textCount, column],
+  );
   const labels = useMemo<string[] | null>(() => {
-    if (!column || !values || values.kind === 'numeric') return null;
+    if (!column || !values || values.kind === 'numeric' || tooMany) return null;
     if (values.kind === 'boolean') return ['false', 'true'];
     if (column.kind === 'string') return labelsQ.data?.categories ?? null;
     return column.categories;
-  }, [column, values, labelsQ.data]);
+  }, [column, values, labelsQ.data, tooMany]);
   const order = useMemo(
     () => (labels ? labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b])) : null),
     [labels],
@@ -366,7 +377,7 @@ export function useColouring(
     return `${column.name}: ${label ?? 'NA'}`;
   }, [gene, colourName, column, values, labels, hiddenSet]);
 
-  const error = obs.error ?? labelsQ.error ?? genes.error ?? geneQ.error;
+  const error = tooMany ?? obs.error ?? labelsQ.error ?? genes.error ?? geneQ.error;
   const retry = useCallback(() => {
     for (const q of [obs, labelsQ, genes, geneQ]) if (q.error) void q.refetch();
   }, [obs, labelsQ, genes, geneQ]);
@@ -380,6 +391,17 @@ export function useColouring(
     retry,
     name: colourName,
   };
+}
+
+/** Columns left out of category choices for having more than MAX_CATEGORIES categories. */
+export function TooManyNote({ meta }: { meta: DatasetMeta }) {
+  const n = meta.obs.filter((c) => c.kind === 'categorical' && (c.n_categories ?? c.categories?.length ?? 0) > MAX_CATEGORIES).length;
+  if (!n) return null;
+  return (
+    <p className="muted small" data-testid="too-many-categories">
+      {n === 1 ? '1 column has' : `${n} columns have`} more than {MAX_CATEGORIES.toLocaleString()} categories: not offered.
+    </p>
+  );
 }
 
 /** The colouring settings: Colour by, Gene, Values from, the colour map or palette. */
@@ -450,6 +472,7 @@ export function ColourFields({ spec }: { spec: ViewSpec<ColourParams> }) {
           }}
           groups={colourGroups}
         />
+        <TooManyNote meta={m} />
       </Field>
       <Field
         label="Gene"

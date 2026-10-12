@@ -23,7 +23,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import canopy
-from canopy.auth import COOKIE, LOGIN_PAGE, OPEN_PATHS, access_token
+from canopy.auth import LOGIN_PAGE, OPEN_PATHS, access_token, carried, cookie_name
 from canopy.auth import valid as auth_valid
 from canopy.build import build_id
 from canopy.catalog import Catalog
@@ -175,7 +175,16 @@ def _authorised(request: Request, token: str) -> bool:
     return request.url.path in OPEN_PATHS or auth_valid(request, token)
 
 
-def _auth_required(request: Request) -> Response:
+def _auth_required(request: Request, token: str) -> Response:
+    # which kinds of token came (never their values): a stale cookie, a wrong link or none
+    got = carried(request, token)
+    get_logger("canopy.app").info(
+        "auth_refused",
+        path_kind="api" if request.url.path.startswith("/api/") else "page",
+        had_cookie=sum(1 for k in request.cookies if k.startswith("canopy_token")),
+        had_bearer="bearer" in got,
+        had_query="query" in got,
+    )
     if request.url.path.startswith("/api/"):
         return error_response(
             request,
@@ -191,10 +200,16 @@ def _remember_token(request: Request, response: Response, token: str) -> Respons
     it, so the token does not stay in the address bar or the browser history."""
     if not request.url.path.startswith("/api/") and request.method == "GET":
         rest = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
-        url = request.url.path + (f"?{urlencode(rest)}" if rest else "")
+        # one leading slash: "//other.site/x" would be a link to another site
+        url = "/" + str(request.scope["path"]).lstrip("/") + (f"?{urlencode(rest)}" if rest else "")
         response = RedirectResponse(url, status_code=303)
     response.set_cookie(
-        COOKIE, token, httponly=True, samesite="strict", max_age=400 * 24 * 3600, path="/"
+        cookie_name(token),
+        token,
+        httponly=True,
+        samesite="strict",
+        max_age=400 * 24 * 3600,
+        path="/",
     )
     return response
 
@@ -308,7 +323,7 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                     "This host name is not allowed; add it to server.allowed_hosts.",
                 )
             elif token is not None and not _authorised(request, token):
-                response = _auth_required(request)
+                response = _auth_required(request, token)
             elif request.method in ("POST", "PUT", "DELETE") and (
                 request.headers.get("content-type", "").split(";")[0].strip().lower()
                 != "application/json"

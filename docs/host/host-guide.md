@@ -64,37 +64,52 @@ pixi run --frozen canopy link --config config.toml   # checks the config; prints
 A config problem is explained in one line (and recorded in the log folder). Put `state_dir` on a
 **local** disk (`df -T <folder>` should not say nfs, gpfs, lustre, cifs).
 
-**Memory.** Your account may have a limit below the machine's memory. Look it up:
+**Memory.** Your account may have a memory limit below the machine's memory (Linux "cgroups",
+often set for all your sessions together). Look it up:
 
 ```bash
-systemctl show user-$(id -u).slice -p MemoryMax 2>/dev/null
-cat /sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)/memory.max 2>/dev/null
+systemctl show user-$(id -u).slice -p MemoryMax 2>/dev/null   # the limit for all your sessions
+cat /proc/self/cgroup                                          # where your shell sits
 ```
 
-Set `memory.budget_gb` well below that limit (e.g. 70 %). Canopy also reads the limit itself
-and logs it at start (`cgroup_limit_gb`).
+The first line prints `MemoryMax=infinity` when there is no limit. The second shows a path like
+`0::/user.slice/user-1000.slice/session-3.scope`; a limit can sit on any part of it. Set
+`memory.budget_gb` well below the smallest limit you find (e.g. 70 %). Canopy also reads the
+limits itself (all parts of that path, the memory your other sessions use included) and logs
+them at start and every minute (`cgroup_limit_gb`, `cgroup_headroom_gb`).
+
+**For the first test, copy the output of both commands into your notes for the developer**
+(it holds no data names: a user id number and a session number). It tells whether the limits
+Canopy logs match what the host sets.
 
 ## 6. Start and stop
 
-Start in the background (the output file holds the access link: it is readable only by you):
+Start it in a `tmux` session, so it keeps running after you log out:
 
 ```bash
-nohup pixi run --frozen canopy serve --config config.toml > canopy.out 2>&1 &
-grep -m1 token= canopy.out          # the access link
+chmod 700 .                              # this folder: only you can read it
+tmux new -s canopy                       # a terminal that stays when you disconnect
+pixi run --frozen canopy serve --config config.toml
 ```
 
-Or as a user service, which also stops conversion workers with the server
+The access link is printed in that terminal (only you can see it). Detach with `Ctrl-b d`;
+reattach later with `tmux attach -t canopy`; stop the server there with `Ctrl-C`.
+
+The server prints the link only to a terminal. Started any other way (output into a file, a
+service's journal), it prints no token, because others may read those; print the link with
+`pixi run --frozen canopy link --config config.toml` instead.
+
+Optionally, as a user service, which also stops conversion workers with the server
 (`KillMode=control-group`):
 
 ```bash
 systemd-run --user --unit canopy --property KillMode=control-group \
   --working-directory "$PWD" "$PWD/.pixi/envs/default/bin/canopy" serve --config "$PWD/config.toml"
-journalctl --user -u canopy | grep -m1 token=   # the access link
 systemctl --user stop canopy                      # stop
 ```
 
-Stop a `nohup` server with `kill $(cat <state_dir>/server.lock)` (the server's process id is in
-that file).
+A server started without a terminal stops with `kill $(cat <state_dir>/server.lock)` (the
+server's process id is in that file).
 
 ## 7. Open it from your laptop
 
@@ -106,6 +121,8 @@ ssh -N -L 8765:127.0.0.1:8765 you@host.example     # keep this running
 
 Then open the link from step 6 in Chrome, Firefox or Safari on the laptop (it starts with
 `http://127.0.0.1:8765/?token=`). The browser remembers the token; the address bar drops it.
+Two Canopy servers on the same laptop address (e.g. ports 8765 and 8766) each keep their own
+cookie; an old link's cookie never blocks a new link.
 `canopy link --config config.toml` prints the link again at any time.
 
 ## 8. When something goes wrong
@@ -118,8 +135,10 @@ Then open the link from step 6 in Chrome, Firefox or Safari on the laptop (it st
    ```
 
    This writes `canopy-bundle-<date>.tar.gz`: logs of the server, workers and browser at
-   `strict` privacy (names as tokens, free text dropped), crash locations, the environment and
-   summaries of jobs and the index. It refuses to write if it finds a name known on the host.
+   `strict` privacy whatever privacy the server ran with (names as tokens; free text, also
+   libraries' own messages, dropped), crash locations, the environment and summaries of jobs and
+   the index. It refuses to write if it finds a file, folder, column or element name known on
+   the host. Gene names and names shorter than 4 characters are not searched for: read it.
    **Open it and read `MANIFEST.md` before copying it out.**
 3. A page that hangs: `kill -USR1 $(cat <state_dir>/server.lock)` writes the server's stacks to
    the log folder; then make the bundle.

@@ -16,6 +16,8 @@ a logged 500.
 from __future__ import annotations
 
 import hashlib
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -283,7 +285,7 @@ def _obs_values(
     key = (str(row.version), str(table), "obs", column)
     refused = cache.refused.get(key)
     if refused is not None:  # e.g. a barcode column: refused before, not read again
-        raise ApiError(409, f"needs_conversion:{refused}", "Convert the dataset to view this.")
+        raise _obs_refusal(refused)
     try:
         return _with_source(
             request,
@@ -302,7 +304,17 @@ def _obs_values(
     except ApiError as e:
         if e.code.startswith("needs_conversion:"):
             cache.refused[key] = e.code.split(":", 1)[1]
+            raise _obs_refusal(cache.refused[key]) from e
         raise
+
+
+def _obs_refusal(reason: str) -> ApiError:
+    if reason == "too_many_values":
+        # a value per cell (ids, barcodes): converting does not help, so it is not offered
+        return ApiError(
+            409, "too_many_values", "This column has a different value in almost every cell."
+        )
+    return ApiError(409, f"needs_conversion:{reason}", "Convert the dataset to view this.")
 
 
 @router.get("/{id}/obs")
@@ -713,6 +725,24 @@ def _feature(
     return summary.Feature("number", dense)
 
 
+# Summaries computed at the same time (each needs ~_SUMMARY_BYTES_PER_CELL × cells for a moment);
+# further requests wait rather than add up beyond the memory account.
+_SUMMARY_SLOTS = threading.BoundedSemaphore(2)
+_SUMMARY_BYTES_PER_CELL = 32
+_PY_BYTES_PER_NUMBER = 32  # a Python int or float in a list, with its list slot
+
+
+def _summary_bytes(r: object) -> int:
+    """Memory a cached summary holds as Python objects (lists of numbers, a few strings)."""
+    if isinstance(r, dict):
+        return 64 + sum(_summary_bytes(v) for v in r.values())
+    if isinstance(r, list):
+        return 56 + sum(_summary_bytes(v) for v in r)
+    if isinstance(r, str):
+        return 50 + len(r)
+    return _PY_BYTES_PER_NUMBER
+
+
 @router.get("/{id}/summary")
 def plot_summary(
     request: Request,
@@ -738,31 +768,54 @@ def plot_summary(
         return r
     _, cache = _state(request)
     logs = [c == "1" for c in log1p.ljust(2, "0")]
+    info: dict[str, object] = {"x_kind": x.partition(":")[0], "y_kind": y.partition(":")[0]}
 
     def compute() -> dict[str, Any]:
+        t0 = time.perf_counter()
         fx = _feature(request, row, fp, path, tname, source_info, x, xm)
         fy = _feature(request, row, fp, path, tname, source_info, y, ym)
-        if kind == "violin":
-            if fx.kind != "category" or fy.kind != "number":
-                raise ApiError(400, "invalid_features", "A violin needs categories × numbers.")
-            return summary.violin(fx, fy, bins, logs[1])
-        if kind == "bars":
-            if fx.kind != "category" or fy.kind != "category":
-                raise ApiError(400, "invalid_features", "Bars need two categorical features.")
-            return summary.bars(fx, fy)
-        if fx.kind != "number" or fy.kind != "number":
-            raise ApiError(400, "invalid_features", "A density needs two numbers.")
-        return summary.density(fx, fy, bins, logs[0], logs[1])
+        info["read_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        info["n_categories"] = max(len(fx.labels or []), len(fy.labels or []))
+        try:
+            with _SUMMARY_SLOTS:
+                if kind == "violin":
+                    if fx.kind != "category" or fy.kind != "number":
+                        raise ApiError(
+                            400, "invalid_features", "A violin needs categories × numbers."
+                        )
+                    return summary.violin(fx, fy, bins, logs[1])
+                if kind == "bars":
+                    if fx.kind != "category" or fy.kind != "category":
+                        raise ApiError(
+                            400, "invalid_features", "Bars need two categorical features."
+                        )
+                    return summary.bars(fx, fy)
+                if fx.kind != "number" or fy.kind != "number":
+                    raise ApiError(400, "invalid_features", "A density needs two numbers.")
+                return summary.density(fx, fy, bins, logs[0], logs[1])
+        except summary.TooManyCategoriesError as e:
+            raise ApiError(
+                409,
+                "too_many_categories",
+                f"A column with {e.n} categories is not plotted (at most "
+                f"{summary.MAX_PLOT_CATEGORIES}).",
+            ) from e
 
     outcome: dict[str, object] = {}
     with timed("summary", dataset_id=row.id, kind=kind, bins=bins) as extra:
-        result = cache.array(
-            (str(row.version), str(tname), "summary", *params),
-            compute,
-            lambda r: len(str(r)),
-            outcome=outcome,
-            what="summary",
-            dataset_id=row.id,
-        )
-        extra.update(cache=outcome.get("cache"), n_cells=source_info.n_obs)
-    return JSONResponse(result, headers={"etag": etag, "cache-control": "private, no-cache"})
+        try:
+            result = cache.array(
+                (str(row.version), str(tname), "summary", *params),
+                compute,
+                _summary_bytes,
+                # values (float32), transformed values, codes, masks, sort order and copies
+                reserve=_SUMMARY_BYTES_PER_CELL * source_info.n_obs,
+                outcome=outcome,
+                what="summary",
+                dataset_id=row.id,
+            )
+        finally:
+            extra.update(info, cache=outcome.get("cache"), n_cells=source_info.n_obs)
+        reply = JSONResponse(result, headers={"etag": etag, "cache-control": "private, no-cache"})
+        extra["reply_bytes"] = len(reply.body)
+    return reply

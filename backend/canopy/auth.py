@@ -2,7 +2,10 @@
 
 The server keeps a random token in `<state_dir>/access_token` (only the owner can read it) and
 prints a link with it at start. Opening the link stores the token in a cookie (HttpOnly,
-SameSite=Strict); from then on every page and API request carries it. Requests without it get
+SameSite=Strict) named after the token (`cookie_name`): browsers share cookies between ports, so
+two servers on one address keep their own, and an old cookie (a replaced token) is simply not
+used. From then on every page and API request carries it; a request is let in when any token it
+carries (cookie, Bearer header, `?token=`) is right. Requests without it get
 401: the API as JSON, the page as a short explanation. `/api/health` stays open.
 
 Whoever has the token sees every dataset in the data roots, with the rights of the user running
@@ -12,6 +15,7 @@ environment sets the token instead (automated tests). The token is never logged.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from pathlib import Path
@@ -20,7 +24,7 @@ from urllib.parse import urlencode
 from starlette.requests import Request
 
 TOKEN_FILE = "access_token"  # noqa: S105 (a file name, not a secret)
-COOKIE = "canopy_token"
+COOKIE = "canopy_token"  # prefix of the cookie's name
 OPEN_PATHS = frozenset({"/api/health"})
 
 
@@ -50,20 +54,28 @@ def link(host: str, port: int, token: str) -> str:
     return f"http://{shown}:{port}/?{urlencode({'token': token})}"
 
 
-def given(request: Request) -> str | None:
-    """The token a request carries: cookie, `Authorization: Bearer`, or `?token=`."""
-    c = request.cookies.get(COOKIE)
-    if c:
-        return c
+def cookie_name(token: str) -> str:
+    """The cookie of this installation: its name carries a short hash of the token."""
+    return f"{COOKIE}_{hashlib.sha256(token.encode()).hexdigest()[:8]}"
+
+
+def carried(request: Request, token: str) -> dict[str, str]:
+    """The tokens a request carries, by where: cookie, bearer (`Authorization`), query."""
+    out = {}
+    if c := request.cookies.get(cookie_name(token)):
+        out["cookie"] = c
     h = request.headers.get("authorization", "")
-    if h.lower().startswith("bearer "):
-        return h[7:].strip()
-    return request.query_params.get("token")
+    if h.lower().startswith("bearer ") and h[7:].strip():
+        out["bearer"] = h[7:].strip()
+    if q := request.query_params.get("token"):
+        out["query"] = q
+    return out
 
 
 def valid(request: Request, token: str) -> bool:
-    g = given(request)
-    return bool(g) and secrets.compare_digest(g.encode(), token.encode())  # type: ignore[union-attr]
+    """Whether any token the request carries is the right one."""
+    want = token.encode()
+    return any(secrets.compare_digest(g.encode(), want) for g in carried(request, token).values())
 
 
 LOGIN_PAGE = """<!doctype html>

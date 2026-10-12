@@ -1,8 +1,13 @@
+import { createHash } from 'node:crypto';
+
 import { defineConfig, devices } from '@playwright/test';
 
 // End-to-end tests against a real `canopy serve` on the example datasets, serving the built
 // frontend (run `pnpm build` first; `pixi run -e dev e2e` does both).
 const port = Number(process.env.CANOPY_E2E_PORT ?? 8791);
+const token = process.env.CANOPY_TOKEN ?? 'e2e-token';
+// the cookie's name carries a hash of the token (backend canopy/auth.py cookie_name)
+const cookieName = `canopy_token_${createHash('sha256').update(token).digest('hex').slice(0, 8)}`;
 
 export default defineConfig({
   testDir: 'e2e',
@@ -19,8 +24,8 @@ export default defineConfig({
     storageState: {
       cookies: [
         {
-          name: 'canopy_token',
-          value: process.env.CANOPY_TOKEN ?? 'e2e-token',
+          name: cookieName,
+          value: token,
           domain: '127.0.0.1',
           path: '/',
           expires: -1,

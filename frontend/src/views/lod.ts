@@ -40,7 +40,8 @@ interface Lod {
    * changes only every few hundred pixels of panning (views read data in view with it). */
   extent: Record<string, [number, number, number, number]>;
   setExtent: (id: string, e: [number, number, number, number]) => void;
-  /** Each view's first panel size in pixels (charts that fill their panel, e.g. a scatter). */
+  /** Each view's free area in its first panel, in pixels: the panel less the title row, an open
+   * legend and the view's margins (what its bounds are fitted into; e.g. a scatter's shape). */
   size: Record<string, [number, number]>;
   setSize: (id: string, w: number, h: number) => void;
   /** Points on screen each view may draw (its share of CANVAS_BUDGET). */

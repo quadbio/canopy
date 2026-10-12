@@ -294,3 +294,16 @@ Resume rule: read this file, then continue with the first unchecked step.
   removed (ADR 0013 revised, S7a guide and form rewritten). 276 backend, 81 unit, 26 e2e.
   Commit 20acd51. Cold review of 477c92f..20acd51 launched (../reviews/code_review_S7a/).
   - Next: report reviews; owner does the S7a demo review.
+- 2026-10-12 S7a cold review (../reviews/code_review_S7a/): A backend (4 high: unbounded
+  categories, library text in bundles, cgroup headroom, token in output file), B frontend
+  (1 high: categories; violin hairlines, squeezed scatter, density legend, hidden bars, labels).
+  Owner: at most 1 000 categories for plots and Colour by; hidden categories leave bars; tmux;
+  bundles from the start; cgroup commands in the guide. Batch R8 DONE (table:
+  ../reviews/code_review_S7a/R8-fixes.md): category cap (server 409 + lists), bundle drops
+  library text, headroom per limited cgroup less inactive file cache, link only to a terminal,
+  per-token cookie name + any valid credential, summary reserve/slots/log fields, violins 0.37 s
+  at 10 M, open redirect, missing counts, barcode code; frontend: free fit area published,
+  axes clear of title/legend, trimmed violins + zero bar, natural order, middle-ellipsis labels,
+  hidden rows in bars, idle status, stale dim, companion beside its view, full-canvas notice,
+  orphan drop. 283 backend, 84 unit, 26 e2e (also 26 on GPU at 2x).
+  - Next: owner's S7a demo review (docs/demo/S7a-plot-guide.md); then the first host test.

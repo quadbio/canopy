@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -172,9 +173,16 @@ def serve(config: ConfigOpt = None) -> None:
         raise typer.Exit(1) from e
     if cfg.server.auth == "token":
         url = link(cfg.server.host, cfg.server.port, access_token(cfg.state))
-        typer.echo(
-            f"\nCanopy: open {url}\n(Keep this link private: it opens every dataset.)\n", err=True
-        )
+        if sys.stderr.isatty():  # a terminal (also tmux, screen): only its user sees it
+            typer.echo(
+                f"\nCanopy: open {url}\n(Keep this link private: it opens every dataset.)\n",
+                err=True,
+            )
+        else:  # output going to a file or journal others may read: no token in it
+            typer.echo(
+                "\nCanopy: started; print the access link with: canopy link --config <config>\n",
+                err=True,
+            )
     else:
         typer.echo(
             'Canopy: server.auth = "none": anyone who reaches the port sees all data.', err=True

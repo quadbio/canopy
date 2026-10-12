@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from canopy.app import create_app
-from canopy.auth import COOKIE, TOKEN_FILE, access_token
+from canopy.auth import TOKEN_FILE, access_token, cookie_name
 from canopy.config import Config, apply_file_access
 
 
@@ -63,12 +63,50 @@ def test_the_link_sets_a_cookie_and_drops_the_token_from_the_address(
         assert r.status_code == 303 and r.headers["location"] == "/?view=x"
         cookie = r.headers["set-cookie"]
         assert (
-            f"{COOKIE}=tok-123" in cookie and "HttpOnly" in cookie and "SameSite=strict" in cookie
+            f"{cookie_name('tok-123')}=tok-123" in cookie
+            and "HttpOnly" in cookie
+            and "SameSite=strict" in cookie
         )
         # the cookie now opens the API
         assert c.get("/api/catalog/roots").status_code == 200
         c.cookies.clear()
         assert c.get("/api/catalog/roots").status_code == 401
+
+
+def test_a_stale_cookie_does_not_block_a_valid_link(
+    secured: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Another server's cookie (same address, other port) or an old one: the right token in
+    the link or header still opens, and the link re-sets this server's cookie."""
+    monkeypatch.setenv("CANOPY_TOKEN", "new-token")
+    with TestClient(create_app(secured, background=False)) as c:
+        c.cookies.set(cookie_name("new-token"), "old-token")
+        c.cookies.set(cookie_name("other-server"), "other-server")
+        assert c.get("/api/catalog/roots").status_code == 401
+        assert "auth_refused" in caplog.text and "old-token" not in caplog.text
+        ok = {"authorization": "Bearer new-token"}
+        assert c.get("/api/catalog/roots", headers=ok).status_code == 200
+        r = c.get("/?token=new-token", follow_redirects=False)
+        assert r.status_code == 303 and "new-token" in r.headers["set-cookie"]
+        assert cookie_name("new-token") != cookie_name("other-server")
+
+
+def test_the_link_never_redirects_to_another_site() -> None:
+    """A request for "//other.site/x?token=…" is sent back to a path here, not to that site."""
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from canopy.app import _remember_token
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "//evil.example/x",
+        "headers": [],
+        "query_string": b"token=tok&a=1",
+    }
+    r = _remember_token(Request(scope), Response(), "tok")
+    assert r.headers["location"] == "/evil.example/x?a=1"
 
 
 def test_files_are_private_or_group_readable(cfg: Config, tmp_path: Path) -> None:

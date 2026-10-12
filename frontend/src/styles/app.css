@@ -201,6 +201,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   pointer-events: auto;
   width: fit-content;
 }
+.view-idle {
+  color: var(--text-muted);
+}
+.chart-stale {
+  opacity: 0.45;
+  transition: opacity 0.2s;
+}
 .view-legend {
   position: absolute;
   right: var(--space-2);

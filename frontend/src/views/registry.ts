@@ -28,8 +28,9 @@ export interface PanelOutput {
   /** Text for item `index` of layer `layer` (the top-level layer's id). */
   tooltip?: (index: number, layer: string) => string | null;
   /** Drawn over the panel and redrawn as it pans and zooms (e.g. a plot's axes): gets the
-   * panel's view state and its rectangle (canvas pixels). */
-  overlay?: (state: OrthoState, rect: Cell) => ReactNode;
+   * panel's view state, its rectangle (canvas pixels) and the room taken in it by the title
+   * row and an open legend (to keep clear of). */
+  overlay?: (state: OrthoState, rect: Cell, taken: Insets) => ReactNode;
 }
 
 /** How the panels of a view follow each other: the same zoom, or the same zoom and the same
@@ -74,7 +75,8 @@ export interface ViewOutput {
   fitKey?: string;
   /** y grows downwards on screen (images, spatial coordinates). */
   flipY?: boolean;
-  status: 'loading' | 'ready' | 'error';
+  /** idle: waiting for a choice in the settings; `error` then holds the instruction */
+  status: 'loading' | 'ready' | 'error' | 'idle';
   error?: string;
   /** The view needs this dataset converted: the cell offers the conversion with its error. */
   needsConversion?: string;

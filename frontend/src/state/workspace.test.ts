@@ -4,6 +4,7 @@ import type { DatasetMeta } from '../api/types';
 import { effectiveParams, normaliseParams } from '../views/embedding';
 import { registerView, viewType } from '../views/registry';
 import { defaultPointSize } from '../views/embedding';
+import '../views/plot';
 import { MAX_REMEMBERED, rememberKey, restoreRemembered, restoreViews, safeStorage, useWorkspace } from './workspace';
 
 describe('restoreViews', () => {
@@ -73,6 +74,24 @@ describe('companion plots', () => {
     const s = useWorkspace.getState();
     expect(s.views.map((v) => v.id)).toEqual([b]);
     expect(s.selected).toBe(b);
+  });
+});
+
+describe('companion placement and restore', () => {
+  it('opens beside its view and is dropped on restore when its view is gone', () => {
+    const ws = useWorkspace.getState();
+    ws.reset();
+    const base = { type: 'embedding', datasetId: 'd1', table: null, title: 'd1' };
+    const a = ws.addView({ ...base, params: normaliseParams({ embedding: 'X_umap' })! })!;
+    const b = useWorkspace.getState().addView({ ...base, params: normaliseParams({ embedding: 'X_umap' })! })!;
+    const plot = useWorkspace.getState().addView({ type: 'plot', datasetId: 'd1', table: null, title: 'p', params: { follows: a } }, a)!;
+    expect(useWorkspace.getState().views.map((v) => v.id)).toEqual([a, plot, b]);
+    const restored = restoreViews([
+      { id: 'p1', type: 'plot', datasetId: 'd1', params: { follows: 'gone' } },
+      { id: 'e1', type: 'embedding', datasetId: 'd1', params: { embedding: 'X_umap' } },
+      { id: 'p2', type: 'plot', datasetId: 'd1', params: { follows: 'e1' } },
+    ]);
+    expect(restored.map((v) => v.id)).toEqual(['e1', 'p2']);
   });
 });
 

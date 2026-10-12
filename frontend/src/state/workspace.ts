@@ -34,8 +34,9 @@ export interface Workspace {
   remembered: Record<string, Remembered>;
   selected: string | null;
   browserSelection: string | null; // dataset highlighted in the file browser
-  /** Adds a view; returns its id, or null when the canvas is full (MAX_VIEWS). */
-  addView: (v: Omit<ViewSpec, 'id'>) => string | null;
+  /** Adds a view (after view `after`, else at the end) and selects it; returns its id, or null
+   * when the canvas is full (MAX_VIEWS). */
+  addView: (v: Omit<ViewSpec, 'id'>, after?: string) => string | null;
   removeView: (id: string) => void;
   updateParams: (id: string, patch: Record<string, unknown>) => void;
   /** Replaces all parameters (e.g. "Reset to defaults"). */
@@ -99,7 +100,9 @@ export function restoreViews(raw: unknown): ViewSpec[] {
       params: params as Record<string, unknown>,
     });
   }
-  return out;
+  // a plot whose view is gone (not restored) goes too
+  const ids = new Set(out.map((v) => v.id));
+  return out.filter((v) => typeof v.params.follows !== 'string' || ids.has(v.params.follows));
 }
 
 /** Used when browser storage is blocked or missing: the workspace then lasts for this page only. */
@@ -176,10 +179,15 @@ export const useWorkspace = create<Workspace>()(
       remembered: {},
       selected: null,
       browserSelection: null,
-      addView: (v) => {
+      addView: (v, after) => {
         if (get().views.length >= MAX_VIEWS) return null;
         const id = newId();
-        set((s) => ({ views: [...s.views, { ...v, id }], selected: id }));
+        set((s) => {
+          const at = after ? s.views.findIndex((x) => x.id === after) + 1 : 0;
+          const views = [...s.views];
+          views.splice(at > 0 ? at : views.length, 0, { ...v, id });
+          return { views, selected: id };
+        });
         return id;
       },
       removeView: (id) =>

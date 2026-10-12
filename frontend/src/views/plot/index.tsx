@@ -12,7 +12,7 @@ import { type ReactNode, useCallback, useMemo } from 'react';
 import { useGene, useGenes, useMeta, useObs, useSummary } from '../../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList, SummaryQuery } from '../../api/types';
 import { type ValueColour, ValueColourExtension } from '../../colour/gpu';
-import { useWorkspace, type ViewSpec } from '../../state/workspace';
+import { MAX_VIEWS, useWorkspace, type ViewSpec } from '../../state/workspace';
 import { Field, formatCount, Help, Select } from '../../ui/controls';
 import { GeneSearch } from '../../ui/GeneSearch';
 import {
@@ -23,7 +23,9 @@ import {
   type ColourParams,
   defaultColourParams,
   geneLabel,
+  MAX_CATEGORIES,
   normaliseColourParams,
+  TooManyNote,
   useColouring,
 } from '../colouring';
 import { useLod } from '../lod';
@@ -127,7 +129,7 @@ function normaliseParams(raw: unknown): PlotParams | null {
 /** Defaults: the dataset's main categorical column against its first numeric column (a violin),
  * else two numbers, else two categorical columns. */
 export function defaultFeatures(meta: DatasetMeta): { x: Feature | null; y: Feature | null } {
-  const cats = meta.obs.filter((c) => c.kind === 'categorical' && (c.categories?.length ?? 0) > 1 && (c.categories?.length ?? 0) <= 200);
+  const cats = meta.obs.filter((c) => c.kind === 'categorical' && (c.categories?.length ?? 0) > 1 && (c.categories?.length ?? 0) <= 60);
   const nums = meta.obs.filter((c) => c.kind === 'numeric');
   const named = (cs: ColumnMeta[]) => cs.find((c) => /type|cluster|leiden|louvain|annot/i.test(c.name)) ?? cs[0];
   const cat = cats.length ? named(cats) : undefined;
@@ -242,6 +244,11 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
     () => new Set(colourParams.colorBy?.kind === 'obs' ? colourParams.hidden : []),
     [colourParams.colorBy, colourParams.hidden],
   );
+  // bars: the rows are the followed view's colour column (x): categories hidden there go too
+  const hiddenRows = useMemo(
+    () => new Set(fp && p.x?.kind === 'obs' && fp.colorBy?.kind === 'obs' && fp.colorBy.name === p.x.name ? fp.hidden : []),
+    [fp, p.x],
+  );
 
   // ---- summaries (violin, bars, density)
   const q = useMemo<SummaryQuery | null>(() => {
@@ -267,11 +274,10 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   const scatter = plot?.kind === 'scatter';
   const xv = useValues(spec, scatter ? p.x : null, version, genes.data);
   const yv = useValues(spec, scatter ? p.y : null, version, genes.data);
-  // the plotting area's shape (panel minus the axes, title row and an open legend): x runs over
-  // [0, aspect] so the points fill the panel at one zoom
+  // the plotting area's shape (published by the canvas: panel less title row, open legend and
+  // axes): x runs over [0, aspect] so the points fill it at one zoom
   const size = useLod((s) => s.size[spec.id]);
-  const legendOpen = !(p.legendCollapsed ?? false) && colouring.coloured;
-  const aspect = size ? Math.max(0.3, (size[0] - AXES.left - (legendOpen ? 250 : 0)) / Math.max(size[1] - AXES.bottom - 30, 1)) : 1;
+  const aspect = size ? Math.min(Math.max(0.3, size[0] / size[1]), 5) : 1;
   const roundedAspect = Math.round(aspect * 20) / 20; // refit only on real changes of shape
   const pts = useMemo(
     () =>
@@ -311,7 +317,11 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   const overlay = useMemo(
     () =>
       pts
-        ? scatterAxes({ range: pts.xr, log1p: p.log1pX, label: xName, span: roundedAspect }, { range: pts.yr, log1p: p.log1pY, label: yName, span: 1 })
+        ? scatterAxes(
+            { range: pts.xr, log1p: p.log1pX, label: xName, span: roundedAspect },
+            { range: pts.yr, log1p: p.log1pY, label: yName, span: 1 },
+            AXES,
+          )
         : undefined,
     [pts, p.log1pX, p.log1pY, xName, yName, roundedAspect],
   );
@@ -329,21 +339,36 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   const s = summary.data;
   const catName = featureName(catF, genes.data);
   const numName = featureName(numF, genes.data);
-  let content: ReactNode;
-  if (s?.kind === 'violin' && plot?.kind === 'violin') {
-    content = <Violins summary={s} colours={rgbOf} hidden={hidden} xLabel={catName} yLabel={numName} showAboveZero={p.aboveZero && numF?.kind === 'gene'} />;
-  } else if (s?.kind === 'bars' && plot?.kind === 'bars') {
-    content = <StackedBars summary={s} colours={rgbOf} hidden={hidden} xLabel={xName} proportions={p.proportions} />;
-  } else if (s?.kind === 'density' && plot?.kind === 'density') {
-    content = <Density summary={s} xLabel={xName} yLabel={yName} />;
-  }
+  // memoised: a new element on every render would re-publish the view (and redraw the canvas)
+  const stale = summary.isPlaceholderData; // the previous features' summary, until the new one comes
+  const content = useMemo<ReactNode>(() => {
+    let c: ReactNode = null;
+    if (s?.kind === 'violin' && plot?.kind === 'violin') {
+      c = (
+        <Violins
+          summary={s}
+          colours={rgbOf}
+          hidden={hidden}
+          xLabel={catName}
+          yLabel={numName}
+          showAboveZero={p.aboveZero && numF?.kind === 'gene'}
+          zeroSpike={numF?.kind === 'gene'}
+        />
+      );
+    } else if (s?.kind === 'bars' && plot?.kind === 'bars') {
+      c = <StackedBars summary={s} colours={rgbOf} hidden={hidden} hiddenRows={hiddenRows} xLabel={xName} proportions={p.proportions} />;
+    } else if (s?.kind === 'density' && plot?.kind === 'density') {
+      c = <Density summary={s} xLabel={xName} yLabel={yName} />;
+    }
+    return c && stale ? <div className="chart-stale">{c}</div> : c;
+  }, [s, plot?.kind, rgbOf, hidden, hiddenRows, catName, numName, xName, yName, p.aboveZero, p.proportions, numF?.kind, stale]);
   const error = meta.error ?? summary.error ?? xv.error ?? yv.error ?? (genes.error as unknown);
   const missingGene = wantsGenes && genes.data && ((p.x?.kind === 'gene' && !featureSpec(p.x, genes.data)) || (p.y?.kind === 'gene' && !featureSpec(p.y, genes.data)));
   const unset = !!meta.data && (!plot || missingGene || (!!own.follows && !followed));
   const ready = scatter ? !!pts && !!colourAttr : !!content;
   const legend: ColourLegendData | undefined =
     plot?.kind === 'density' && s?.kind === 'density'
-      ? { kind: 'numeric', name: 'cells per bin', range: [0, s.max], colormap: 'viridis' }
+      ? { kind: 'numeric', name: 'cells per bin (log scale)', range: [1, Math.max(s.max, 1)], colormap: 'viridis' }
       : (plot?.kind === 'scatter' && !colouring.coloured) || usesFollowed
         ? undefined // the followed view's legend controls these categories
         : colouring.legend;
@@ -355,7 +380,8 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
     margins: scatter ? AXES : undefined,
     fitKey: `${version}|${xName}|${yName}|${p.log1pX}|${p.log1pY}`,
     content: scatter ? undefined : content,
-    status: error ? 'error' : unset ? 'error' : ready ? 'ready' : 'loading',
+    // a plot still waiting for a choice is not an error: a quiet instruction
+    status: error ? 'error' : unset ? (missingGene || (own.follows && !followed) ? 'error' : 'idle') : ready ? 'ready' : 'loading',
     error: error
       ? String((error as Error).message)
       : unset
@@ -413,12 +439,13 @@ function FeatureField({ spec, which, title }: { spec: ViewSpec<PlotParams>; whic
           {
             label: 'Categories',
             options: m.obs
-              .filter((c) => c.kind !== 'numeric' && (c.categories?.length ?? 0) <= 200)
+              .filter((c) => c.kind !== 'numeric' && (c.n_categories ?? c.categories?.length ?? 0) <= MAX_CATEGORIES)
               .map((c) => ({ value: `obs:${c.name}`, label: c.name, hint: c.categories ? `${c.categories.length}` : c.kind })),
           },
           { label: 'Numbers', options: m.obs.filter((c) => c.kind === 'numeric').map((c) => ({ value: `obs:${c.name}`, label: c.name })) },
         ]}
       />
+      <TooManyNote meta={m} />
       {genes.data && (
         <GeneSearch genes={genes.data} onPick={(g) => set({ kind: 'gene', name: g, ...(f?.kind === 'gene' && f.matrix ? { matrix: f.matrix } : {}) })} testId={`plot-${which}-gene`} />
       )}
@@ -522,26 +549,30 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
   const addView = useWorkspace((s) => s.addView);
   const removeView = useWorkspace((s) => s.removeView);
   const select = useWorkspace((s) => s.select);
+  const full = useWorkspace((s) => s.views.length >= MAX_VIEWS);
   if (!meta.data) return null;
   const toggle = (on: boolean) => {
     if (!on) {
       if (companion) removeView(companion.id);
       return;
     }
-    const id = addView({
-      type: 'plot',
-      datasetId: spec.datasetId,
-      table: spec.table,
-      title: `${spec.title} · plot`,
-      params: companionParams(meta.data!, spec.id, spec.params as unknown as ColourParams) as never,
-    });
+    const id = addView(
+      {
+        type: 'plot',
+        datasetId: spec.datasetId,
+        table: spec.table,
+        title: `${spec.title} · plot`,
+        params: companionParams(meta.data!, spec.id, spec.params as unknown as ColourParams) as never,
+      },
+      spec.id, // beside its view
+    );
     // the settings stay on this view, where the second feature is chosen
     if (id) select(spec.id);
   };
   return (
     <>
       <label className="check" data-testid="plot-companion">
-        <input type="checkbox" checked={!!companion} onChange={(e) => toggle(e.target.checked)} />
+        <input type="checkbox" checked={!!companion} disabled={!companion && full} onChange={(e) => toggle(e.target.checked)} />
         Plot against a second feature
         <Help label="About plotting two features">
           <p>
@@ -551,6 +582,11 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
           </p>
         </Help>
       </label>
+      {!companion && full && (
+        <p className="muted small" data-testid="plot-companion-full">
+          The canvas is full ({MAX_VIEWS} views): close one to plot.
+        </p>
+      )}
       {companion && <FeatureField spec={companion} which="y" title="Plot against" />}
     </>
   );

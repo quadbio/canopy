@@ -23,7 +23,7 @@ engine=$(command -v docker || command -v podman || true)
   test "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8765/api/catalog/roots)" = 401
   tok=$(cat run/state/access_token)
   test "$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $tok" http://127.0.0.1:8765/api/catalog/roots)" = 200
-  curl -s -b "canopy_token=$tok" http://127.0.0.1:8765/ | grep -q "<title>Canopy</title>"
+  curl -s -H "Authorization: Bearer $tok" http://127.0.0.1:8765/ | grep -q "<title>Canopy</title>"
   pixi run --frozen canopy bundle --config c.toml --out run/b.tar.gz
   echo "linux-smoke: OK"
 '

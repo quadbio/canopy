@@ -585,10 +585,7 @@ def test_a_barcode_column_is_refused_from_a_sample_and_not_read_again(
     monkeypatch.setattr(reader, "read_elem", lambda node: reads.append(1) or real(node))
     for _ in range(2):
         r = c.get(f"/api/datasets/{id}/obs", params={"column": "barcode"})
-        assert (
-            r.status_code == 409
-            and r.json()["detail"]["code"] == "needs_conversion:too_many_values"
-        )
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "too_many_values"
     assert reads == []  # refused from the sample; the whole column was never read
 
 

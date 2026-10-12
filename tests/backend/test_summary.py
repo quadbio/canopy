@@ -118,3 +118,29 @@ def test_wrong_kinds_are_explained(cfg: Config) -> None:
         f"/api/datasets/{id}/summary", params={"kind": "violin", "x": "obs:nope", "y": "gene:1"}
     )
     assert r.status_code == 404
+
+
+def test_too_many_categories_are_refused_before_any_table(cfg: Config) -> None:
+    """A cell id column chosen by mistake: refused with a code, nothing large allocated."""
+    from canopy.data import summary
+
+    n = summary.MAX_PLOT_CATEGORIES + 5
+    a = ad.AnnData(X=np.zeros((n, 1), np.float32))
+    a.obs["cell"] = pd.Categorical([f"c{i}" for i in range(n)])
+    a.obs["group"] = pd.Categorical(["g"] * n)
+    a.obs["value"] = np.ones(n, np.float32)
+    a.write_h5ad(cfg.data_roots[0].path / "ids.h5ad")
+    id = entry_id("data", "ids.h5ad")
+    c = client_for(cfg)
+    for kind, x, y in [("bars", "obs:cell", "obs:group"), ("violin", "obs:cell", "obs:value")]:
+        r = c.get(f"/api/datasets/{id}/summary", params={"kind": kind, "x": x, "y": y})
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "too_many_categories"
+
+
+def test_a_missing_cell_is_counted_once(cfg: Config) -> None:
+    from canopy.data import summary
+
+    cat = summary.Feature("category", np.array([0, -1, -1, 1], np.int8), ["a", "b"])
+    num = summary.Feature("number", np.array([1, np.nan, 2, np.nan], np.float32))
+    s = summary.violin(cat, num)
+    assert s["n_missing_category"] == 2 and s["n_missing_value"] == 1

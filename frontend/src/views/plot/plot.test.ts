@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DatasetMeta } from '../../api/types';
 import { viewType } from '../registry';
+import { categoryAxisHeight, shortLabel } from './charts';
 import { companionParams, defaultFeatures, featureKind, plotKind, SCATTER_MAX, scatterPositions } from '.';
 
 const meta = {
@@ -56,5 +57,22 @@ describe('companion plots', () => {
     expect(p).toMatchObject({ follows: 'v1', x: null, y: null, palette: 'okabe-ito' });
     expect(t.normalise(p)).toMatchObject({ follows: 'v1' });
     expect(t.normalise({ follows: 3 })).toMatchObject({ follows: null });
+  });
+});
+
+describe('category labels', () => {
+  it('are shortened in the middle, so labels differing at the end stay apart', () => {
+    const a = shortLabel('a very long category label number 1');
+    const b = shortLabel('a very long category label number 2');
+    expect(a).not.toBe(b);
+    expect(a.length).toBeLessThanOrEqual(22);
+    expect(a.endsWith('1')).toBe(true);
+    expect(shortLabel('T cell')).toBe('T cell');
+  });
+  it('get room below the axis by their length when turned', () => {
+    expect(categoryAxisHeight(['a', 'b'], 100)).toBe(48);
+    const long = categoryAxisHeight(['a very long category label number 1'], 30);
+    expect(long).toBeGreaterThan(categoryAxisHeight(['short'], 30));
+    expect(long).toBeLessThanOrEqual(140);
   });
 });

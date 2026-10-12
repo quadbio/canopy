@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { PlotSummary } from '../../api/types';
 import { colormapLut, type ColormapName } from '../../colour/palettes';
-import type { Cell, OrthoState } from '../layout';
+import type { Cell, Insets, OrthoState } from '../layout';
 import { log1pTicks, niceTicks, tickLabel } from './axes';
 
 type RGB = [number, number, number];
@@ -26,8 +26,27 @@ export function useBox<T extends HTMLElement>() {
   return [ref, size] as const;
 }
 
-// Room for the axes around a chart's plotting area.
+// Room for the axes around a chart's plotting area (the bottom grows with turned labels).
 export const MARGIN = { left: 56, right: 16, top: 16, bottom: 72 };
+const LABEL_CHARS = 22;
+const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** A long label shortened in the middle, so labels that differ at the end stay apart. */
+export function shortLabel(c: string, max = LABEL_CHARS): string {
+  if (c.length <= max) return c;
+  const head = Math.ceil((max - 1) * 0.55);
+  return `${c.slice(0, head)}…${c.slice(c.length - (max - 1 - head))}`;
+}
+
+/** Room below the plotting area for category labels (turned when slots are narrow). */
+export function categoryAxisHeight(labels: string[], slot: number): number {
+  if (slot >= 64) return 48;
+  const chars = Math.max(0, ...labels.map((c) => shortLabel(c).length));
+  return Math.min(Math.max(48, Math.round(chars * 6.5 * Math.sin((40 * Math.PI) / 180)) + 36), 140);
+}
+
+/** Indices of labels in natural order (as the legends sort: 2 before 10). */
+const naturalOrder = (labels: string[]) => labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b]));
 
 /** Ticks of a value axis in its own units: plain, or for log1p-transformed values. */
 function valueTicks(lo: number, hi: number, log1p: boolean): { at: number; label: string }[] {
@@ -71,8 +90,8 @@ function YAxis({
   );
 }
 
-/** Category labels along the bottom, turned when they would overlap. */
-function CategoryAxis({ labels, slot, top, label }: { labels: string[]; slot: number; top: number; label: string }) {
+/** Category labels along the bottom, turned when they would overlap; full names on hover. */
+function CategoryAxis({ labels, slot, top, height, label }: { labels: string[]; slot: number; top: number; height: number; label: string }) {
   const turn = slot < 64;
   return (
     <g className="axis">
@@ -84,10 +103,11 @@ function CategoryAxis({ labels, slot, top, label }: { labels: string[]; slot: nu
           textAnchor={turn ? 'end' : 'middle'}
           dy={turn ? '0.3em' : '0.6em'}
         >
-          {c.length > 18 ? `${c.slice(0, 17)}…` : c}
+          {shortLabel(c)}
+          {c.length > LABEL_CHARS && <title>{c}</title>}
         </text>
       ))}
-      <text className="label" x={MARGIN.left + (slot * labels.length) / 2} y={top + MARGIN.bottom - 6} textAnchor="middle">
+      <text className="label" x={MARGIN.left + (slot * labels.length) / 2} y={top + height - 6} textAnchor="middle">
         {label}
       </text>
     </g>
@@ -103,6 +123,7 @@ export function Violins({
   xLabel,
   yLabel,
   showAboveZero,
+  zeroSpike,
 }: {
   summary: Extract<PlotSummary, { kind: 'violin' }>;
   colours: Map<string, RGB>;
@@ -110,16 +131,28 @@ export function Violins({
   xLabel: string;
   yLabel: string;
   showAboveZero: boolean;
+  /** a gene: most cells are 0, drawn apart (see below) */
+  zeroSpike: boolean;
 }) {
   const [ref, box] = useBox<HTMLDivElement>();
-  const shown = summary.categories.map((c, i) => ({ c, g: summary.groups[i] })).filter((x) => !hidden.has(x.c) && x.g.n > 0);
+  const shown = naturalOrder(summary.categories)
+    .map((i) => ({ c: summary.categories[i], g: summary.groups[i] }))
+    .filter((x) => !hidden.has(x.c) && x.g.n > 0);
   const plotW = Math.max(box.width - MARGIN.left - MARGIN.right, 50);
   const slot = Math.max(28, plotW / Math.max(shown.length, 1));
   const width = MARGIN.left + slot * shown.length + MARGIN.right;
-  const height = Math.max(box.height - MARGIN.top - MARGIN.bottom, 60);
+  const bottom = categoryAxisHeight(
+    shown.map((x) => x.c),
+    slot,
+  );
+  const height = Math.max(box.height - MARGIN.top - bottom, 60);
   const [lo, hi] = summary.range;
   const y = (v: number) => MARGIN.top + (1 - (v - lo) / (hi - lo || 1)) * height;
   const step = (hi - lo) / summary.bins;
+  const full = slot * 0.42;
+  // a gene's zeros fall in the bin holding 0: drawn as a flat bar whose width is the share of
+  // cells at 0, so the outline above is scaled to the expressing cells and stays readable
+  const zeroBin = zeroSpike && lo <= 0 && hi > 0 ? Math.min(Math.floor((-lo / (hi - lo)) * summary.bins), summary.bins - 1) : -1;
   return (
     <div ref={ref} className="chart" data-testid="violins">
       {box.width > 0 && (
@@ -127,21 +160,45 @@ export function Violins({
           <YAxis lo={lo} hi={hi} log1p={summary.log1p} height={height} label={yLabel} />
           {shown.map(({ c, g }, i) => {
             const cx = MARGIN.left + (i + 0.5) * slot;
-            // widths scaled to the busiest bin, leaving out a spike of zeros (most cells of a gene):
-            // it would flatten the rest; it is drawn full width and its share is printed above
-            const zeroBin = lo <= 0 && hi > 0 ? Math.min(Math.floor((-lo / (hi - lo)) * summary.bins), summary.bins - 1) : -1;
-            const others = g.hist.filter((_, k) => k !== zeroBin);
-            const peak = Math.max(...(others.some((v) => v > 0) ? others : g.hist), 1);
-            const half = (k: number) => Math.min(g.hist[k] / peak, 1) * slot * 0.42;
-            const right = g.hist.map((_, k) => `${cx + half(k)},${y(lo + (k + 0.5) * step)}`);
-            const left = g.hist.map((_, k) => `${cx - half(k)},${y(lo + (k + 0.5) * step)}`).reverse();
+            const hist = g.hist.map((v, k) => (k === zeroBin ? 0 : v));
+            const peak = Math.max(...hist, 1);
+            // the outline covers only the bins this group has (no hairline through others)
+            const first = hist.findIndex((v) => v > 0);
+            const last = hist.length - 1 - [...hist].reverse().findIndex((v) => v > 0);
+            const half = (k: number) => (hist[k] / peak) * full;
+            const run = first < 0 ? [] : hist.slice(first, last + 1).map((_, j) => first + j);
+            const right = run.map((k) => `${cx + half(k)},${y(lo + (k + 0.5) * step)}`);
+            const left = run.map((k) => `${cx - half(k)},${y(lo + (k + 0.5) * step)}`).reverse();
+            const ends =
+              run.length > 0 ? { from: `${cx},${y(lo + first * step)}`, to: `${cx},${y(lo + (last + 1) * step)}` } : null;
+            const zeros = zeroBin >= 0 ? 1 - (g.frac_above_zero ?? 0) : 0;
             const colour = css(colours.get(c));
             return (
               <g key={c} data-testid="violin">
                 <title>
                   {`${c}: ${g.n.toLocaleString()} cells · median ${tickLabel(g.median ?? 0)} · quartiles ${tickLabel(g.q1 ?? 0)}–${tickLabel(g.q3 ?? 0)} · ${percent(g.frac_above_zero ?? 0)} above 0`}
                 </title>
-                <polygon points={[...right, ...left].join(' ')} fill={colour} fillOpacity={0.75} stroke={colour} />
+                {ends && (
+                  <polygon
+                    points={[ends.from, ...right, ends.to, ...left].join(' ')}
+                    fill={colour}
+                    fillOpacity={0.75}
+                    stroke={colour}
+                    strokeWidth={0.75}
+                    strokeLinejoin="round"
+                  />
+                )}
+                {zeros > 0 && (
+                  <rect
+                    data-testid="violin-zeros"
+                    x={cx - zeros * full}
+                    width={2 * zeros * full}
+                    y={y(lo + (zeroBin + 1) * step)}
+                    height={Math.max(y(lo + zeroBin * step) - y(lo + (zeroBin + 1) * step), 2)}
+                    fill={colour}
+                    fillOpacity={0.45}
+                  />
+                )}
                 {g.q1 !== undefined && g.q3 !== undefined && (
                   <rect x={cx - 3} width={6} y={y(g.q3)} height={Math.max(y(g.q1) - y(g.q3), 1)} fill="var(--text)" opacity={0.75} />
                 )}
@@ -154,7 +211,7 @@ export function Violins({
               </g>
             );
           })}
-          <CategoryAxis labels={shown.map((x) => x.c)} slot={slot} top={MARGIN.top + height} label={xLabel} />
+          <CategoryAxis labels={shown.map((x) => x.c)} slot={slot} top={MARGIN.top + height} height={bottom} label={xLabel} />
         </svg>
       )}
     </div>
@@ -167,24 +224,34 @@ export function StackedBars({
   summary,
   colours,
   hidden,
+  hiddenRows,
   xLabel,
   proportions,
 }: {
   summary: Extract<PlotSummary, { kind: 'bars' }>;
   colours: Map<string, RGB>;
+  /** stacks (the coloured categories) left out */
   hidden: Set<string>;
+  /** bars left out (categories hidden in the view the plot belongs to) */
+  hiddenRows: Set<string>;
   xLabel: string;
   proportions: boolean;
 }) {
   const [ref, box] = useBox<HTMLDivElement>();
-  const cols = summary.columns.map((c, j) => ({ c, j })).filter((x) => !hidden.has(x.c));
-  const rows = summary.rows
-    .map((r, i) => ({ r, total: cols.reduce((s, { j }) => s + summary.counts[i][j], 0), i }))
-    .filter((x) => x.total > 0);
+  const cols = naturalOrder(summary.columns)
+    .map((j) => ({ c: summary.columns[j], j }))
+    .filter((x) => !hidden.has(x.c));
+  const rows = naturalOrder(summary.rows)
+    .map((i) => ({ r: summary.rows[i], total: cols.reduce((s, { j }) => s + summary.counts[i][j], 0), i }))
+    .filter((x) => x.total > 0 && !hiddenRows.has(x.r));
   const plotW = Math.max(box.width - MARGIN.left - MARGIN.right, 50);
   const slot = Math.max(24, plotW / Math.max(rows.length, 1));
   const width = MARGIN.left + slot * rows.length + MARGIN.right;
-  const height = Math.max(box.height - MARGIN.top - MARGIN.bottom, 60);
+  const bottom = categoryAxisHeight(
+    rows.map((x) => x.r),
+    slot,
+  );
+  const height = Math.max(box.height - MARGIN.top - bottom, 60);
   const top = proportions ? 1 : Math.max(...rows.map((x) => x.total), 1);
   const y = (v: number) => MARGIN.top + (1 - v / top) * height;
   return (
@@ -212,7 +279,7 @@ export function StackedBars({
               </g>
             );
           })}
-          <CategoryAxis labels={rows.map((x) => x.r)} slot={slot} top={MARGIN.top + height} label={xLabel} />
+          <CategoryAxis labels={rows.map((x) => x.r)} slot={slot} top={MARGIN.top + height} height={bottom} label={xLabel} />
         </svg>
       )}
     </div>
@@ -295,8 +362,9 @@ function XAxis({ lo, hi, log1p, left, width, top, label }: { lo: number; hi: num
 export function scatterAxes(
   x: { range: [number, number]; log1p: boolean; label: string; span: number },
   y: { range: [number, number]; log1p: boolean; label: string; span: number },
+  margins: { left: number; bottom: number },
 ) {
-  return (state: OrthoState, rect: Cell) => {
+  return (state: OrthoState, rect: Cell, taken: Insets) => {
     const s = 2 ** state.zoom;
     const [tx, ty] = state.target;
     // the world square [0,1]² on screen (y grows upwards: the view is not flipped)
@@ -311,15 +379,18 @@ export function scatterAxes(
     const toWorld = (a: typeof x, v: number) => ((v - a.range[0]) / (a.range[1] - a.range[0] || 1)) * a.span;
     const xt = valueTicks(toData(x, wx0), toData(x, wx1), x.log1p);
     const yt = valueTicks(toData(y, wy0), toData(y, wy1), y.log1p);
-    const left = 48;
-    const bottom = rect.height - 36;
+    // the axes keep clear of the title row and an open legend
+    const left = margins.left;
+    const bottom = rect.height - margins.bottom;
+    const top = taken.top ?? 0;
+    const right = rect.width - (taken.right ?? 0);
     return (
       <svg width={rect.width} height={rect.height} className="axis" data-testid="scatter-axes">
-        <line x1={left} x2={left} y1={0} y2={bottom} />
-        <line x1={left} x2={rect.width} y1={bottom} y2={bottom} />
+        <line x1={left} x2={left} y1={top} y2={bottom} />
+        <line x1={left} x2={right} y1={bottom} y2={bottom} />
         {xt.map((t) => {
           const px = sx(toWorld(x, t.at));
-          return px < left || px > rect.width ? null : (
+          return px < left || px > right ? null : (
             <g key={`x${t.at}`} transform={`translate(${px},${bottom})`}>
               <line y2={4} />
               <text y={16} textAnchor="middle">
@@ -330,7 +401,7 @@ export function scatterAxes(
         })}
         {yt.map((t) => {
           const py = sy(toWorld(y, t.at));
-          return py < 0 || py > bottom ? null : (
+          return py < top || py > bottom ? null : (
             <g key={`y${t.at}`} transform={`translate(${left},${py})`}>
               <line x1={-4} />
               <text x={-7} dy="0.32em" textAnchor="end">
@@ -339,11 +410,11 @@ export function scatterAxes(
             </g>
           );
         })}
-        <text className="label" x={(left + rect.width) / 2} y={rect.height - 4} textAnchor="middle">
+        <text className="label" x={(left + right) / 2} y={rect.height - 4} textAnchor="middle">
           {x.label}
           {x.log1p ? ' (log scale)' : ''}
         </text>
-        <text className="label" transform={`translate(12,${bottom / 2}) rotate(-90)`} textAnchor="middle">
+        <text className="label" transform={`translate(12,${(top + bottom) / 2}) rotate(-90)`} textAnchor="middle">
           {y.label}
           {y.log1p ? ' (log scale)' : ''}
         </text>
