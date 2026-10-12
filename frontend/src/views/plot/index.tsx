@@ -34,6 +34,9 @@ import { Density, scatterAxes, StackedBars, Violins } from './charts';
 export type Feature = { kind: 'obs'; name: string } | { kind: 'gene'; name: string; matrix?: string };
 
 export interface PlotParams extends ColourParams {
+  /** The view this plot belongs to (an embedding or spatial view): its colour feature is the
+   * plot's first feature, its colours and hidden categories are used. null: a free plot. */
+  follows: string | null;
   x: Feature | null;
   y: Feature | null;
   log1pX: boolean;
@@ -108,6 +111,7 @@ function normaliseParams(raw: unknown): PlotParams | null {
   const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
   return {
     ...normaliseColourParams(r),
+    follows: typeof r.follows === 'string' && r.follows ? r.follows : null,
     x: normaliseFeature(r.x),
     y: normaliseFeature(r.y),
     log1pX: bool(r.log1pX, false),
@@ -193,8 +197,21 @@ function useRgbOf(legend: ColourLegendData | undefined): Map<string, [number, nu
   }, [legend]);
 }
 
+/** The view a plot follows, if it is still open. */
+function useFollowed(id: string | null): ViewSpec | null {
+  return useWorkspace((s) => (id ? (s.views.find((v) => v.id === id) ?? null) : null));
+}
+
 function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
-  const p = spec.params;
+  const own = spec.params;
+  const followed = useFollowed(own.follows);
+  const fp = followed?.params as ColourParams | undefined;
+  // the first feature: the followed view's colour (a column or a gene), else the plot's own
+  const firstKey = JSON.stringify(own.follows ? (fp?.colorBy ?? null) : own.x);
+  const p = useMemo<PlotParams>(
+    () => (own.follows ? { ...own, x: (fp?.colorBy as Feature | null | undefined) ?? null } : own),
+    [own, firstKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const meta = useMeta(spec.datasetId, spec.table);
   const version = meta.data?.version;
   const n = meta.data?.n_obs ?? 0;
@@ -207,13 +224,24 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   const numF = plot?.kind === 'violin' ? (plot.swap ? p.x : p.y) : null;
   // categories are coloured by their own column (shared palettes and picked colours); a
   // scatter by the user's choice
+  // when the categories are the followed view's colour column, its colour settings (palette,
+  // colours picked by hand, hidden categories) apply, and its legend controls them
+  const usesFollowed = !!fp && plot?.kind !== 'scatter' && catF?.kind === 'obs' && fp.colorBy?.kind === 'obs' && fp.colorBy.name === catF.name;
   const colourParams = useMemo<ColourParams>(
-    () => (plot && plot.kind !== 'scatter' && catF?.kind === 'obs' ? { ...p, colorBy: { kind: 'obs', name: catF.name } } : p),
-    [p, plot?.kind, catF], // eslint-disable-line react-hooks/exhaustive-deps
+    () =>
+      usesFollowed
+        ? fp!
+        : plot && plot.kind !== 'scatter' && catF?.kind === 'obs'
+          ? { ...p, colorBy: { kind: 'obs', name: catF.name } }
+          : p,
+    [p, fp, usesFollowed, plot?.kind, catF], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const colouring = useColouring(spec.datasetId, spec.table, colourParams, n || null);
   const rgbOf = useRgbOf(colouring.legend);
-  const hidden = useMemo(() => new Set(colourParams.colorBy?.kind === 'obs' ? p.hidden : []), [colourParams.colorBy, p.hidden]);
+  const hidden = useMemo(
+    () => new Set(colourParams.colorBy?.kind === 'obs' ? colourParams.hidden : []),
+    [colourParams.colorBy, colourParams.hidden],
+  );
 
   // ---- summaries (violin, bars, density)
   const q = useMemo<SummaryQuery | null>(() => {
@@ -311,13 +339,13 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   }
   const error = meta.error ?? summary.error ?? xv.error ?? yv.error ?? (genes.error as unknown);
   const missingGene = wantsGenes && genes.data && ((p.x?.kind === 'gene' && !featureSpec(p.x, genes.data)) || (p.y?.kind === 'gene' && !featureSpec(p.y, genes.data)));
-  const unset = !!meta.data && (!plot || missingGene);
+  const unset = !!meta.data && (!plot || missingGene || (!!own.follows && !followed));
   const ready = scatter ? !!pts && !!colourAttr : !!content;
   const legend: ColourLegendData | undefined =
     plot?.kind === 'density' && s?.kind === 'density'
       ? { kind: 'numeric', name: 'cells per bin', range: [0, s.max], colormap: 'viridis' }
-      : plot?.kind === 'scatter' && !colouring.coloured
-        ? undefined
+      : (plot?.kind === 'scatter' && !colouring.coloured) || usesFollowed
+        ? undefined // the followed view's legend controls these categories
         : colouring.legend;
   return {
     layers,
@@ -331,9 +359,15 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
     error: error
       ? String((error as Error).message)
       : unset
-        ? missingGene
-          ? 'A chosen gene is not in this dataset.'
-          : 'Choose two features in the settings (columns or genes).'
+        ? own.follows && !followed
+          ? 'The view this plot belongs to was closed.'
+          : missingGene
+            ? 'A chosen gene is not in this dataset.'
+            : own.follows && !p.x
+              ? 'Colour the view by a column or a gene: that is the first feature of this plot.'
+              : own.follows
+                ? 'Choose the second feature in the view’s settings (Plot against).'
+                : 'Choose two features in the settings (columns or genes).'
         : undefined,
     tooltip,
     caption:
@@ -348,7 +382,7 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
 
 // ---------------------------------------------------------------- settings
 
-function FeatureField({ spec, which }: { spec: ViewSpec<PlotParams>; which: 'x' | 'y' }) {
+function FeatureField({ spec, which, title }: { spec: ViewSpec<PlotParams>; which: 'x' | 'y'; title?: string }) {
   const meta = useMeta(spec.datasetId, spec.table);
   const update = useWorkspace((s) => s.updateParams);
   const m = meta.data;
@@ -358,7 +392,7 @@ function FeatureField({ spec, which }: { spec: ViewSpec<PlotParams>; which: 'x' 
   const f = spec.params[which];
   const value = f?.kind === 'obs' ? `obs:${f.name}` : null;
   const set = (next: Feature | null) => update(spec.id, { [which]: next });
-  const label = which === 'x' ? 'Horizontal (x)' : 'Vertical (y)';
+  const label = title ?? (which === 'x' ? 'Horizontal (x)' : 'Vertical (y)');
   return (
     <Field
       label={label}
@@ -403,7 +437,9 @@ function FeatureField({ spec, which }: { spec: ViewSpec<PlotParams>; which: 'x' 
 function PlotPanel({ spec }: { spec: ViewSpec<PlotParams> }) {
   const meta = useMeta(spec.datasetId, spec.table);
   const update = useWorkspace((s) => s.updateParams);
-  const p = spec.params;
+  const followed = useFollowed(spec.params.follows);
+  const fx = (followed?.params as ColourParams | undefined)?.colorBy as Feature | null | undefined;
+  const p = spec.params.follows ? { ...spec.params, x: fx ?? null } : spec.params;
   if (!meta.data) return <p className="muted">{meta.error ? String((meta.error as Error).message) : 'Loading…'}</p>;
   const plot = plotKind(featureKind(p.x, meta.data), featureKind(p.y, meta.data), meta.data.n_obs, p.numbersAs);
   const check = (key: keyof PlotParams, text: string, testId: string) => (
@@ -416,15 +452,27 @@ function PlotPanel({ spec }: { spec: ViewSpec<PlotParams> }) {
   const numbersY = featureKind(p.y, meta.data) === 'number';
   return (
     <div className="panel-fields">
-      <FeatureField spec={spec} which="x" />
-      <FeatureField spec={spec} which="y" />
-      <button
-        className="link small"
-        onClick={() => update(spec.id, { x: p.y, y: p.x, log1pX: p.log1pY, log1pY: p.log1pX })}
-        data-testid="plot-swap"
-      >
-        swap x and y
-      </button>
+      {spec.params.follows ? (
+        <>
+          <p className="small" data-testid="plot-first">
+            Horizontal (x): {p.x ? featureName(p.x, undefined) : 'no colour'}{' '}
+            <span className="muted">(the colour of {followed ? `“${followed.title}”` : 'a closed view'})</span>
+          </p>
+          <FeatureField spec={spec} which="y" />
+        </>
+      ) : (
+        <>
+          <FeatureField spec={spec} which="x" />
+          <FeatureField spec={spec} which="y" />
+          <button
+            className="link small"
+            onClick={() => update(spec.id, { x: p.y, y: p.x, log1pX: p.log1pY, log1pY: p.log1pX })}
+            data-testid="plot-swap"
+          >
+            swap x and y
+          </button>
+        </>
+      )}
       {numbersX && check('log1pX', 'Log scale for x (log1p)', 'plot-log-x')}
       {numbersY && check('log1pY', 'Log scale for y (log1p)', 'plot-log-y')}
       {plot?.kind === 'violin' && check('aboveZero', 'Show the share of cells above 0 (genes)', 'plot-above-zero')}
@@ -463,25 +511,75 @@ function PlotPanel({ spec }: { spec: ViewSpec<PlotParams> }) {
   );
 }
 
+/** "Plot against a second feature" in an embedding or spatial view's settings: ticked, a plot
+ * view opens beside it whose first feature is the view's colour and whose second is chosen
+ * here; unticked (or the view closed), the plot closes. */
+export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
+  const meta = useMeta(spec.datasetId, spec.table);
+  const companion = useWorkspace((s) => s.views.find((v) => v.type === 'plot' && v.params.follows === spec.id)) as
+    | ViewSpec<PlotParams>
+    | undefined;
+  const addView = useWorkspace((s) => s.addView);
+  const removeView = useWorkspace((s) => s.removeView);
+  const select = useWorkspace((s) => s.select);
+  if (!meta.data) return null;
+  const toggle = (on: boolean) => {
+    if (!on) {
+      if (companion) removeView(companion.id);
+      return;
+    }
+    const id = addView({
+      type: 'plot',
+      datasetId: spec.datasetId,
+      table: spec.table,
+      title: `${spec.title} · plot`,
+      params: companionParams(meta.data!, spec.id, spec.params as unknown as ColourParams) as never,
+    });
+    // the settings stay on this view, where the second feature is chosen
+    if (id) select(spec.id);
+  };
+  return (
+    <>
+      <label className="check" data-testid="plot-companion">
+        <input type="checkbox" checked={!!companion} onChange={(e) => toggle(e.target.checked)} />
+        Plot against a second feature
+        <Help label="About plotting two features">
+          <p>
+            Opens a plot beside this view: the colour feature above against a second one chosen here. Categories against
+            numbers give violins, two category columns the composition (stacked bars), two numbers a scatter or a density
+            map. Category colours and hidden categories are this view's.
+          </p>
+        </Help>
+      </label>
+      {companion && <FeatureField spec={companion} which="y" title="Plot against" />}
+    </>
+  );
+}
+
+/** A plot belonging to a view (its first feature is that view's colour). */
+export function companionParams(meta: DatasetMeta, follows: string, colour: ColourParams): PlotParams {
+  return {
+    ...defaultColourParams(meta),
+    palette: colour.palette,
+    customColours: colour.customColours,
+    follows,
+    x: null,
+    y: null,
+    log1pX: false,
+    log1pY: false,
+    numbersAs: 'auto',
+    proportions: true,
+    aboveZero: true,
+    pointSize: 2,
+  };
+}
+
 registerView<PlotParams>({
   type: 'plot',
   label: 'Plot',
   rank: 20,
-  openLabel: 'Plot',
-  create: (meta: DatasetMeta) => {
-    const { x, y } = defaultFeatures(meta);
-    return {
-      ...defaultColourParams(meta),
-      x,
-      y,
-      log1pX: false,
-      log1pY: false,
-      numbersAs: 'auto',
-      proportions: true,
-      aboveZero: true,
-      pointSize: 2,
-    };
-  },
+  // not opened on its own: a plot belongs to an embedding or spatial view ("Plot against")
+  create: () => null,
   normalise: normaliseParams,
   useView: usePlotView,
   Panel: PlotPanel,

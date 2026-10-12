@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DatasetMeta } from '../../api/types';
-import { defaultFeatures, featureKind, plotKind, SCATTER_MAX, scatterPositions } from '.';
+import { viewType } from '../registry';
+import { companionParams, defaultFeatures, featureKind, plotKind, SCATTER_MAX, scatterPositions } from '.';
 
 const meta = {
   n_obs: 100,
@@ -44,5 +45,16 @@ describe('plot view', () => {
     expect(p.xr).toEqual([0, 10]);
     const l = scatterPositions(Float32Array.from([0, Math.E - 1]), Float32Array.from([0, 1]), true, false);
     expect(l.xr[1]).toBeCloseTo(1);
+  });
+});
+
+describe('companion plots', () => {
+  it('are not opened on their own and keep the view they follow', () => {
+    const t = viewType('plot')!;
+    expect(t.create(meta)).toBeNull();
+    const p = companionParams(meta, 'v1', { ...t.normalise({})!, palette: 'okabe-ito' } as never);
+    expect(p).toMatchObject({ follows: 'v1', x: null, y: null, palette: 'okabe-ito' });
+    expect(t.normalise(p)).toMatchObject({ follows: 'v1' });
+    expect(t.normalise({ follows: 3 })).toMatchObject({ follows: null });
   });
 });

@@ -60,6 +60,22 @@ describe('view registry', () => {
   });
 });
 
+describe('companion plots', () => {
+  it('close with the view they follow, the selection moving to a view still open', () => {
+    const ws = useWorkspace.getState();
+    ws.reset();
+    const base = { type: 'embedding', datasetId: 'd1', table: null, title: 'd1' };
+    const a = ws.addView({ ...base, params: normaliseParams({ embedding: 'X_umap' })! })!;
+    const b = ws.addView({ ...base, params: normaliseParams({ embedding: 'X_umap' })! })!;
+    const plot = useWorkspace.getState().addView({ type: 'plot', datasetId: 'd1', table: null, title: 'p', params: { follows: a } })!;
+    useWorkspace.getState().select(plot);
+    useWorkspace.getState().removeView(a);
+    const s = useWorkspace.getState();
+    expect(s.views.map((v) => v.id)).toEqual([b]);
+    expect(s.selected).toBe(b);
+  });
+});
+
 describe('remembered settings', () => {
   const base = { type: 'embedding', datasetId: 'd1', table: null, title: 'd1' };
 

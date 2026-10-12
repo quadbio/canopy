@@ -27,6 +27,7 @@ import {
   useColouring,
 } from '../colouring';
 import { CANVAS_BUDGET, drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
+import { PlotCompanionField } from '../plot';
 import { type Bounds, MAIN_PANEL, type PanelOutput, panelLayerId, registerView, type ViewOutput } from '../registry';
 
 // Kept here for existing imports (tests, other modules).
@@ -509,6 +510,7 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
         </div>
       )}
       <ColourFields spec={spec} />
+      <PlotCompanionField spec={spec} />
       {m.obs.some(splittable) && (
         <Field
           label="Split by"

@@ -1,18 +1,23 @@
-# S7a demo: the Plot view (about 10 minutes)
+# S7a demo: plotting two features (about 10 minutes)
 
 Restart the demo (Ctrl+C, then `pixi run -e dev demo`) and open the link it prints. Report in
 `feedback-S7a.md` (same form as before: step, ✓/✗, note).
 
+The plot belongs to the view you open: its first feature is always the view's **Colour by**
+(a column or a gene); the second is chosen under **Plot against a second feature**.
+
 | # | Do this | You should see |
 |---|---|---|
-| 1 | Click **example_with_layers.h5ad**, then **Plot** in its details | Violins of `total_counts` per `cell_type`, in the same colours as the embedding's legend. Hover a violin: cells, median, quartiles. |
-| 2 | **Vertical (y)**: type `Monocyte_m1` in the gene search under it | Violins of the gene; above each, the share of cells above 0 (100 % for monocytes, a few % elsewhere). Tick **Log scale for y**. |
-| 3 | In the legend, click a cell type | Its violin disappears (as in the embedding); click again to bring it back. Pick a colour for it in the legend: the violin follows. |
-| 4 | **Vertical (y)** → `sample` | Composition: one bar per cell type, stacked by sample (80 samples); hover a piece. Untick **Shares of each bar** for cell counts. |
-| 5 | **Horizontal (x)** → `total_counts`, y gene `Monocyte_m1` | A scatter with axes, coloured by cell type; zoom and pan move the axes; hover a point. |
-| 6 | **Draw** → *Density map* | The same as a map of how many cells fall in each square (computed on the server; used automatically above 1 M cells). |
-| 7 | **swap x and y**; open **spatial.h5ad** → **Plot** | Axes exchange. Another dataset's default plot. |
+| 1 | Click **example_with_layers.h5ad** → **Open**. In the view's settings, under Colour by, tick **Plot against a second feature** | Unticked before. A plot view opens beside the embedding; a **Plot against** field appears in the embedding's settings (the settings stay on the embedding). |
+| 2 | **Plot against** → `total_counts` | Violins of `total_counts` per `cell_type` (the embedding's colour), in the embedding's legend colours. The plot has no legend of its own. Hover a violin: cells, median, quartiles. |
+| 3 | **Plot against**: type `Monocyte_m1` in the gene search under it | Violins of the gene; above each, the share of cells above 0 (100 % for monocytes, a few % elsewhere). |
+| 4 | In the embedding's legend, click a cell type; then pick a colour for one | Its violin disappears with its cells; click again to bring it back. The violin follows the picked colour. |
+| 5 | **Plot against** → `sample` | Composition: one bar per cell type, stacked by sample (80 samples); hover a piece. |
+| 6 | Embedding **Colour by** → `total_counts`; **Plot against**: gene `Monocyte_m1` | The plot's first feature follows: a scatter of total_counts × Monocyte_m1 with axes; zoom and pan move the axes; hover a point. |
+| 7 | Click the plot's title to see its own settings: **Draw** → *Density map*; tick a log scale | Its settings show the first feature (not choosable) and the plot's options. The same cells as a map of how many fall in each square (computed on the server; used automatically above 1 M cells). |
+| 8 | Back on the embedding, untick **Plot against…**; tick it again, then close the embedding (×) | Unticking closes the plot; closing the embedding closes its plot too. Also try it in a spatial view (**spatial.h5ad**). |
 
-What I would like your judgement on: are the plot choices what you expect for each pair of
-features? Are violins readable (widths, the share above 0)? Anything you plot often that is
-missing (e.g. dot plots of many genes, several datasets in one plot)?
+What I would like your judgement on: is a plot beside the view (rather than floating over it)
+right? Are the plot choices what you expect for each pair of features? Are violins readable
+(widths, the share above 0)? Anything you plot often that is missing (e.g. dot plots of many
+genes, several datasets in one plot)?

@@ -184,8 +184,10 @@ export const useWorkspace = create<Workspace>()(
       },
       removeView: (id) =>
         set((s) => {
-          const views = s.views.filter((v) => v.id !== id);
-          return { views, selected: s.selected === id ? (views.at(-1)?.id ?? null) : s.selected };
+          // a plot that follows this view (its companion) closes with it
+          const views = s.views.filter((v) => v.id !== id && v.params.follows !== id);
+          const kept = views.some((v) => v.id === s.selected);
+          return { views, selected: kept ? s.selected : (views.at(-1)?.id ?? null) };
         }),
       updateParams: (id, patch) => {
         const v = get().views.find((x) => x.id === id);

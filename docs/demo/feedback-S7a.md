@@ -1,4 +1,4 @@
-# S7a demo feedback (Plot view)
+# S7a demo feedback (plotting two features)
 
 Date:
 Browser (Chrome / Safari / Firefox + version):
@@ -10,13 +10,14 @@ Mark each step: ✓ worked as described · ✗ did not (add a finding below) · 
 
 | # | Step | ✓ / ✗ / – | Note |
 |---|---|---|---|
-| 1 | Violins of a column per cell type | | |
-| 2 | Violins of a gene; share above 0; log scale | | |
-| 3 | Hide a category; pick its colour | | |
-| 4 | Composition (stacked bars); counts | | |
-| 5 | Scatter of two numbers; zoom, hover | | |
-| 6 | Density map | | |
-| 7 | Swap; another dataset | | |
+| 1 | Tick "Plot against a second feature": a plot opens beside | | |
+| 2 | Violins of a column per cell type, embedding's colours | | |
+| 3 | Violins of a gene; share above 0 | | |
+| 4 | Hide a category; pick its colour (embedding legend) | | |
+| 5 | Composition (stacked bars) | | |
+| 6 | Changing Colour by changes the plot; scatter, zoom, hover | | |
+| 7 | Plot's own settings; density map; log scale | | |
+| 8 | Untick closes; closing the view closes the plot; spatial | | |
 
 ## Overall impression (a few sentences)
 

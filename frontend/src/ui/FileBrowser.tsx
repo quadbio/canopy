@@ -219,15 +219,6 @@ function Details({ id }: { id: string }) {
               {busy ? 'Opening…' : 'Open'}
             </button>
           )}
-          <button
-            className="ghost"
-            onClick={() => void open('plot')}
-            disabled={busy}
-            data-testid="open-plot"
-            title="Two features of the cells: violins, composition, scatter"
-          >
-            Plot
-          </button>
         </div>
       )}
       {d.state === 'inspected' && d.kind === 'spatialdata_zarr' && d.conversion && !d.conversion.converted && (

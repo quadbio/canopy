@@ -9,6 +9,17 @@ atlases (10⁷ cells) reached over an SSH tunnel, and look like the rest (same c
 The full review (B-M6) noted that the view contract knew only zoomable maps.
 
 ## Decisions
+- **A plot belongs to a view** (revised after the owner's first look, same day): not opened on
+  its own from the dataset list, but by ticking *Plot against a second feature* (unticked by
+  default) in an embedding's or spatial view's settings, under *Colour by*. A plot view opens
+  beside it (`params.follows` = that view's id); its first feature (x) is always that view's
+  colour (column or gene), its second is chosen in the same settings (*Plot against*). Unticking,
+  or closing the view, closes the plot (`removeView`). A view of its own rather than a window
+  floating over the map: it keeps the GPU scatter, the server summaries, its own pan and zoom
+  and the canvas layout, and the map stays unobstructed. When the plot's categories are the
+  view's colour column, that view's colour settings apply (palette, colours picked by hand,
+  hidden categories) and its legend controls them; the plot shows none. A free plot (`follows`
+  null) is still understood (restored workspaces), but no longer offered.
 - **View contract** (`views/registry.ts`):
   - `ViewOutput.content`: a chart drawn in the page (SVG) instead of map layers, shown in the
     view's cell below its title and left of an open legend; nothing pans or zooms.
@@ -30,8 +41,7 @@ The full review (B-M6) noted that the view contract knew only zoomable maps.
   sit in `[0, aspect] × [0, 1]` (aspect of the drawing area), so one zoom serves both axes; the
   axes overlay maps back to each feature's values (or log1p values).
 - **Colours**: violins and bars are coloured by their category column through the shared
-  colouring module, so palette, dataset colours, colours picked by hand and hidden categories
-  are those of the embedding.
+  colouring module; for the followed view's colour column with that view's own settings.
 - **Violin widths** are scaled to each category's busiest bin, leaving out a spike of zeros
   (most cells for a gene), which would flatten the rest; that spike is drawn full width and the
   share of cells above 0 is printed above each violin.
@@ -47,5 +57,9 @@ The full review (B-M6) noted that the view contract knew only zoomable maps.
   numpy calculations (zeros of genes included, missing values counted), ETag, wrong kinds.
 - `src/views/plot/plot.test.ts`, `axes.test.ts`: plot choice, feature kinds, defaults, scatter
   positions, ticks.
-- e2e `plot.spec.ts`: violins in the legend's colours, a hidden category leaves, a gene's
-  violins with shares above 0, composition, scatter with axes and hover, density.
+- e2e `plot.spec.ts`: unticked by default; ticked, a plot opens beside the embedding; violins in
+  the embedding legend's colours, a category hidden there leaves, a gene's violins with shares
+  above 0, composition, a change of Colour by changes the plot (scatter with axes and hover),
+  density, unticking and closing the view close the plot.
+- `state/workspace.test.ts`: a companion closes with its view, the selection moves to an open
+  view.

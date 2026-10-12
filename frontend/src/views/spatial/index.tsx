@@ -51,6 +51,7 @@ import {
   normaliseColourParams,
   useColouring,
 } from '../colouring';
+import { PlotCompanionField } from '../plot';
 import { useLod } from '../lod';
 import { type Bounds, MAIN_PANEL, panelKey, panelLayerId, registerView, type ViewOutput } from '../registry';
 
@@ -937,7 +938,10 @@ function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
             <Slider label="Cell opacity" value={p.cellOpacity} min={0} max={1} step={0.05} onChange={(v) => update(spec.id, { cellOpacity: v })} format={(v) => `${Math.round(v * 100)}%`} />
           </Field>
           {shapes.table === el.table ? (
+          <>
             <ColourFields spec={spec} />
+            <PlotCompanionField spec={spec} />
+          </>
           ) : (
             <p className="muted small">These cells are described by another table ({shapes.table ?? 'none'}): open that table to colour them.</p>
           )}
