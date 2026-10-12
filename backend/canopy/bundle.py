@@ -283,12 +283,82 @@ GENERIC = frozenset(
 )
 
 
+# Fields whose values are the program's own vocabulary (event and stage names, states, codes,
+# formats): a dataset column that happens to be called "stage" is not found in them.
+CODE_FIELDS = frozenset(
+    {
+        "event",
+        "logger",
+        "level",
+        "role",
+        "stage",
+        "kind",
+        "code",
+        "reason",
+        "state",
+        "error",
+        "mode",
+        "encoding",
+        "x_encoding",
+        "layout",
+        "dtype",
+        "status",
+        "route",
+        "method",
+        "trigger",
+        "type",
+        "client_event",
+        "c_type",
+        "c_mode",
+        "c_status",
+        "c_layer",
+        "c_where",
+        "category",
+        "location",
+        "exc_type",
+        "exc_frames",
+        "warnings",
+        "build",
+        "timestamp",
+    }
+)
+
+
+def _values(value: Any, out: list[str], key: str = "") -> None:
+    """String values of a JSON document outside the program's own vocabulary fields."""
+    if key in CODE_FIELDS:
+        return
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _values(v, out, str(k))
+    elif isinstance(value, list):
+        for v in value:
+            _values(v, out, key)
+
+
+def _searchable(fname: str, data: bytes) -> str:
+    text = data.decode(errors="replace")
+    if not (fname.endswith(".json") or fname.endswith(".jsonl")):
+        return text
+    vals: list[str] = []
+    docs = [text] if fname.endswith(".json") else text.splitlines()
+    for d in docs:
+        try:
+            _values(json.loads(d), vals)
+        except ValueError:
+            vals.append(d)
+    return "\n".join(vals)
+
+
 def self_check(files: dict[str, bytes], names: set[str]) -> list[tuple[str, str]]:
-    """(file in the bundle, kind of name) for every known name found in it."""
+    """(file in the bundle, name) for every known name found in it: in plain files anywhere, in
+    JSON only in values that are not the program's own vocabulary."""
     hits = []
     pats = [n for n in names if n.lower() not in GENERIC]
     for fname, data in files.items():
-        text = data.decode(errors="replace")
+        text = _searchable(fname, data)
         for n in pats:
             if re.search(rf"(?<![A-Za-z0-9]){re.escape(n)}(?![A-Za-z0-9])", text):
                 hits.append((fname, n))
