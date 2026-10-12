@@ -283,7 +283,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - 2026-10-12 S7 started with the plot view (owner's choice; ADR 0013): server summaries
   (/summary: violins, count tables, densities; 10 M cells 0.1-1.5 s), view contract for charts
   (content, overlays, margins, panel sizes), Plot view (violins, composition, scatter with axes,
-  density map; shared colours; log1p axes), "Plot" button in the details. 280 backend, 79 unit,
+  density map; shared colours; log1p axes), "Plot" button in the details. 275 backend, 79 unit,
   26 e2e.
   - Next: rest of S7 (multi-dataset workspace and shared colours, gene search, filters) after the
     owner tries the plot view.
