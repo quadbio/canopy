@@ -6,6 +6,22 @@ Browse the lab data share, open h5ad / AnnData-zarr / SpatialData datasets, and 
 gene expression and spatial images side by side. Status: **stage 1 (local prototype)**.
 Plan: `../reports/10_implementation_plan.md`. Progress: `PROGRESS.md`.
 
+## On a shared Linux host
+
+Follow **`docs/host/host-guide.md`**: a release archive (`pixi run -e dev release`, built web
+page included), `pixi install --locked`, `config.host.example.toml`, start and stop, the SSH
+tunnel, and `canopy bundle` for diagnostics. In short:
+
+- **Access.** By default (`server.auth = "token"`) the server prints an access link with a
+  per-installation token when it starts; `canopy link --config …` prints it again. Opening it
+  stores the token in a cookie; requests without it are refused. Whoever has the link sees every
+  dataset in the data roots, with the rights of the user running the server.
+- **Files.** Converted copies, index and logs are readable only by that user
+  (`server.file_access = "private"`; `"group"` adds the Unix group).
+- **State on a local disk.** `state_dir` holds the index and job databases, the server lock, the
+  privacy salt and the token (SQLite and file locks need a local disk); `cache_dir` the converted
+  copies (may be network storage).
+
 ## Quick start (development)
 
 ```bash
@@ -14,7 +30,7 @@ pixi run -e dev install-hooks          # pre-commit hook runs `check`
 pixi run -e dev fe-install             # frontend packages from pnpm-lock.yaml
 cp config.example.toml config.toml     # adjust data roots
 pixi run -e dev build-frontend         # static frontend served by the backend
-pixi run serve --config config.toml    # http://127.0.0.1:8765
+pixi run serve --config config.toml    # prints the access link (http://127.0.0.1:8765/?token=…)
 ```
 
 During frontend work, `pixi run -e dev fe-dev` starts Vite on :5173 with `/api` proxied to the backend.
@@ -41,7 +57,7 @@ During frontend work, `pixi run -e dev fe-dev` starts Vite on :5173 with `/api` 
     locations only.
   - `debug`: everything, including full tracebacks; for the developer's own machine only.
 - `canopy inspect PATH --level strict` replaces user-chosen names with tokens salted by a random
-  secret created once per installation (`<cache_dir>/.canopy_salt`, or `~/.cache/canopy/.canopy_salt`
+  secret created once per installation (`<state_dir>/.canopy_salt`, or `~/.cache/canopy/.canopy_salt`
   without a config). The salt stays on the host; never copy it off with diagnostic bundles.
 
 ## Catalog
@@ -85,14 +101,15 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   404 `unknown_gene` / `unknown_matrix`, 409 `needs_conversion:matrix_<layout>`, 503
   `memory_busy` (the copy would exceed `memory.budget_gb` or the host's free memory).
 - Every error reply is `{"detail": {"code", "message"}, "request_id"}`; the code is also logged.
-- The server answers only the host names in `server.allowed_hosts` (DNS-rebinding guard; add the
+- Every request needs the access token (`server.auth`, see "On a shared Linux host"), and the
+  server answers only the host names in `server.allowed_hosts` (DNS-rebinding guard; add the
   server's name and address when serving to other machines), and POST requests only as JSON.
 - Files are read element by element, never loaded whole; files in the anndata < 0.8 layout are
   loaded fully when their estimated memory size is below `memory.small_file_gb`, else 409
   `needs_conversion:legacy_layout`. Open files and arrays share an LRU within `memory.cache_gb`.
 - `GET /api/stores/<version>/c0/<key>`: converted stores for Viv/zarrita, with Range requests,
-  streamed in 1 MB blocks. Symlinks inside a store are followed (stage 1: roots are chosen by the
-  admin); the store folder itself must lie inside its data root.
+  streamed in 1 MB blocks. A key that resolves outside its store (via `..`, a hidden name or a
+  symlink) is refused. Range replies are not cached by the browser.
 - `POST /api/telemetry`: the browser's timing marks and GPU facts, logged as `client_event`.
 
 - `GET /api/datasets/{id}/subset?n=1000000`: sorted int32 indices of representative cells for
@@ -169,17 +186,20 @@ scripts/         git hooks and helpers
 ## Logs
 
 Structured JSON lines, one rotating file per process: `<logging.dir>/canopy-<role>-<pid>.jsonl`
-(`role` is `server`, `cli` or, later, `worker`). Every line carries `pid`, `role` and `build`
+(`role` is `server`, `cli` or `worker`). Every line carries `pid`, `role` and `build`
 (version + git commit, also shown by `canopy --version` and the `x-canopy-build` response header).
 Requests log their route template, status and duration and return `x-request-id`; failures
 return a 500 reply that carries the request id. `timed()` stages nest (`convert/x_csc/write`)
 and log duration, RSS at exit, change and peak. Python warnings are logged as `python_warning`.
-To collect logs from the host, copy the whole log folder.
+To collect logs from a host, run `canopy bundle --config … --since-days 2`: one archive at
+strict privacy (re-filtered whatever level the runs used), with crash locations, environment,
+jobs and index summaries, checked for names known on the host before it is written. `canopy token
+find <h_…> --config …` (on the host) names what a token stands for.
 
 **When the server seems stuck** (pages spin, nothing new in the log):
 - requests running longer than `server.slow_request_s` (20 s) are logged as `slow_request` every
   30 s while they run, with route and dataset id; scans log `scan_progress` every 30 s, naming the
   file being inspected for longest;
-- `kill -USR1 <pid>` (pid: in the log lines, or `pgrep -f "canopy serve"`) writes the stack of every
+- `kill -USR1 $(cat <state_dir>/server.lock)` (the server's pid is in its lock file) writes the stack of every
   thread to `stacks-<pid>.txt` in the log folder: code locations only, no data. A hard crash
   writes its stack there too. Copy that file with the logs.

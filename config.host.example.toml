@@ -1,0 +1,47 @@
+# Canopy on a shared host: copy to config.toml next to the release and edit the marked lines.
+# Relative paths are resolved against this file's folder. See docs/host/host-guide.md.
+
+# Converted copies: large (about the size of the source matrices, plus images). A local disk is
+# best; network storage works. Never inside a data root.
+cache_dir = "/scratch/YOUR_USER/canopy/cache"            # EDIT
+# Index and job databases, lock, privacy salt, access token: small, and SQLite and file locks
+# need a LOCAL disk (not NFS/GPFS/Lustre).
+state_dir = "/scratch/YOUR_USER/canopy/state"            # EDIT (local disk)
+
+[[data_roots]]
+name = "lab"                                            # EDIT: a short name shown in the browser
+path = "/path/to/the/lab/share/projects"                # EDIT: keep roots narrow (each is listed)
+
+[server]
+host = "127.0.0.1"           # reach it through an SSH tunnel (ssh -L), never on an open port
+port = 8765                  # EDIT if taken
+auth = "token"               # the access link (canopy link) is needed; keep it private
+file_access = "private"      # "group" lets your Unix group read the cache and logs
+
+[logging]
+dir = "/scratch/YOUR_USER/canopy/logs"                   # EDIT
+level = "info"
+privacy = "strict"           # names become tokens until the data policy allows "standard"
+memory_sample_interval = 30
+retention_days = 14
+
+[catalog]
+ignore = ["*raw*", "*fastq*", "*.tmp"]                  # EDIT: folders not to list
+rescan_minutes = 60          # each rescan lists every folder of the roots
+inspect_workers = 4
+measure_store_size = false   # slow on network storage
+
+[memory]
+budget_gb = 64               # EDIT: everything the server holds (cache + conversions); keep it
+                             #       below the memory limit of your account (see the guide)
+cache_gb = 32                # data kept loaded for fast browsing
+small_file_gb = 2
+idle_minutes = 30
+
+[jobs]
+max_running = 1              # conversions at a time
+max_queued = 10
+memory_gb = 8                # working memory of one conversion (needs 1.5 x this free)
+threads = 8                  # CPU threads of one conversion (also numeric libraries)
+# tmp_dir = "/scratch/YOUR_USER/canopy/tmp"             # spill files (default: cache_dir/tmp)
+# stores_max_gb = 2000                                  # cap on all converted copies

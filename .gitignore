@@ -13,3 +13,5 @@ frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
 .cache/
+dist-release/
+backend/canopy/_build.json

@@ -186,3 +186,15 @@ def test_telemetry_drops_free_text_and_limits_rate(cfg: Config) -> None:
     assert sum(e.get("client_event") == "y" for e in events) == 3
     dropped = [e for e in events if e["event"] == "client_events_dropped"]
     assert {d["client_session"] for d in dropped} == {"s-2", "s-3"}
+
+
+def test_the_host_config_template_is_a_valid_config() -> None:
+    import tomllib
+    from pathlib import Path
+
+    from canopy.config import Config
+
+    raw = tomllib.loads((Path(__file__).parents[2] / "config.host.example.toml").read_text())
+    cfg = Config.model_validate(raw)
+    assert cfg.logging.privacy == "strict" and cfg.server.auth == "token"
+    assert cfg.state_dir is not None and cfg.catalog.rescan_minutes == 60

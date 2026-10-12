@@ -87,6 +87,10 @@ cwd = "frontend"
 [feature.dev.tasks.demo]
 cmd = "bash scripts/demo.sh"
 
+# A release archive for a host (built frontend included): dist-release/canopy-<v>-<commit>.tar.gz
+[feature.dev.tasks.release]
+cmd = "bash scripts/release.sh"
+
 # Everything, with the example datasets required: what to run before a demo or release.
 [feature.dev.tasks.check-all]
 depends-on = ["check", "test-examples", "e2e"]
