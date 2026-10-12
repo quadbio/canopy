@@ -258,3 +258,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   the owner's decision; B-m2 (picked colours shared across views) to S7. 247 backend, 69 unit,
   21 e2e.
   - Next: user demo S6 (guide updated: steps 5, 8, 9); then S7 starting with the plot view.
+- 2026-10-12 S6 demo feedback (docs/demo/feedback-S6.md; triage docs/demo/S6-feedback-triage.md):
+  fixed blank view after Split by -> None (re-drawn released layer objects; canvas now copies a
+  returning layer); hover: not reproduced (GPU + Retina probes fine), picking radius 3 px, telemetry
+  `hover`, "Show values on hover" toggle for every view (user's wish); note that SpatialData needs
+  converting before the spatial view; memory estimate recalibrated (MERSCOPE 1.62 vs 1.36 GB
+  measured, was 3.0). 247 backend, 69 unit, 22 e2e.
+  - Next: NOT S7 yet. The user may propose a cold review of everything built so far.

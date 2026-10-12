@@ -17,25 +17,27 @@ with file size, and 5 GB fixtures take proportionally longer (~5 min).
 
 ## Results
 
-### 2026-10-12 · SpatialData conversion memory (`bench/spatial_memory.py`) · MacBook Pro M2, 16 GB, local SSD · R6
+### 2026-10-12 · SpatialData conversion memory (`bench/spatial_memory.py`) · MacBook Pro M2, 16 GB, local SSD · R6 + S6 feedback
 
 One synthetic store per element kind (`--scale 1`, `--threads 4`), each converted in a fresh
-process. Peak = resident memory above the interpreter baseline. The estimate must stay at or above
-the peak for what is read whole; a table's matrix is covered by the matrix budget instead
-(`jobs.memory_gb`, 2 GB here). Limit = the job watchdog's limit.
+process, plus the two MERSCOPE examples. Peak = resident memory above the interpreter baseline.
+The estimate must stay at or above the peak for what is read whole; a table's matrix is covered
+by the matrix budget instead (`jobs.memory_gb`, 2 GB here). Limit = the job watchdog's limit.
+Estimate constants after the S6 feedback (the first calibration was 2.3× too high for the
+MERSCOPE region, so its conversion could wait for memory on a laptop): 100 B per transcript, one
+partition read at 5× its column bytes (strings 16 B), the cell column the converter links.
 
 | case | seconds | peak GB | estimate GB | estimate / peak | limit GB |
 |---|---|---|---|---|---|
-| 10 M transcripts, x, y, z, gene, int cell id, qv, fov | 6.8 | 1.15 | 1.83 | 1.59 | 7.7 |
-| 10 M transcripts, string cell and transcript ids | 6.5 | 1.18 | 1.83 | 1.55 | 7.7 |
-| 12 k × 12 k int64 mask, 250 k sparse IDs (relabelled) | 3.6 | 2.27 | 2.75 | 1.21 | 9.1 |
-| 2 × 12 k × 12 k uint16 image, 4 k chunks | 2.9 | 0.70 | 0.88 | 1.26 | 6.3 |
-| the same image as one chunk | 3.4 | 1.59 | 2.93 | 1.84 | 9.4 |
-| 300 k square polygons | 1.4 | 0.69 | 0.98 | 1.42 | 6.5 |
+| 10 M transcripts, x, y, z, gene, int cell id, qv, fov | 5.4 | 0.73 | 1.31 | 1.79 | 7.0 |
+| 10 M transcripts, string cell and transcript ids | 5.3 | 0.73 | 1.31 | 1.79 | 7.0 |
+| 12 k × 12 k int64 mask, 250 k sparse IDs (relabelled) | 4.4 | 2.00 | 2.75 | 1.38 | 9.1 |
+| 2 × 12 k × 12 k uint16 image, 4 k chunks | 3.6 | 0.66 | 0.88 | 1.33 | 6.3 |
+| the same image as one chunk | 4.4 | 1.10 | 2.93 | 2.66 | 9.4 |
+| 300 k square polygons | 1.6 | 0.70 | 0.98 | 1.40 | 6.5 |
 | table 400 k × 3 000, 60 M values (CSR) | 8.7 | 1.96 | 0.28 (+ 2 GB budget) | – | 5.4 |
-
-Times were measured before the transcript sort became unstable (same order of keys; 10 M
-transcripts now take 4.7 s instead of 6.6 s).
+| MERSCOPE region_1 (5.6 M transcripts, 3 images, 2 masks, 88 k outlines) | 8.4 | 1.36 | 1.62 | 1.19 | 7.4 |
+| MERSCOPE region_3 | 8.0 | 1.39 | 1.68 | 1.21 | 7.5 |
 
 Before R6 (review S6, reviewer A): the table's matrix was also loaded whole by the reader
 (2.25 GB against a 0.04 GB estimate), transcripts took 90–250 B each against 48 estimated, masks

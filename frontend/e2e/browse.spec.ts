@@ -545,10 +545,23 @@ test('split by a column: one panel per category, linked zoom, one legend', async
   const states = await panelStates(page);
   for (const st of states) expect(st).toEqual(states[0]);
 
-  // back to one panel
+  // back to one panel: the whole view is drawn again (S6 feedback: it stayed blank)
   await page.getByTestId('split-select').click();
   await page.getByRole('option', { name: /^None/ }).click();
   await expect(cell.getByTestId('panel')).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.05);
+  // split by the same column again, and back once more: panels and the view draw each time
+  await page.getByTestId('split-select').click();
+  await page.getByRole('option', { name: /^embryo/, disabled: false }).click();
+  await expect(cell.getByTestId('panel')).toHaveCount(3);
+  await page.waitForTimeout(500);
+  for (const k of [0, 1, 2]) expect(await drawnFraction(page, cell.getByTestId('panel').nth(k))).toBeGreaterThan(0.01);
+  await page.getByTestId('split-select').click();
+  await page.getByRole('option', { name: /^None/ }).click();
+  await expect(cell.getByTestId('panel')).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.05);
   expect(errors).toEqual([]);
 });
 
@@ -566,16 +579,25 @@ test('spatial view: convert a SpatialData store, see image, coloured cells and t
   // a hover on a cell names its category
   const box = (await cell.boundingBox())!;
   let tip: string | null = null;
+  const hit = { x: 0, y: 0 };
   for (let gx = 0.2; gx < 0.6 && !tip; gx += 0.03) {
     for (let gy = 0.3; gy < 0.8 && !tip; gy += 0.03) {
       await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
       if (await page.locator('.deck-tooltip').isVisible({ timeout: 100 }).catch(() => false)) {
         tip = await page.locator('.deck-tooltip').textContent();
+        Object.assign(hit, { x: gx, y: gy });
       }
     }
   }
   expect(tip).toMatch(/^[\w.]+: .+/);
   await page.screenshot({ path: 'test-results/screens/spatial-cells.png' });
+  // values on hover can be switched off
+  await page.getByTestId('hover-info').locator('input').uncheck();
+  await page.mouse.move(box.x + 5, box.y + 5);
+  await page.mouse.move(box.x + hit.x * box.width, box.y + hit.y * box.height);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.deck-tooltip')).toBeHidden();
+  await page.getByTestId('hover-info').locator('input').check();
 
   // without cells, the image remains (not black)
   await page.getByTestId('cells-select').click();
@@ -622,6 +644,13 @@ test('spatial view: switching filled and outlined cells, and settings that keep 
   await page.waitForTimeout(400);
   expect((await uploaded()) - before).toBeLessThan(20_000);
   expect(errors).toEqual([]);
+});
+
+test('a SpatialData store that is not converted says the spatial view needs converting', async ({ page }) => {
+  await freshPage(page);
+  await page.getByTestId('dataset-row').filter({ hasText: 'region_3' }).click();
+  await expect(page.getByTestId('spatial-needs-conversion')).toContainText('Convert for full speed');
+  await expect(page.getByTestId('open-spatial')).toHaveCount(0);
 });
 
 /** Converts region_1 if needed (once per test server) and opens its spatial view. */

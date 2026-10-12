@@ -44,6 +44,14 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
   bounds, same key) refits only a view the user has not moved. Without a key, every new
   `bounds` counts as new data (the embedding).
 - **Ids:** view ids never contain `/` or `:`, panel ids never `:` (`panelKey` refuses them).
+- **Layers coming back** (S6 feedback): deck.gl releases a layer's GPU buffers when the layer
+  leaves the canvas. A view may hand back the same layer object later (its one-panel layer when
+  "Split by" returns to None; a panel's layer when splitting by the same column again). The
+  canvas replaces such a returning object with a fresh copy, so it is drawn with new buffers
+  (it had stayed blank).
+- **Hover:** values on hover follow each view's "Show values on hover" (on by default); deck.gl
+  picks within 3 px, so small cells are easier to hit. Telemetry `hover` (per 10 s: pointer
+  moves, cells hit, values shown) tells from the logs whether hovering finds cells.
 - **Split by** (embedding):
   - Any categorical column with 2–64 categories (or a boolean) splits the view into one panel per
     category, in natural order; missing values form an "NA" panel.

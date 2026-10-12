@@ -24,7 +24,7 @@ Updated after the cold review (batch R6, 2026-10-12): steps 5, 8 and 9 changed s
 | 4 | Open **spatial.h5ad**; **Embedding** → `spatial`; **Split by** → `embryo` | Three panels, one per embryo, with one legend, at one scale (**Panels**: *Same scale*). The tissue is the right way up (y downwards, as in scanpy). Zoom or pan one panel: all follow. |
 | 5 | **Panels** → *Fill each panel*; then **Split by** → `pos`; then **Embedding** → `X_umap` with **Split by** `embryo` | Each embryo fills its panel. Then 51 small panels, still smooth. For the UMAP the panels show the same area (*Same area*), so where a population sits compares between embryos. |
 | 6 | Click **202302171205_region_1…**, then **Convert for full speed** in the details | "Step n of 6" with the spatial steps (images, outlines, transcripts), then "✓ Converted" (about 15 s). |
-| 7 | **Open spatial view** | The DAPI image with the cells filled in their `leiden_1.0` colours (the dataset's own); hover a cell: its cluster. |
+| 7 | **Open spatial view** | The DAPI image with the cells filled in their `leiden_1.0` colours (the dataset's own); hover a cell: its cluster (cells are small at first; zoom in a little). |
 | 8 | In **Image**, switch channels on and off, change a colour, drag the contrast (**auto** goes back) | The image changes at once; zooming in loads sharper tiles. |
 | 9 | **Draw** → *Outlines*, then back to *Filled*; **Colour by** a gene (e.g. `SLC1A3`) | Cells stay coloured at every switch; outlines coloured by expression; the colour bar in the legend. |
 | 10 | **Transcripts**: add two or three genes (e.g. `SLC1A3`, `GAD1`) | Each gene's molecules in its own colour; set **Cells** to *None* to see them alone. |

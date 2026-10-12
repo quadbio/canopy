@@ -80,9 +80,11 @@ Example data: two MERSCOPE regions, each with:
   counts, column dtypes, linked fractions), element counts in `job_done`; a failed validation
   logs `problems` as element (tokenised at strict) plus message with names replaced (A-m2).
 - **Memory estimate** (`spatial_memory_estimate`), calibrated by `bench/spatial_memory.py`
-  (bench/README.md): tables' obs/var, shapes (2.6 KB each), the largest of: points (150 B each
-  plus one partition read), image and mask blocks in flight (5 × block × threads, or the whole
-  single-chunk source); plus 256 MB. Measured peaks stay below it (ratio 1.2–1.8). A job needing
+  (bench/README.md): tables' obs/var, shapes (2.6 KB each), the largest of: points (100 B each
+  plus one partition read at 5× the bytes of the columns read, with the cell column the
+  converter links), image and mask blocks in flight (5 × block × threads, or the whole
+  single-chunk source); plus 256 MB. Measured peaks stay below it (ratio 1.2–2.7; the MERSCOPE
+  regions 1.2, needing about 3.1 GB free in the demo configuration). A job needing
   more than the host's total memory fails (`not_enough_memory`) instead of waiting forever, and
   a job waiting for memory no longer holds back smaller ones (A-m7, B-m14).
 - **Measured** (M2):
@@ -148,8 +150,8 @@ Example data: two MERSCOPE regions, each with:
 
 ## Known limits
 - **Read whole, and estimated by the memory guard:** shapes (geopandas, about 2.6 KB per cell:
-  Visium HD 2 µm bins, 11 M squares, need about 28 GB) and transcripts (150 B each: 10⁹ need
-  about 150 GB). Streaming both is the next step for such data (partition by gene, sort each);
+  Visium HD 2 µm bins, 11 M squares, need about 28 GB) and transcripts (100 B each: 10⁹ need
+  about 100 GB). Streaming both is the next step for such data (partition by gene, sort each);
   the guard refuses what the host cannot hold rather than letting it run out of memory.
 - An image or mask stored as one chunk is read whole.
 - **Not yet:**

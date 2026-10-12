@@ -37,7 +37,7 @@ import { assignSlots } from '../colour/slots';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
-import { ColourInput, Field, type OptionGroup, Select } from '../ui/controls';
+import { ColourInput, Field, Help, type OptionGroup, Select } from '../ui/controls';
 import { GeneSearch } from '../ui/GeneSearch';
 import type { ViewOutput } from './registry';
 
@@ -57,6 +57,7 @@ export interface ColourParams {
   customColours: Record<string, Record<string, string>>;
   colormap: ColormapName; // numbers
   sortByValue: boolean; // numbers: draw higher values on top
+  hover: boolean; // show the value of the cell under the pointer
   legendCollapsed?: boolean;
   [key: string]: unknown;
 }
@@ -64,7 +65,7 @@ export interface ColourParams {
 /** The colouring parameters alone (without the index signature of view parameters). */
 export type ColourSettings = Pick<
   ColourParams,
-  'colorBy' | 'hidden' | 'palette' | 'customColours' | 'colormap' | 'sortByValue'
+  'colorBy' | 'hidden' | 'palette' | 'customColours' | 'colormap' | 'sortByValue' | 'hover'
 >;
 
 export const BASE_RGB: RGB = [80, 110, 160];
@@ -142,6 +143,7 @@ export function normaliseColourParams(r: Record<string, unknown>): ColourSetting
     customColours: normaliseCustom(r.customColours),
     sortByValue: typeof r.sortByValue === 'boolean' ? r.sortByValue : true,
     colormap: COLORMAPS.includes(r.colormap as ColormapName) ? (r.colormap as ColormapName) : 'viridis',
+    hover: typeof r.hover === 'boolean' ? r.hover : true,
   };
 }
 
@@ -154,6 +156,7 @@ export function defaultColourParams(meta: DatasetMeta): ColourSettings {
     customColours: {},
     colormap: 'viridis',
     sortByValue: true,
+    hover: true,
   };
 }
 
@@ -549,6 +552,16 @@ export function ColourFields({ spec }: { spec: ViewSpec<ColourParams> }) {
           />
         </Field>
       )}
+      <label className="check" data-testid="hover-info">
+        <input type="checkbox" checked={p.hover !== false} onChange={(e) => update(spec.id, { hover: e.target.checked })} />
+        Show values on hover
+        <Help label="About “Show values on hover”">
+          <p>
+            Pointing at a cell shows its value of what colours the view (its category, or the gene’s expression). Small
+            cells are easier to hit when zoomed in.
+          </p>
+        </Help>
+      </label>
     </>
   );
 }

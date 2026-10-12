@@ -112,8 +112,8 @@ WINDOW_SIDE = 2048  # channel windows from the first level at most this wide
 
 # Memory of what is read whole or per block (for the job's memory guard), calibrated on measured
 # peaks (bench/spatial_memory.py; bench/README.md, ADR 0011).
-POINT_BYTES = 150  # compact columns, sort key and order, sorted copies, allocator slack
-PARTITION_FACTOR = 4  # one partition read: arrow buffers and the data frame (≥ 200 B a row)
+POINT_BYTES = 100  # compact columns, sort key and order, sorted copies, allocator slack
+PARTITION_FACTOR = 5  # one partition read: arrow buffers and the data frame, per byte read
 SHAPE_BYTES = 2600  # a geometry in geopandas, its parts and rings, the flat layout
 BLOCK_FACTOR = 5  # a source block in flight: itself, rechunked parts, uint64 ids, uint32
 ELEMENT_BASE = 256 * 2**20  # per element: dask scheduler, zarr and codec buffers
@@ -121,7 +121,7 @@ _ARROW_BYTES = {
     "double": 8, "float": 4, "float64": 8, "float32": 4, "int64": 8, "int32": 4, "uint64": 8,
     "uint32": 4, "int16": 2, "uint16": 2, "int8": 1, "uint8": 1, "bool": 1,
 }  # fmt: skip
-STRING_BYTES = 64  # a Python string per value
+STRING_BYTES = 16  # a string value as read (arrow): measured close to an integer's cost
 
 
 def safe_name(name: str) -> str:
@@ -152,13 +152,14 @@ def _column_bytes(arrow: str) -> int:
     return _ARROW_BYTES.get(t, STRING_BYTES)
 
 
-def _points_read_bytes(cols: dict[str, str], keys: set[str]) -> int:
-    """Bytes per point of the columns the converter reads (x, y, z, the gene, the cell link)."""
+def _points_read_bytes(cols: dict[str, str], keys: list[str]) -> int:
+    """Bytes per point of the columns the converter reads (x, y, z, the gene, the cell link:
+    the first table instance key the points carry, as the converter links)."""
     per = sum(_column_bytes(cols[c]) for c in ("x", "y", "z") if c in cols)
     feats = [t for c, t in cols.items() if c not in keys and t.lower().startswith("dictionary")]
     per += 4 if feats else STRING_BYTES
-    per += max((_column_bytes(cols[k]) for k in keys if k in cols), default=0)
-    return per
+    link = next((k for k in keys if k in cols), None)
+    return per + (_column_bytes(cols[link]) if link else 0)
 
 
 def _block_bytes(info: Any, threads: int) -> int:
@@ -182,12 +183,12 @@ def spatial_memory_estimate(fp: Fingerprint, threads: int = 4) -> int:
         return 0
     total = sum(table_memory_estimate(t) for t in sd.tables.values())
     total += sum(s.n_rows * SHAPE_BYTES for s in sd.shapes.values())
-    keys = {r.instance_key for r in sd.table_refs.values() if r.instance_key}
+    keys = [r.instance_key for r in sd.table_refs.values() if r.instance_key]
     # elements are converted one after the other: the largest of them counts
     per_element = [0]
     for pt in sd.points.values():
         part_rows = pt.n_rows / max(pt.n_files, 1)
-        part = part_rows * max(200, PARTITION_FACTOR * _points_read_bytes(pt.columns, keys))
+        part = part_rows * PARTITION_FACTOR * _points_read_bytes(pt.columns, keys)
         per_element.append(int(pt.n_rows * POINT_BYTES + part))
     for img in sd.images.values():
         per_element.append(_block_bytes(img, threads))

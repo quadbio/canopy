@@ -221,6 +221,12 @@ function Details({ id }: { id: string }) {
           )}
         </div>
       )}
+      {d.state === 'inspected' && d.kind === 'spatialdata_zarr' && d.conversion && !d.conversion.converted && (
+        <p className="small muted" data-testid="spatial-needs-conversion">
+          The spatial view (image, cells, transcripts) needs a converted copy: choose <b>Convert for full speed</b> below
+          first. “Open” shows the table’s embeddings without it.
+        </p>
+      )}
       {problem && <p className="error small">{problem}</p>}
       {d.state === 'inspected' && <Conversion key={d.id} datasetId={d.id} layers={layers} />}
       <DatasetNotes notices={fp?.warnings ?? []} />

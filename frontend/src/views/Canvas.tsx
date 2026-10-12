@@ -384,9 +384,16 @@ export function Canvas() {
 
   // While dragging, nothing is pickable: hover picking reads pixels back from the GPU, which
   // is wasted work during a pan.
+  // deck.gl releases a layer's GPU buffers when it leaves the canvas. A view may hand back the
+  // same layer object later (e.g. its single-panel layers after "Split by" returns to None);
+  // drawn again it would have no buffers (blank, S6 feedback). Such a returning object is
+  // replaced by a fresh copy.
+  const shown = useRef<Set<Layer>>(new Set());
   const layers = useMemo(() => {
     const all = views.flatMap((v) => panelsOf(outputs[v.id]).flatMap((p) => p.layers as Layer[]));
-    return dragging ? all.map((l) => l.clone({ pickable: false })) : all;
+    const fresh = all.map((l) => (shown.current.has(l) || !l.internalState ? l : l.clone({})));
+    shown.current = new Set(fresh);
+    return dragging ? fresh.map((l) => l.clone({ pickable: false })) : fresh;
   }, [views, outputs, dragging]);
   const viewState = Object.fromEntries(
     deckViews.map((dv) => [dv.id, { ...(viewStates[dv.id] ?? { target: [0, 0, 0], zoom: 0 }), ...ZOOM_LIMITS }]),
@@ -449,11 +456,27 @@ export function Canvas() {
     });
   }, [viewStates, layouts, views, ref]);
 
+  // hovers per 10 s (telemetry `hover`): pointer moves, cells hit, values shown
+  const hovers = useRef({ moves: 0, picked: 0, shown: 0 });
+  useEffect(() => {
+    const t = setInterval(() => {
+      const h = hovers.current;
+      if (h.moves) event('hover', null, { ...h });
+      hovers.current = { moves: 0, picked: 0, shown: 0 };
+    }, 10_000);
+    return () => clearInterval(t);
+  }, []);
   const tooltip = (info: PickingInfo) => {
-    if (dragging || !info.layer || info.index < 0) return null;
+    if (dragging) return null;
+    hovers.current.moves += 1;
+    if (!info.layer || info.index < 0) return null;
+    hovers.current.picked += 1;
     const root = rootOf(info.layer).id;
     const { view, panel } = ownerOf(root);
+    // the view's "Show values on hover" (on unless switched off)
+    if (views.find((v) => v.id === view)?.params.hover === false) return null;
     const text = panelsOf(outputs[view]).find((p) => p.id === panel)?.tooltip?.(info.index, root);
+    if (text) hovers.current.shown += 1;
     return text ? { text, className: 'deck-tooltip' } : null;
   };
 
@@ -494,6 +517,8 @@ export function Canvas() {
           // by the top-level layer's id: sub-layers (e.g. Viv's image tiles) have their own ids
           layerFilter={({ layer, viewport }) => rootOf(layer).id.startsWith(`${viewport.id}:`)}
           getTooltip={tooltip}
+          // a few pixels of tolerance: cells are small when zoomed out
+          pickingRadius={3}
           onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
           onAfterRender={() => {
             frames.current.frame();
