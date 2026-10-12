@@ -241,3 +241,20 @@ Resume rule: read this file, then continue with the first unchecked step.
   - Open: z-plane filter (no example with z), labels colouring (stretch), scale bar (units
     unknown), vectorised outline conversion if needed.
   - Next: user demo S6; optional cold review round; then S7 (plot view first, user's choice).
+- 2026-10-12 Cold review S6 (../reviews/code_review_S6/): A converter 5, memory 3, serving/jobs/logs
+  6; B panels 7, spatial view 5, colours 6; 4 blockers, 13 major. Batch R6 DONE (table per finding:
+  ../reviews/code_review_S6/R6-fixes.md; ADR 0010/0011 revised): multi-region tables + region-aware
+  cell link + section_keys; reader without tables; transcripts partition-wise into compact arrays;
+  masks block-wise; shapes vectorised and repaired; NaN dropped, strict-JSON manifest; sharded
+  large image levels; units; feature_key option (+ UI field); disk check; progress inside
+  elements; estimates calibrated (bench/spatial_memory.py, all peaks below estimate); impossible
+  jobs fail, waiting jobs do not block; strict-readable validator problems; aggregated store
+  request logs; ranges no-store/no 304. Frontend: own store layer (no-store, retry, cached arrays
+  and chunks, one request per shard for whole arrays, abort, counters), visible failures + Retry,
+  draw-style ids, stable polygon data, block colours, in-view by chunk boxes, panel fit modes
+  (same area / same scale / fill), robust panel bounds, fitKey refit, contrast range from data,
+  gene colours kept, debounced colour input, roving legend focus, telemetry (deck_error codes,
+  store_reads, frames, panels, spatial view_ready). B-M3 (count-dependent palette slots) kept by
+  the owner's decision; B-m2 (picked colours shared across views) to S7. 247 backend, 69 unit,
+  21 e2e.
+  - Next: user demo S6 (guide updated: steps 5, 8, 9); then S7 starting with the plot view.

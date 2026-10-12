@@ -31,8 +31,12 @@ export interface PanelOutput {
  * offset from each panel's own centre. */
 export type Link = 'none' | 'zoom' | 'pan+zoom';
 
-/** The deck.gl view id of a panel, and the prefix of its layers' ids. */
-export const panelKey = (viewId: string, panelId: string) => `${viewId}/${panelId}`;
+/** The deck.gl view id of a panel, and the prefix of its layers' ids. View and panel ids are
+ * generated and must not hold `/` or `:` (they separate the parts of these ids). */
+export const panelKey = (viewId: string, panelId: string) => {
+  if (/[/:]/.test(viewId) || panelId.includes(':')) throw new Error(`invalid view or panel id: ${viewId}/${panelId}`);
+  return `${viewId}/${panelId}`;
+};
 export const panelLayerId = (viewId: string, panelId: string, name: string) => `${panelKey(viewId, panelId)}:${name}`;
 /** The view and panel a layer (or sub-layer) id belongs to. */
 export function ownerOf(layerId: string): { view: string; panel: string } {
@@ -51,6 +55,13 @@ export interface ViewOutput {
   link?: Link;
   /** Panels fitted at one shared scale (default), so sizes compare; else each fills its panel. */
   sameScale?: boolean;
+  /** Panels show the same area (the union of their data) at the same scale, so positions
+   * compare (e.g. a UMAP split by condition). */
+  sameCoordinates?: boolean;
+  /** What the data are (e.g. dataset and coordinate system): a view refits when it changes;
+   * a change of `bounds` alone (more data arriving) refits only a view the user has not moved.
+   * Without it every change of `bounds` counts as new data. */
+  fitKey?: string;
   /** y grows downwards on screen (images, spatial coordinates). */
   flipY?: boolean;
   status: 'loading' | 'ready' | 'error';

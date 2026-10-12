@@ -236,6 +236,19 @@ def signed_area(ring: np.ndarray) -> float:
     return float(0.5 * (np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
 
 
+def ring_areas(v: np.ndarray, starts: np.ndarray) -> np.ndarray:
+    """Signed area of each closed ring of a flat vertex array (rings at `starts`), computed as
+    the validator does (float64 of the stored float32 vertices)."""
+    v = np.asarray(v, np.float64)
+    if len(starts) < 2:
+        return np.zeros(0)
+    cross = np.append(v[:-1, 0] * v[1:, 1] - v[1:, 0] * v[:-1, 1], 0.0)
+    firsts, lasts = starts[:-1], starts[1:] - 1
+    cross[lasts] = 0.0  # no edge from a ring's last vertex to the next ring
+    out: np.ndarray = np.add.reduceat(cross, firsts) / 2
+    return out
+
+
 def normalise_ring(ring: np.ndarray) -> np.ndarray:
     """Closed (last = first), counter-clockwise copy of an outer ring."""
     r = np.asarray(ring, dtype=np.float32)
@@ -265,35 +278,100 @@ class PolygonLayout:
     bbox: np.ndarray
     centroid: np.ndarray
     block_bbox: np.ndarray
+    dropped: int = 0  # rings without area (degenerate, or not finite) left out
 
 
-def polygon_layout(rings: list[np.ndarray], rows: np.ndarray) -> PolygonLayout:
-    """Normalise outer rings and sort polygons by the Morton code of their centroid."""
-    closed = [normalise_ring(r) for r in rings]
-    cent = np.array([ring_centroid(r) for r in closed], np.float32).reshape(-1, 2)
+def _ranges(starts: np.ndarray, which: np.ndarray) -> np.ndarray:
+    """Vertex indices of the rings `which`, in that order (vectorised concatenation)."""
+    lengths = (starts[1:] - starts[:-1])[which]
+    total = int(lengths.sum())
+    if total == 0:
+        return np.zeros(0, np.int64)
+    first = np.concatenate([[0], np.cumsum(lengths)[:-1]])
+    return np.repeat(starts[:-1][which] - first, lengths) + np.arange(total)
+
+
+def polygon_layout_flat(
+    vertices: np.ndarray, starts: np.ndarray, rows: np.ndarray
+) -> PolygonLayout:
+    """Layout of closed outer rings given as one vertex array (ring i = starts[i]:starts[i+1]).
+
+    Rings are made counter-clockwise (checked on the float32 vertices, as the validator does);
+    rings without area or with non-finite vertices are dropped (counted in `dropped`).
+    Polygons are sorted by the Morton code of their centroids.
+    """
+    v = np.asarray(vertices, np.float32).reshape(-1, 2)
+    starts = np.asarray(starts, np.int64)
+    rows = np.asarray(rows, np.int64)
+    n = len(starts) - 1
+    lengths = starts[1:] - starts[:-1]
+    ring_of = np.repeat(np.arange(n), lengths)
+    finite = np.isfinite(v).all(1)
+    ok = np.logical_and.reduceat(finite, starts[:-1]) if n and len(v) else np.ones(n, bool)
+    ok &= lengths >= 4
+    area = ring_areas(v, starts) if n else np.zeros(0)
+    ok &= np.isfinite(area) & (area != 0)
+    # reverse clockwise rings in place (a reversed closed ring stays closed)
+    flip = (area < 0)[ring_of] if n else np.zeros(0, bool)
+    local = np.arange(len(v)) - starts[:-1][ring_of]
+    src = np.where(flip, starts[:-1][ring_of] + lengths[ring_of] - 1 - local, np.arange(len(v)))
+    v = v[src]
+    keep = np.flatnonzero(ok)
+    # centroids relative to each ring's first vertex (no cancellation for large coordinates)
+    idx = _ranges(starts, keep)
+    kv = v[idx].astype(np.float64)
+    klen = lengths[keep]
+    kstarts = np.concatenate([[0], np.cumsum(klen)])
+    kring = np.repeat(np.arange(len(keep)), klen)
+    origin = kv[kstarts[:-1]] if len(keep) else np.zeros((0, 2))
+    rel = kv - origin[kring]
+    cross = np.append(rel[:-1, 0] * rel[1:, 1] - rel[1:, 0] * rel[:-1, 1], 0.0)
+    if len(keep):
+        cross[kstarts[1:] - 1] = 0.0
+        nxt = np.vstack([rel[1:], rel[:1]])
+        a = np.add.reduceat(cross, kstarts[:-1]) / 2
+        cx = np.add.reduceat((rel[:, 0] + nxt[:, 0]) * cross, kstarts[:-1]) / (6 * a)
+        cy = np.add.reduceat((rel[:, 1] + nxt[:, 1]) * cross, kstarts[:-1]) / (6 * a)
+        cent = (np.c_[cx, cy] + origin).astype(np.float32)
+        lo = np.minimum.reduceat(kv, kstarts[:-1]).astype(np.float32)
+        hi = np.maximum.reduceat(kv, kstarts[:-1]).astype(np.float32)
+        bbox = np.concatenate([lo, hi], axis=1)
+    else:
+        cent, bbox = np.zeros((0, 2), np.float32), np.zeros((0, 4), np.float32)
     order = np.argsort(morton_order(cent[:, 0], cent[:, 1], bounds(cent)), kind="stable")
-    closed = [closed[i] for i in order]
-    lengths = np.array([len(r) for r in closed], np.int64)
-    starts = np.concatenate([[0], np.cumsum(lengths)])
-    verts = np.concatenate(closed) if closed else np.zeros((0, 2), np.float32)
-    bbox = np.array([[*r.min(0), *r.max(0)] for r in closed], np.float32).reshape(-1, 4)
-    block = np.arange(0, len(closed), POLY_BLOCK)
+    verts = v[_ranges(starts, keep[order])]
+    out_starts = np.concatenate([[0], np.cumsum(klen[order])])
+    bbox = bbox[order]
+    block = np.arange(0, len(keep), POLY_BLOCK)
     block_bbox = (
         np.concatenate(
             [np.minimum.reduceat(bbox[:, :2], block), np.maximum.reduceat(bbox[:, 2:], block)],
             axis=1,
         )
-        if len(closed)
+        if len(keep)
         else np.zeros((0, 4), np.float32)
     )
     return PolygonLayout(
         vertices=verts.astype(np.float32),
-        starts=starts.astype(index_dtype(int(starts[-1]))),
-        row=np.asarray(rows, np.int32)[order],
-        bbox=bbox,
+        starts=out_starts.astype(index_dtype(int(out_starts[-1]))),
+        row=rows[keep][order].astype(np.int32),
+        bbox=bbox.astype(np.float32),
         centroid=cent[order],
         block_bbox=block_bbox.astype(np.float32),
+        dropped=int(n - len(keep)),
     )
+
+
+def polygon_layout(rings: list[np.ndarray], rows: np.ndarray) -> PolygonLayout:
+    """Normalise outer rings and sort polygons by the Morton code of their centroid."""
+    closed = []
+    for r in rings:
+        r = np.asarray(r, np.float32).reshape(-1, 2)
+        closed.append(r if len(r) > 1 and np.array_equal(r[0], r[-1]) else np.vstack([r, r[:1]]))
+    lengths = np.array([len(r) for r in closed], np.int64)
+    starts = np.concatenate([[0], np.cumsum(lengths)])
+    verts = np.concatenate(closed) if closed else np.zeros((0, 2), np.float32)
+    return polygon_layout_flat(verts, starts, np.asarray(rows, np.int64))
 
 
 def write_polygons(group: zarr.Group, lay: PolygonLayout) -> None:
@@ -319,6 +397,21 @@ def _feature_offsets(feature: np.ndarray, n_features: int) -> np.ndarray:
     return np.concatenate([[0], np.cumsum(counts)])
 
 
+def sort_keys(
+    xy: np.ndarray, feature: np.ndarray, box: tuple[float, float, float, float]
+) -> np.ndarray:
+    """One uint64 key per point: feature in the high 32 bits, Morton code (32 bits) below.
+    Computed in blocks, so the temporaries stay small."""
+    keys = np.empty(xy.shape[0], np.uint64)
+    step = 1 << 22
+    for s in range(0, xy.shape[0], step):
+        b = xy[s : s + step]
+        keys[s : s + step] = (
+            np.asarray(feature[s : s + step]).astype(np.uint64) << np.uint64(32)
+        ) | (morton_order(b[:, 0], b[:, 1], box))
+    return keys
+
+
 def points_layout(
     xy: np.ndarray,
     feature: np.ndarray,
@@ -329,27 +422,45 @@ def points_layout(
     overview: int = OVERVIEW_POINTS,
     lod_cap: int = LOD_CAP,
     seed: int = 0,
+    tick: Any = None,
 ) -> PointsLayout:
-    """Sort points by feature then Morton code; derive offsets, chunk boxes and reduced views."""
+    """Sort points by feature then Morton code; derive offsets, chunk boxes and reduced views.
+
+    Memory: the inputs plus about 32 bytes per point (sort key and order, sorted copies);
+    `tick(fraction)` reports progress between the steps."""
     xy = np.asarray(xy, np.float32)
+    feature = np.asarray(feature)
     box = bounds(xy)
-    order = np.lexsort((morton_order(xy[:, 0], xy[:, 1], box), feature))
-    feat = np.asarray(feature, np.int64)[order]
+    keys = sort_keys(xy, feature, box)
+    if tick:
+        tick(0.2)
+    # not stable, and need not be: the key holds the order (equal keys are the same gene in the
+    # same Morton cell); 3–4 times faster than a stable sort, deterministic for the same input
+    order = np.argsort(keys)
+    del keys
+    if tick:
+        tick(0.5)
+    n = xy.shape[0]
+    offsets = _feature_offsets(feature.astype(np.int64, copy=False), n_features)
     cols: dict[str, np.ndarray] = {"xy": xy[order]}
+    if tick:
+        tick(0.65)
     if z is not None:
         cols["z"] = np.asarray(z, np.float32)[order]
     if cell is not None:
         cols["cell"] = np.asarray(cell, np.int32)[order]
-    n = xy.shape[0]
-    offsets = _feature_offsets(feat, n_features)
+    if tick:
+        tick(0.8)
     off_dtype = index_dtype(n)
 
     # Overview: uniform random sample; sorted indices keep the feature/Morton order.
     rng = np.random.default_rng(seed)
     ov_idx = np.sort(rng.choice(n, min(n, overview), replace=False)) if n else np.zeros(0, int)
     ov = {k: v[ov_idx] for k, v in cols.items()}
-    ov["feature"] = feat[ov_idx].astype(np.int32)
-    ov["offsets"] = _feature_offsets(feat[ov_idx], n_features).astype(off_dtype)
+    ov_feat = feature[order[ov_idx]].astype(np.int64)
+    ov["feature"] = ov_feat.astype(np.int32)
+    ov["offsets"] = _feature_offsets(ov_feat, n_features).astype(off_dtype)
+    del order
 
     # LOD: genes above the cap keep `lod_cap` evenly spaced points of their Morton-sorted range,
     # which is an even spatial sample.
@@ -374,10 +485,14 @@ def points_layout(
     )
 
 
-def write_points(group: zarr.Group, lay: PointsLayout, features: list[str]) -> None:
+def write_points(
+    group: zarr.Group, lay: PointsLayout, features: list[str], tick: Any = None
+) -> None:
     group.attrs["dbx"] = {"features": features}
-    for name, v in lay.columns.items():
+    for i, (name, v) in enumerate(lay.columns.items()):
         sharded(group, name, v, POINT_CHUNK)
+        if tick:
+            tick((i + 1) / (len(lay.columns) + 1))
     array(group, "offsets", lay.offsets)
     array(group, "chunk_bbox", lay.chunk_bbox)
     for sub, cols in (("overview", lay.overview), ("lod", lay.lod)):
@@ -394,20 +509,37 @@ def needs_relabel(max_label: int, n_labels: int) -> bool:
     return max_label >= 2**32 or max_label > 4 * n_labels + 1024
 
 
+def label_ids(block: np.ndarray) -> np.ndarray:
+    """Label IDs of a block as uint64, negative values as background (0). uint64 sources keep
+    IDs ≥ 2⁶³."""
+    b = np.asarray(block)
+    if b.dtype.kind == "i":
+        b = np.where(b < 0, 0, b)
+    elif b.dtype.kind != "u":
+        b = np.where(np.isfinite(b) & (b > 0), b, 0)
+    return b.astype(np.uint64, copy=False)
+
+
+def relabel_block(block: np.ndarray, original: np.ndarray | None) -> np.ndarray:
+    """uint32 labels of a block: mapped to 1..N through the sorted `original` IDs, or cast."""
+    ids = label_ids(block)
+    if original is None:
+        return ids.astype(np.uint32)
+    out: np.ndarray = np.searchsorted(original, ids).astype(np.uint32)
+    return out
+
+
 def relabel(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Map label IDs to 1..N in order of the original IDs (0 stays background).
 
     Returns (uint32 labels, uint64 original IDs of length N + 1 with entry 0 = 0). Negative
-    values are background. Whole-array version for small masks; the converter streams blocks
-    with the same mapping (np.searchsorted on the sorted original IDs).
+    values are background. Whole-array version for small masks; the converter maps block by
+    block with `relabel_block` and the same original IDs.
     """
-    flat = np.asarray(labels).astype(np.int64, copy=False)
-    flat = np.where(flat < 0, 0, flat)
-    ids = np.unique(flat)
+    ids = np.unique(label_ids(labels))
     ids = ids[ids != 0]
-    original = np.concatenate([[0], ids]).astype(np.uint64)
-    new = np.searchsorted(original, flat.astype(np.uint64)).astype(np.uint32)
-    return new, original
+    original = np.concatenate([np.zeros(1, np.uint64), ids.astype(np.uint64)])
+    return relabel_block(labels, original), original
 
 
 def labels_container_attrs(names: list[str]) -> dict[str, Any]:

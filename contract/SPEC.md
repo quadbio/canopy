@@ -68,7 +68,8 @@ stores. The v0.1 review decisions (§11) are unchanged. What changed and why:
 
 ## 3. Manifest
 
-`manifest.json` lists everything in the store. The browser reads only the manifest to know what
+`manifest.json` lists everything in the store. It is strict JSON: no NaN or Infinity (a
+validator error), since browsers cannot parse them. The browser reads only the manifest to know what
 exists, which views are possible and how to place elements. Fields (full schema in
 `schema/manifest.schema.json`):
 
@@ -163,13 +164,14 @@ automatically. The browser offers them for faceting (one panel per section) and 
 | Axes | `c, y, x` (2-D) — `c, z, y, x` is reserved for a later version |
 | Pyramid | level 0 = source resolution; each next level halves `y`, `x` (mean for intensities) until both are ≤ 512 |
 | Chunks | `1 × 512 × 512` (one channel per chunk) |
-| Sharding | allowed: shards of `1 × 4096 × 4096` for levels larger than 8192 px |
+| Sharding | levels larger than 8192 px (either side) are sharded: `1 × 4096 × 4096` (a side under 512 px: its full length); smaller levels are not. Writers write whole shards per task |
 | dtype | unchanged from the source (uint8, uint16, float32) |
 | Codec | zstd, level 3 |
-| Metadata | NGFF `multiscales` with scale transforms per level; `omero.channels[]` with `label` and `window` (`start`/`end` = 0.5th / 99.5th percentile from the lowest level; `min`/`max` = dtype range) |
+| Metadata | NGFF `multiscales` with scale transforms per level; `omero.channels[]` with `label` and `window` (`start`/`end` = 0.5th / 99.5th percentile from the first level at most 2048 px wide; `min`/`max` = dtype range) |
 
 RGB(A) images are stored as 3 or 4 channels and flagged `rgb: true` in the manifest, so the
-browser can show them in true colour by default.
+browser can show them in true colour by default. Only uint8 images whose channels are named
+r, g, b(, a) (or red, green, blue(, alpha)) are flagged: three uint8 stains are not a photograph.
 
 Manifest fields: `path`, `axes`, `dtype`, `levels` (shapes), `channels` (name, window, colour
 hint), `rgb`, `transforms`.
@@ -216,6 +218,12 @@ the link to the table, so table order is unaffected.
 **Circles** (`kind: "circles"`; e.g. Visium spots): `center` float32 (N, 2), `radius` float32 (N,),
 `row` int32 (N,).
 
+Messy sources: invalid polygons (self-intersecting, …) are repaired (`make_valid`) and keep
+their polygon parts; rings without area or with non-finite vertices are dropped; rows that are
+not polygons (lines, points among polygons) are left out, not the element. Each case is a
+counted warning (`shapes_invalid_repaired`, `shapes_degenerate_dropped`,
+`shapes_non_polygon_dropped`).
+
 Chunks **[v0.2]**: `vertices` 65,536 rows; per-polygon arrays 4,096 rows (one block); shards of 64
 chunks; codec zstd. Manifest fields: `path`, `kind`, `n`, `n_vertices` **[v0.2]**, `table`,
 `transforms`.
@@ -254,10 +262,15 @@ sorted the same way:
   (one file per ~1 M points). Measured on the MERSCOPE example (5.6 M transcripts): one median gene
   downloads 0.11 MB instead of 6.9 MB, and the zoomed-out view 6.7 MB instead of 39 MB
   (`bench/contract_v02_points.py`).
-- The **feature column** is the source's declared `feature_key`; if none is declared, the
-  converter picks the single categorical/dictionary string column and records
-  `feature_key_inferred: true`; if that is ambiguous, conversion asks (job fails with the
-  candidates listed).
+- The **feature column** is the column chosen for the conversion (option `feature_key`), else
+  the source's declared `feature_key`; if none is declared, the converter picks the single
+  categorical/dictionary string column, else the one (categorical, then plain text) named like
+  genes, and records `feature_key_inferred: true`; if that is ambiguous, the job fails with
+  `feature_key_ambiguous` and the user names the column.
+- Points with a non-finite `x`/`y` (or NaN `z`) or without a gene are dropped (counted
+  warnings). The cell link uses only the regions of the linked table that share a coordinate
+  system with the points; when instance ids still repeat across those regions, there is no link
+  (`points_cell_link_ambiguous`), never a guess.
 - Manifest fields: `path`, `n`, `n_features`, `feature_key`, `feature_key_inferred`, `has_cell`,
   `has_z`, `z_range` (min, max), `z_planes` (sorted distinct z values when there are at most 256,
   e.g. MERSCOPE z-stacks; otherwise null), `bbox`, `n_overview` **[v0.2]**, `lod_cap` **[v0.2]**

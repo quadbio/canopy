@@ -11,8 +11,8 @@ mkdir -p "$tmp"
 generated="$repo/.cache/generated"
 if [ ! -f "$generated/example_with_layers.h5ad" ] || [ "$repo/backend/dbx/synth/demo.py" -nt "$generated/example_with_layers.h5ad" ]; then
   mkdir -p "$generated"
-  dbx synth demo "$repo/.cache/generated-part.h5ad" >/dev/null
-  mv "$repo/.cache/generated-part.h5ad" "$generated/example_with_layers.h5ad"
+  part="$(mktemp "$generated/.example-XXXXXX")"  # own name: demo and e2e may run at once
+  dbx synth demo "$part" >/dev/null && mv "$part" "$generated/example_with_layers.h5ad"
 fi
 cat > "$tmp/config.toml" <<CONF
 cache_dir = "cache"

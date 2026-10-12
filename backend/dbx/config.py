@@ -93,6 +93,9 @@ class JobsConfig(_Strict):
     # starts only when the host has 1.5 times this available; it is stopped if its process
     # grows beyond twice this (plus 1 GB for the interpreter and libraries).
     memory_gb: float = Field(default=2.0, gt=0)
+    # Threads of one conversion for block-wise work (image and mask pyramids). Each thread holds
+    # one source block, so this bounds memory and CPU use on a shared host.
+    threads: int = Field(default=4, ge=1, le=64)
     # Temporary files of conversions (about the size of the expression matrix); default
     # <cache_dir>/tmp.
     tmp_dir: Path | None = None

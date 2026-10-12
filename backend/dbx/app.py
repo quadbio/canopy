@@ -31,7 +31,9 @@ from dbx.errors import error_response, install_error_handlers
 from dbx.jobs.api import router as jobs_router
 from dbx.jobs.manager import JobManager
 from dbx.logs import MemorySampler, get_logger, memory_snapshot, set_rollover_hook
+from dbx.stores import SLOW_MS
 from dbx.stores import router as stores_router
+from dbx.stores import stats as store_stats
 from dbx.telemetry import router as telemetry_router
 
 # Built frontend (pnpm build) is served from here when present.
@@ -197,6 +199,7 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         datasets.clear()
         sampler.stop()
         set_rollover_hook(None)
+        store_stats.flush(log)
         log.info("shutdown")
 
     app = FastAPI(title="dbx", version=dbx.__version__, lifespan=lifespan)
@@ -263,17 +266,32 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                 f"Internal error. The server log has the details (request {request_id}).",
             )
         else:
-            log.info(
-                "request",
-                method=request.method,
-                route=_route(request),
-                path=request.url.path,
-                dataset_id=(request.scope.get("path_params") or {}).get("id"),
-                status=response.status_code,
-                code=getattr(request.state, "error_code", None),
-                bytes=response.headers.get("content-length"),
-                ms=round((time.perf_counter() - t0) * 1000, 2),
-            )
+            ms_req = (time.perf_counter() - t0) * 1000
+            if (
+                request.url.path.startswith("/api/stores/")
+                and (response.status_code < 400 or response.status_code == 404)
+                and ms_req < SLOW_MS
+            ):
+                # many small range reads: summed per minute (dbx.stores.StoreStats)
+                store_stats.record(
+                    request.url.path,
+                    response.status_code,
+                    int(response.headers.get("content-length") or 0),
+                    ms_req,
+                    log,
+                )
+            else:
+                log.info(
+                    "request",
+                    method=request.method,
+                    route=_route(request),
+                    path=request.url.path,
+                    dataset_id=(request.scope.get("path_params") or {}).get("id"),
+                    status=response.status_code,
+                    code=getattr(request.state, "error_code", None),
+                    bytes=response.headers.get("content-length"),
+                    ms=round((time.perf_counter() - t0) * 1000, 2),
+                )
         finally:
             inflight.end(request_id)
         ms = round((time.perf_counter() - t0) * 1000, 2)

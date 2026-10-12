@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { OrthoState } from './layout';
-import { linkedStates, panelRects } from './panels';
+import { fitLayout, linkedStates, panelRects } from './panels';
 import { ownerOf, panelKey, panelLayerId, panelsOf } from './registry';
 
 describe('panels', () => {
@@ -26,5 +26,32 @@ describe('panels', () => {
     expect(ownerOf(panelLayerId('v1', 'c3', 'points'))).toEqual({ view: 'v1', panel: 'c3' });
     expect(ownerOf(`${panelKey('v1', 'main')}:points-sub`)).toEqual({ view: 'v1', panel: 'main' });
     expect(panelsOf({ layers: [], bounds: null, status: 'ready' })[0].id).toBe('main');
+  });
+});
+
+describe('fitLayout', () => {
+  const rects = [
+    { x: 0, y: 0, width: 200, height: 200 },
+    { x: 204, y: 0, width: 200, height: 200 },
+  ];
+  const base = { keys: ['v/a', 'v/b'], rects, fitInsets: {}, flipY: false };
+  const bounds: [number, number, number, number][] = [
+    [0, 0, 10, 10],
+    [100, 100, 140, 140],
+  ];
+
+  it('same coordinates: every panel shows the union of the data at one view state', () => {
+    const f = fitLayout({ ...base, bounds, sameScale: true, sameCoordinates: true });
+    expect(f['v/a']).toEqual(f['v/b']);
+    expect(f['v/a'].target[0]).toBeCloseTo(70);
+  });
+
+  it('same scale: own centres, one zoom (the smallest); fill: own zooms', () => {
+    const s = fitLayout({ ...base, bounds, sameScale: true, sameCoordinates: false });
+    expect(s['v/a'].zoom).toBe(s['v/b'].zoom);
+    expect(s['v/a'].target[0]).toBeCloseTo(5);
+    expect(s['v/b'].target[0]).toBeCloseTo(120);
+    const f = fitLayout({ ...base, bounds, sameScale: false, sameCoordinates: false });
+    expect(f['v/a'].zoom).toBeGreaterThan(f['v/b'].zoom);
   });
 });

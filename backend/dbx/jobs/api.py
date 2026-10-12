@@ -1,6 +1,7 @@
 """Job API: start a conversion, list and follow jobs, cancel.
 
-- `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>"}` → the job (an active
+- `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>", "feature_key"?}` → the
+  job (an active
   job for the same dataset version and options is returned instead of a new one);
 - `GET /api/jobs?dataset=` → recent jobs, newest first; `GET /api/jobs/{job}`;
 - `POST /api/jobs/{job}/cancel`.
@@ -25,6 +26,8 @@ router = APIRouter(tags=["jobs"])
 
 class ConvertRequest(BaseModel):
     x_source: str = Field(default="X", max_length=512, pattern=r"^(X|raw/X|layers/.+)$")
+    # SpatialData: the points column holding the genes, when the converter cannot tell.
+    feature_key: str | None = Field(default=None, min_length=1, max_length=256)
     # Replace an existing converted copy (one per dataset version).
     force: bool = False
 
@@ -53,7 +56,9 @@ def convert(request: Request, id: str, body: ConvertRequest | None = None) -> di
     cfg = request.app.state.config
     if has_store(cfg.cache_dir, row.version) and not body.force:
         raise ApiError(409, "already_converted", "This dataset is converted already.")
-    options = {"x_source": body.x_source}
+    options: dict[str, Any] = {"x_source": body.x_source}
+    if body.feature_key:
+        options["feature_key"] = body.feature_key
     job = _jobs(request).submit("convert", row.id, row.version, options, path, row.fingerprint)
     if job.options != options:
         raise ApiError(

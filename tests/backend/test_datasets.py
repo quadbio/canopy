@@ -333,6 +333,13 @@ def test_store_ranges(store_client: tuple[TestClient, str, Path]) -> None:
     assert h.status_code == 206 and h.headers["content-length"] == "4"
     again = c.get(f"{url}/manifest.json", headers={"if-none-match": full.headers["etag"]})
     assert again.status_code == 304
+    # a range request is never answered with 304 and not stored by the browser (review S6 B-B2)
+    rr = c.get(
+        f"{url}/manifest.json",
+        headers={"if-none-match": full.headers["etag"], "range": "bytes=0-3"},
+    )
+    assert rr.status_code == 206 and rr.content == data[:4]
+    assert rr.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize(

@@ -336,6 +336,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 }
 .select-item[data-highlighted] { background: var(--accent-soft); }
 .select-item[data-state='checked'] { font-weight: 600; }
+.select-item[data-disabled] { color: var(--text-muted, var(--muted)); cursor: default; }
+.contrast { display: flex; align-items: center; gap: var(--space-2); }
+.contrast .slider-row { flex: 1; }
 .select-hint { color: var(--text-muted); font-size: var(--text-xs); }
 .select-label { padding: 6px 8px 2px; color: var(--text-muted); font-size: var(--text-xs); text-transform: uppercase; }
 .slider-row { display: flex; align-items: center; gap: var(--space-2); }
@@ -362,7 +365,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 
 /* gene search */
 .gene-search { position: relative; }
-.gene-search input {
+.gene-search input, .text-input {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--border);

@@ -14,12 +14,12 @@ import DeckGL from '@deck.gl/react';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useWorkspace, type ViewSpec } from '../state/workspace';
-import { event, reportEnvironment } from '../telemetry/telemetry';
+import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
-import { type Cell, fitBounds, gridCells, type Insets, type OrthoState, resizeView } from './layout';
+import { type Cell, gridCells, type OrthoState, resizeView } from './layout';
 import { allowances, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
-import { linkedStates, panelRects } from './panels';
+import { type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
 import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
 
 const TITLE_ROW = 30; // px kept free for the view's title when fitting
@@ -29,16 +29,11 @@ const COMPACT_WIDTH = 480; // cells narrower than this start with the legend fol
 const ZOOM_LIMITS = { minZoom: -20, maxZoom: 40 };
 
 /** Where a view's panels go and what is kept free when fitting them. */
-interface Layout {
-  cell: Cell;
-  keys: string[]; // panel keys (deck.gl view ids)
-  rects: Cell[];
-  fitInsets: Insets; // per panel
+interface Layout extends FitLayout {
+  cell: Cell; // keys: panel keys (deck.gl view ids); fitInsets: per panel
   link: Link;
-  sameScale: boolean;
-  flipY: boolean;
-  bounds: (Bounds | null)[];
   titles: (string | undefined)[];
+  fitKey: string | undefined;
 }
 
 function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layout {
@@ -54,32 +49,12 @@ function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layo
     fitInsets: many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right },
     link: out?.link ?? 'pan+zoom',
     sameScale: out?.sameScale ?? true,
+    sameCoordinates: !!out?.sameCoordinates && many,
     flipY: !!out?.flipY,
     bounds: panels.map((p) => p.bounds),
     titles: panels.map((p) => p.title),
+    fitKey: out?.fitKey,
   };
-}
-
-/** Fitted view states of all panels of a view; with `sameScale` they share the smallest zoom. */
-function fitLayout(l: Layout): Record<string, OrthoState> {
-  const fits = l.keys.map((_, j) => (l.bounds[j] ? fitBounds(l.bounds[j]!, l.rects[j], 0.06, l.fitInsets, l.flipY) : null));
-  const out: Record<string, OrthoState> = {};
-  const zooms = fits.filter((f): f is OrthoState => !!f).map((f) => f.zoom);
-  const common = l.sameScale && zooms.length > 1 ? Math.min(...zooms) : null;
-  l.keys.forEach((key, j) => {
-    const f = fits[j];
-    if (!f) return;
-    if (common === null) {
-      out[key] = f;
-      return;
-    }
-    // the same centre, at the shared zoom (the inset shift depends on the zoom)
-    const b = l.bounds[j]!;
-    const scale = 2 ** common;
-    const up = (l.fitInsets.top ?? 0) / 2 / scale;
-    out[key] = { target: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2 + (l.flipY ? -up : up), 0], zoom: common };
-  });
-  return out;
 }
 
 const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
@@ -172,7 +147,11 @@ const ViewCell = memo(function ViewCell({
             data-testid="panel"
             style={{ left: p.rect.x - cell.x, top: p.rect.y - cell.y, width: p.rect.width, height: p.rect.height }}
           >
-            {p.title && <span className="view-panel-title">{p.title}</span>}
+            {p.title && (
+              <span className="view-panel-title" title={p.title}>
+                {p.title}
+              </span>
+            )}
           </div>
         ))}
       <div className="view-header">
@@ -228,6 +207,47 @@ const ViewCell = memo(function ViewCell({
   );
 });
 
+// deck.gl reports a broken layer on every frame: one event per kind of error and 30 s, counted
+const deckErrors = new Map<string, { at: number; n: number }>();
+function reportDeckError(e: Error | null | undefined) {
+  const f = deckErrorFields(e);
+  const key = `${f.layer}|${f.message}`;
+  const now = performance.now();
+  const seen = deckErrors.get(key);
+  if (seen && now - seen.at < 30_000) {
+    seen.n += 1;
+    return;
+  }
+  deckErrors.set(key, { at: now, n: 0 });
+  event('deck_error', null, { ...f, repeats: seen?.n ?? 0 });
+}
+
+/** Frame times while the canvas redraws (interaction, loading): one `frames` event per 10 s
+ * with frames, median and 95th percentile intervals and the long ones (> 50 ms). Intervals over
+ * 250 ms are pauses, not frames. */
+class FrameStats {
+  private last = 0;
+  private gaps: number[] = [];
+  private since = performance.now();
+
+  frame() {
+    const now = performance.now();
+    const gap = now - this.last;
+    this.last = now;
+    if (gap > 0 && gap <= 250) this.gaps.push(gap);
+    if (now - this.since >= 10_000) this.flush(now);
+  }
+
+  private flush(now: number) {
+    this.since = now;
+    const g = this.gaps.sort((a, b) => a - b);
+    this.gaps = [];
+    if (g.length < 10) return;
+    const q = (f: number) => g[Math.min(g.length - 1, Math.floor(f * g.length))];
+    event('frames', null, { n: g.length, median_ms: Math.round(q(0.5) * 10) / 10, p95_ms: Math.round(q(0.95) * 10) / 10, over_50ms: g.filter((x) => x > 50).length });
+  }
+}
+
 /** The top-level layer a (sub-)layer belongs to. */
 function rootOf(layer: Layer): Layer {
   let l = layer;
@@ -261,18 +281,27 @@ export function Canvas() {
   // Per panel: the bounds it was last fitted to, its fitted view state (linked panels follow
   // relative to it), and the rectangle and insets its view state belongs to.
   const fitted = useRef<Record<string, Bounds>>({});
+  const fittedKey = useRef<Record<string, string | undefined>>({});
   const fits = useRef<Record<string, OrthoState>>({});
   const placed = useRef<Record<string, { rect: Cell; insets: string }>>({});
   const touched = useRef<Set<string>>(new Set()); // views the user has panned or zoomed
   const [dragging, setDragging] = useState(false);
   const drawn = useRef<Set<string>>(new Set());
+  const frames = useRef(new FrameStats());
+  // panels per view, reported when they change (e.g. Split by)
+  const panelCounts = layouts.map((l) => l?.keys.length ?? 0).join(',');
+  useEffect(() => {
+    layouts.forEach((l, i) => {
+      if (l && l.keys.length > 1) event('panels', null, { type: views[i]?.type ?? '', n: l.keys.length, same_coordinates: l.sameCoordinates, same_scale: l.sameScale });
+    });
+  }, [panelCounts]); // eslint-disable-line react-hooks/exhaustive-deps
   const readyAt = useRef<Record<string, number>>({});
 
   // Forget closed views and panels.
   useEffect(() => {
     const open = new Set(views.map((v) => v.id));
     const keys = new Set(layouts.flatMap((l) => l?.keys ?? []));
-    for (const m of [fitted.current, fits.current, placed.current]) {
+    for (const m of [fitted.current, fittedKey.current, fits.current, placed.current]) {
       for (const k of Object.keys(m)) if (!keys.has(k)) delete m[k];
     }
     for (const id of touched.current) if (!open.has(id)) touched.current.delete(id);
@@ -285,14 +314,19 @@ export function Canvas() {
     views.forEach((v, i) => {
       const l = layouts[i];
       if (!l || l.cell.width < 10) return;
-      const insets = `${JSON.stringify(l.fitInsets)}|${l.sameScale}`;
+      const insets = `${JSON.stringify(l.fitInsets)}|${l.sameScale}|${l.sameCoordinates}`;
       let refit = false;
       const resized: string[] = [];
+      const user = touched.current.has(v.id);
       l.keys.forEach((key, j) => {
         const b = l.bounds[j];
         const prev = placed.current[key];
         const moved = prev && (prev.rect.width !== l.rects[j].width || prev.rect.height !== l.rects[j].height || prev.insets !== insets);
-        if (b && (fitted.current[key] !== b || (moved && !touched.current.has(v.id)))) refit = true;
+        // new data: a new fit key, or (without a key) new bounds; more of the same data
+        // (new bounds, same key) refits only a view the user has not moved
+        const keyed = l.fitKey !== undefined && fittedKey.current[key] !== undefined;
+        const newData = keyed ? fittedKey.current[key] !== l.fitKey || (fitted.current[key] !== b && !user) : fitted.current[key] !== b;
+        if (b && (newData || (moved && !user))) refit = true;
         else if (moved && viewStates[key]) resized.push(key);
       });
       if (refit) {
@@ -301,7 +335,10 @@ export function Canvas() {
           fits.current[key] = st;
         }
         l.keys.forEach((key, j) => {
-          if (l.bounds[j]) fitted.current[key] = l.bounds[j]!;
+          if (l.bounds[j]) {
+            fitted.current[key] = l.bounds[j]!;
+            fittedKey.current[key] = l.fitKey;
+          }
         });
       } else {
         for (const key of resized) {
@@ -459,6 +496,7 @@ export function Canvas() {
           getTooltip={tooltip}
           onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
           onAfterRender={() => {
+            frames.current.frame();
             for (const v of views) {
               const t0 = readyAt.current[v.id];
               if (t0 !== undefined && !drawn.current.has(v.id)) {
@@ -471,7 +509,7 @@ export function Canvas() {
             const info = (device as unknown as { info?: { renderer?: string; vendor?: string; version?: string } }).info;
             reportEnvironment(info ?? null);
           }}
-          onError={(e) => event('deck_error', null, { type: e?.name ?? 'Error' })}
+          onError={reportDeckError}
           // No depth test by default: layers draw in order. A layer that needs depth (the points'
           // "higher values on top") sets it on itself, so it never hides layers drawn later.
           parameters={{ depthCompare: 'always', depthWriteEnabled: false }}

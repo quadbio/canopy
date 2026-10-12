@@ -1,7 +1,7 @@
 // Panels inside a view's cell: their rectangles, and linked pan and zoom (views/registry.ts).
 
-import { type Cell, gridCells, type Insets, type OrthoState } from './layout';
-import type { Link } from './registry';
+import { type Cell, fitBounds, gridCells, type Insets, type OrthoState } from './layout';
+import type { Bounds, Link } from './registry';
 
 /** Rectangles (canvas pixels) of `n` panels in `cell`, below the title row and left of an open
  * legend. One panel fills the whole cell (the title and legend float over it). */
@@ -48,3 +48,50 @@ export function linkedStates(
   }
   return out;
 }
+
+/** What fitting the panels of a view needs. */
+export interface FitLayout {
+  keys: string[];
+  rects: Cell[];
+  fitInsets: Insets;
+  sameScale: boolean;
+  sameCoordinates: boolean;
+  flipY: boolean;
+  bounds: (Bounds | null)[];
+}
+
+/** The smallest box holding all boxes. */
+function unionOf(boxes: (Bounds | null)[]): Bounds | null {
+  const b = boxes.filter((x): x is Bounds => !!x);
+  if (!b.length) return null;
+  return [Math.min(...b.map((x) => x[0])), Math.min(...b.map((x) => x[1])), Math.max(...b.map((x) => x[2])), Math.max(...b.map((x) => x[3]))];
+}
+
+/** Fitted view states of all panels of a view; with `sameScale` they share the smallest zoom;
+ * with `sameCoordinates` every panel shows the union of the panels' data. */
+export function fitLayout(l: FitLayout): Record<string, OrthoState> {
+  if (l.sameCoordinates) {
+    const all = unionOf(l.bounds);
+    if (!all) return {};
+    return Object.fromEntries(l.keys.map((key, j) => [key, fitBounds(all, l.rects[j], 0.06, l.fitInsets, l.flipY)]));
+  }
+  const fits = l.keys.map((_, j) => (l.bounds[j] ? fitBounds(l.bounds[j]!, l.rects[j], 0.06, l.fitInsets, l.flipY) : null));
+  const out: Record<string, OrthoState> = {};
+  const zooms = fits.filter((f): f is OrthoState => !!f).map((f) => f.zoom);
+  const common = l.sameScale && zooms.length > 1 ? Math.min(...zooms) : null;
+  l.keys.forEach((key, j) => {
+    const f = fits[j];
+    if (!f) return;
+    if (common === null) {
+      out[key] = f;
+      return;
+    }
+    // the same centre, at the shared zoom (the inset shift depends on the zoom)
+    const b = l.bounds[j]!;
+    const scale = 2 ** common;
+    const up = (l.fitInsets.top ?? 0) / 2 / scale;
+    out[key] = { target: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2 + (l.flipY ? -up : up), 0], zoom: common };
+  });
+  return out;
+}
+

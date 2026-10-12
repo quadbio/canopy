@@ -478,6 +478,19 @@ def memory_headroom() -> int:
     return max(avail, 0)
 
 
+def memory_total() -> int:
+    """Bytes of memory this process could ever have: the host's, or its cgroup limit."""
+    total = int(psutil.virtual_memory().total)
+    try:
+        rel = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
+        limit_raw = (Path("/sys/fs/cgroup") / rel.lstrip("/") / "memory.max").read_text().strip()
+        if limit_raw != "max":
+            total = min(total, int(limit_raw))
+    except (OSError, IndexError, ValueError):
+        pass
+    return total
+
+
 def _cgroup_memory() -> dict[str, float]:
     """cgroup v2 usage and limit of this process (Linux only; empty elsewhere)."""
     try:

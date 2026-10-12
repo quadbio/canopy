@@ -38,6 +38,10 @@ const ERRORS: Record<string, string> = {
   server_stopped: 'Interrupted by a server restart; it will run again.',
   memory_limit: 'Stopped: it needed more memory than allowed (jobs.memory_gb in the server settings).',
   not_enough_disk: 'Not enough free disk space on the server for the converted copy.',
+  not_enough_memory: 'It needs more memory than this server has in total (see the server log for the numbers).',
+  feature_key_ambiguous: 'Could not tell which transcript column holds the genes: name it below and convert again.',
+  feature_key_missing: 'The gene column you named is not in the transcripts.',
+  manifest_not_finite: 'The data hold values that cannot be stored (NaN); please report this.',
   source_changed: 'The file changed while it was being converted; refresh the index and try again.',
   duplicate_entries: 'The matrix stores some cells twice for the same gene; it cannot be converted.',
   legacy_layout: 'Files written by anndata before 0.8 cannot be converted yet.',
@@ -95,6 +99,7 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
   const known = detail.data?.conversion?.job ?? null;
   const job = useJob(known?.id ?? null, known);
   const [xSource, setXSource] = useState('X');
+  const [featureKey, setFeatureKey] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [, tick] = useState(0);
   const j: Job | null = job.data ?? null;
@@ -109,7 +114,7 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
   const start = async () => {
     setProblem(null);
     try {
-      const started = await jobs.convert(datasetId, xSource, !!conv?.converted);
+      const started = await jobs.convert(datasetId, xSource, !!conv?.converted, featureKey.trim() || undefined);
       qc.setQueryData(['job', started.id], started);
       await qc.invalidateQueries({ queryKey: ['dataset', datasetId] });
       await qc.invalidateQueries({ queryKey: ['jobs-active'] });
@@ -144,6 +149,18 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
   return (
     <div className="conversion" data-testid="conversion">
       {failed && <p className="small error">{describeError(j.error ?? j.state)}</p>}
+      {failed && (j.error === 'feature_key_ambiguous' || j.error === 'feature_key_missing') && (
+        <label className="field">
+          <span className="field-label">Transcript column with the gene names</span>
+          <input
+            className="text-input"
+            value={featureKey}
+            placeholder="e.g. gene or target"
+            onChange={(e) => setFeatureKey(e.target.value)}
+            data-testid="feature-key"
+          />
+        </label>
+      )}
       {!compact && layers.length > 0 && (
         <label className="field">
           <span className="field-label">Expression values to convert</span>

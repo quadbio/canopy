@@ -62,6 +62,10 @@ class ConvertOptions:
     memory_bytes: int = 2 * 2**30
     tmp_dir: Path | None = None
     job: int = 0  # job id, in the temporary folders' names (`c0.tmp-j<job>-…`)
+    # SpatialData: the points column holding the genes, when it cannot be inferred.
+    feature_key: str | None = None
+    # Threads for block-wise work (image and mask pyramids); bounded on shared hosts.
+    threads: int = 4
 
 
 @dataclass
@@ -84,14 +88,14 @@ def table_memory_estimate(info: AnnDataInfo) -> int:
     return frame(info.n_obs, info.obs.columns) + frame(info.n_vars, info.var.columns)
 
 
-def job_memory_estimate(fp: Fingerprint) -> int:
+def job_memory_estimate(fp: Fingerprint, threads: int = 4) -> int:
     """Memory a conversion reads whole besides the matrix budget (for the memory guard)."""
     if fp.anndata is not None:
         return table_memory_estimate(fp.anndata)
     if fp.spatialdata is not None:
         from dbx.convert.spatialdata import spatial_memory_estimate
 
-        return spatial_memory_estimate(fp)
+        return spatial_memory_estimate(fp, threads)
     return 0
 
 
@@ -196,18 +200,17 @@ def convert_anndata(
                 dbx_version=dbx.__version__,
                 created=datetime.now(UTC).isoformat(timespec="seconds"),
                 duration_s=round(time.monotonic() - t0, 1),
+                peak_rss_gb=peak_rss_gb(),
                 warnings=warnings,
             ),
             tables={TABLE: entry},
         )
-        (tmp / MANIFEST).write_text(json.dumps(manifest.model_dump(mode="json"), indent=2))
+        write_manifest(tmp, manifest)
         with timed("convert/validate", version=version) as extra:
             report = validate_store(tmp, deep=True)
             extra.update(errors=len(report.errors), warnings=len(report.warnings))
         if not report.ok:
-            # the messages name columns and elements: a name field (tokenised at strict)
-            log.error("store_invalid", version=version, details=report.errors[:20])
-            raise ConversionError("store_invalid", "the converted store failed validation")
+            log_invalid(log, version, report)
         if version_stamp(src) != stamp:
             raise ConversionError("source_changed", "the file changed during the conversion")
         prog("finish", 0.9)
@@ -353,14 +356,18 @@ STORE_BYTES_PER_VALUE = 8
 DISK_MARGIN = 1.1
 
 
-def _check_disk(
-    store_parent: Path, spill_root: Path, m: MatrixInfo, version: str, log: Any
-) -> None:
-    """Refuse to start when the cache or the spill folder lacks the space the job needs."""
+def disk_need(m: MatrixInfo) -> tuple[int, int]:
+    """Bytes of (store, spill files) a table's conversion writes."""
     n_obs, n_vars = m.shape
     values = (m.nnz or 0) if m.encoding != "dense" else n_obs * n_vars
     spill = 0 if m.encoding == "csc" else int(values * SPILL_BYTES_PER_VALUE * DISK_MARGIN)
-    store = int(values * STORE_BYTES_PER_VALUE * DISK_MARGIN)
+    return int(values * STORE_BYTES_PER_VALUE * DISK_MARGIN), spill
+
+
+def check_disk(
+    store_parent: Path, spill_root: Path, store: int, spill: int, version: str, log: Any
+) -> None:
+    """Refuse to start when the cache or the spill folder lacks the space the job needs."""
     store_parent.mkdir(parents=True, exist_ok=True)
     spill_root.mkdir(parents=True, exist_ok=True)
     same = os.stat(store_parent).st_dev == os.stat(spill_root).st_dev
@@ -381,6 +388,41 @@ def _check_disk(
                 "not_enough_disk",
                 f"needs {need / 2**30:.1f} GB free, {free / 2**30:.1f} GB available",
             )
+
+
+def _check_disk(
+    store_parent: Path, spill_root: Path, m: MatrixInfo, version: str, log: Any
+) -> None:
+    check_disk(store_parent, spill_root, *disk_need(m), version, log)
+
+
+def write_manifest(tmp: Path, manifest: Manifest) -> None:
+    """manifest.json; a non-finite number (which JSON cannot hold) fails the conversion."""
+    try:
+        text = json.dumps(manifest.model_dump(mode="json"), indent=2, allow_nan=False)
+    except ValueError as e:
+        raise ConversionError(
+            "manifest_not_finite", "a NaN or infinite value in the manifest"
+        ) from e
+    (tmp / MANIFEST).write_text(text)
+
+
+def log_invalid(log: Any, version: str, report: Any) -> None:
+    """Log why a store failed validation (readable at strict: names tokenised, problems kept)
+    and fail the conversion."""
+    log.error(
+        "store_invalid", version=version, n_errors=len(report.errors), problems=report.problems()
+    )
+    raise ConversionError("store_invalid", "the converted store failed validation")
+
+
+def peak_rss_gb() -> float:
+    """This process's peak resident memory so far, in GB."""
+    import resource
+    import sys
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round((peak if sys.platform == "darwin" else peak * 1024) / 2**30, 2)
 
 
 def _colours(root: Any, obs: pd.DataFrame, warnings: list[str]) -> dict[str, Any]:

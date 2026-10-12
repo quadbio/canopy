@@ -3,7 +3,7 @@
 // table (colour/gpu.ts), the settings fields and the legend. A view keeps these parameters
 // under the same names (`ColourParams`), so they are remembered and reset alike.
 
-import { useCallback, useMemo } from 'react';
+import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react';
 
 import { useGene, useGenes, useMeta, useObs, useObsLabels } from '../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList, GeneVector } from '../api/types';
@@ -37,7 +37,7 @@ import { assignSlots } from '../colour/slots';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
-import { Field, type OptionGroup, Select } from '../ui/controls';
+import { ColourInput, Field, type OptionGroup, Select } from '../ui/controls';
 import { GeneSearch } from '../ui/GeneSearch';
 import type { ViewOutput } from './registry';
 
@@ -568,6 +568,26 @@ function ColourBar({ colormap, range }: { colormap: ColormapName; range: [number
   );
 }
 
+/** One Tab stop for a list of rows with two controls each (colour, name): the arrow keys move
+ * between rows (up, down) and controls (left, right). */
+function useRoving() {
+  const [at, setAt] = useState<[number, number]>([0, 1]);
+  const ref = useRef<HTMLUListElement>(null);
+  const tab = (row: number, col: number) => (row === at[0] && col === at[1] ? 0 : -1);
+  const onKeyDown = (e: KeyboardEvent) => {
+    const rows = ref.current?.querySelectorAll('li').length ?? 0;
+    const moves: Record<string, [number, number]> = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    const m = moves[e.key];
+    if (!m || !rows) return;
+    e.preventDefault();
+    const next: [number, number] = [Math.min(rows - 1, Math.max(0, at[0] + m[0])), Math.min(1, Math.max(0, at[1] + m[1]))];
+    setAt(next);
+    const li = ref.current?.querySelector(`li[data-row="${next[0]}"]`);
+    (li?.querySelectorAll<HTMLElement>('input, button')[next[1]])?.focus();
+  };
+  return { ref, tab, onKeyDown };
+}
+
 export function ColourLegend({
   spec,
   output,
@@ -578,6 +598,7 @@ export function ColourLegend({
   compact: boolean;
 }) {
   const update = useWorkspace((s) => s.updateParams);
+  const roving = useRoving();
   const p = spec.params;
   const data = output.legend as ColourLegendData | undefined;
   if (!data) return null;
@@ -627,33 +648,29 @@ export function ColourLegend({
         )}
       </div>
       {!collapsed && data.extended && (
-        <p className="legend-note">More categories than colours: in-between colours added.</p>
+        <p className="legend-note">More categories than the palette has colours: in-between colours added (extended palette).</p>
       )}
       {!collapsed && (
-        <ul className="legend-list">
+        <ul className="legend-list" onKeyDown={(e) => roving.onKeyDown(e)} ref={roving.ref}>
           {data.order
             .filter((i) => data.counts[i] > 0)
-            .map((i) => {
+            .map((i, row) => {
               const c = data.labels[i];
               return (
-                <li key={c} className={`legend-row${hidden.has(c) ? ' off' : ''}`}>
-                  <label className="swatch-pick" title={`Change the colour of ${c}`}>
-                    <input
-                      type="color"
-                      aria-label={`Colour of ${c}`}
-                      value={rgbToHex(data.colours[i])}
-                      onChange={(e) => pick(c, e.target.value)}
-                    />
-                    <span
-                      className={`swatch${data.custom[i] ? ' custom' : ''}`}
-                      style={{ background: `rgb(${data.colours[i].join(',')})` }}
-                    />
-                  </label>
+                <li key={c} className={`legend-row${hidden.has(c) ? ' off' : ''}`} data-row={row}>
+                  <ColourInput
+                    label={`Colour of ${c}`}
+                    value={rgbToHex(data.colours[i])}
+                    onChange={(hex) => pick(c, hex)}
+                    tabIndex={roving.tab(row, 0)}
+                    swatchClass={`swatch${data.custom[i] ? ' custom' : ''}`}
+                  />
                   <button
                     className={`legend-item${hidden.has(c) ? ' off' : ''}`}
                     onClick={() => toggle(c)}
                     aria-pressed={!hidden.has(c)}
                     title={hidden.has(c) ? 'Show' : 'Hide'}
+                    tabIndex={roving.tab(row, 1)}
                   >
                     <span className="legend-name">{c}</span>
                     <span className="legend-count">{data.counts[i].toLocaleString()}</span>

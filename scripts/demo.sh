@@ -39,7 +39,8 @@ PY
 generated="$repo/.cache/generated"
 mkdir -p "$generated"
 if [ ! -f "$generated/example_with_layers.h5ad" ] || [ "$repo/backend/dbx/synth/demo.py" -nt "$generated/example_with_layers.h5ad" ]; then
-  dbx synth demo "$repo/.cache/generated-part.h5ad" >/dev/null && mv "$repo/.cache/generated-part.h5ad" "$generated/example_with_layers.h5ad"
+  part="$(mktemp "$generated/.example-XXXXXX")"  # own name: demo and e2e may run at once
+  dbx synth demo "$part" >/dev/null && mv "$part" "$generated/example_with_layers.h5ad"
 fi
 
 large="$repo/.cache/demo-large"

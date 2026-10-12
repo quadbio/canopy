@@ -510,7 +510,7 @@ test('split by a column: one panel per category, linked zoom, one legend', async
   const before = await uploaded();
   const oneCopy = before - start; // all points of the dataset, once
   await page.getByTestId('split-select').click();
-  await page.getByRole('option', { name: /^embryo/ }).click();
+  await page.getByRole('option', { name: /^embryo/, disabled: false }).click();
   await expect(cell.getByTestId('panel')).toHaveCount(3);
   await expect(cell.getByTestId('panel').first()).toContainText('·');
   await expect(page.getByTestId('legend')).toHaveCount(1);
@@ -531,8 +531,19 @@ test('split by a column: one panel per category, linked zoom, one legend', async
   // each panel filling its space: embryo1 (smaller than embryo3) is zoomed in further
   await page.getByTestId('view-cell').first().getByRole('button', { name: 'Fit to data' }).click();
   const shared = Number(await cell.getAttribute('data-zoom'));
-  await page.getByTestId('same-scale').locator('input').uncheck();
+  await page.getByTestId('panel-fit').click();
+  await page.getByRole('option', { name: 'Fill each panel' }).click();
   await expect.poll(async () => Number(await cell.getAttribute('data-zoom'))).toBeGreaterThan(shared + 0.5);
+
+  // a UMAP split shows the same area in every panel (positions compare)
+  await page.getByTestId('panel-fit').click();
+  await page.getByRole('option', { name: 'Same area' }).click();
+  await page.getByTestId('embedding-select').click();
+  await page.getByRole('option', { name: /^X_umap/ }).first().click();
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  await expect.poll(() => panelStates(page)).toHaveLength(3);
+  const states = await panelStates(page);
+  for (const st of states) expect(st).toEqual(states[0]);
 
   // back to one panel
   await page.getByTestId('split-select').click();
@@ -582,9 +593,35 @@ test('spatial view: convert a SpatialData store, see image, coloured cells and t
   await page.waitForTimeout(1500);
   expect(await colourShare(page, cell, [255, 77, 77], 40, { x0: 0, x1: 0.6 })).toBeGreaterThan(0.0005);
   await page.screenshot({ path: 'test-results/screens/spatial-transcripts.png' });
-  // only Viv's two zarr-v2 probes may be missing (.zattrs, .zgroup per image opened)
-  expect(errors.filter((e) => !/404/.test(e))).toEqual([]);
-  expect(errors.filter((e) => /404/.test(e)).length).toBeLessThanOrEqual(2);
+  // no errors, and no 404s (zarr v2 probes are answered without a request)
+  expect(errors).toEqual([]);
+});
+
+test('spatial view: switching filled and outlined cells, and settings that keep the polygons', async ({ page }) => {
+  test.setTimeout(180_000);
+  const errors = collectErrors(page);
+  await page.addInitScript(countUploads);
+  await freshPage(page);
+  await openSpatial(page);
+  const cell = page.getByTestId('view-cell').first();
+  await page.waitForTimeout(1500);
+  for (const style of ['Outlines', 'Filled', 'Outlines']) {
+    await page.getByTestId('cell-style').click();
+    await page.getByRole('option', { name: style }).click();
+    await page.waitForTimeout(800);
+    // drawn in their category colours after every switch (not blank, not one colour)
+    expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 }), 0.0005).length, style).toBeGreaterThan(6);
+  }
+  await page.screenshot({ path: 'test-results/screens/spatial-outlines.png' });
+  // opacity and transcript size send no polygon data again (no new triangulation)
+  const uploaded = () => page.evaluate(() => (window as unknown as { __uploaded: number }).__uploaded);
+  const before = await uploaded();
+  const opacity = page.getByRole('slider', { name: 'Cell opacity' });
+  await opacity.focus();
+  for (let i = 0; i < 3; i += 1) await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(400);
+  expect((await uploaded()) - before).toBeLessThan(20_000);
+  expect(errors).toEqual([]);
 });
 
 /** Converts region_1 if needed (once per test server) and opens its spatial view. */
@@ -601,6 +638,7 @@ async function openSpatial(page: Page) {
 
 test('spatial view of many cells: centres when zoomed out, outlines of the blocks in view', async ({ page }) => {
   test.setTimeout(180_000);
+  const errors = collectErrors(page);
   // as if the cells were many: outlines are read by blocks, and drawn with at most 2,000 in view
   await page.goto('/?outlines=1000&cellsInView=2000');
   await page.evaluate(() => localStorage.clear());
@@ -610,13 +648,43 @@ test('spatial view of many cells: centres when zoomed out, outlines of the block
   await expect(page.getByTestId('view-caption')).toContainText('centres');
   const box = (await cell.boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
-  // zoom in step by step until the outlines of the cells in view replace the centres
+  // zoom in step by step until outlines of the cells in view start to load...
   for (let i = 0; i < 20 && /centres/.test((await page.getByTestId('view-caption').textContent()) ?? ''); i += 1) {
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(400);
   }
+  // ...then they all arrive without further zooming (none fails silently)
   await expect(page.getByTestId('view-caption')).toHaveText('6.1 k cells', { timeout: 20_000 });
+  await expect(page.getByTestId('view-problem')).toHaveCount(0);
   await page.waitForTimeout(800);
   await page.screenshot({ path: 'test-results/screens/spatial-blocks.png' });
   expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 }), 0.001).length).toBeGreaterThan(4);
+  // outlines of blocks take each cell's own colour (not one colour for all)
+  await page.getByTestId('cell-style').click();
+  await page.getByRole('option', { name: 'Outlines' }).click();
+  await page.waitForTimeout(800);
+  expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 }), 0.0005).length).toBeGreaterThan(4);
+  await page.screenshot({ path: 'test-results/screens/spatial-blocks-outlines.png' });
+  // panning away and back reads what it has seen from the cache, with no failed reads
+  const stats = () => page.evaluate(() => (window as unknown as { __dbxStoreStats: () => Record<string, number> }).__dbxStoreStats());
+  await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.1, box.y + box.height * 0.45, { steps: 5 });
+  await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(1000);
+  const s = await stats();
+  expect(s.failures).toBe(0);
+  expect(errors).toEqual([]);
 });
+
+/** The view states of the canvas's panels (deck.gl views). */
+async function panelStates(page: Page) {
+  return page.evaluate(() => {
+    const deck = (window as unknown as { __dbxDeck?: { deck?: { props: { viewState: Record<string, { target: number[]; zoom: number }> } } } }).__dbxDeck?.deck;
+    const vs = deck?.props.viewState ?? {};
+    return Object.keys(vs)
+      .filter((k) => !k.endsWith('/main'))
+      .map((k) => ({ target: vs[k].target.map((v) => Math.round(v * 1000) / 1000), zoom: Math.round(vs[k].zoom * 1000) / 1000 }));
+  });
+}

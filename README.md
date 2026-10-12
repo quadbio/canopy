@@ -107,12 +107,20 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   ADR 0011. The spatial view needs the converted copy.
 - Config `[jobs]`: `max_running` (1), `memory_gb` (2: working memory of one conversion; a job starts
   only with 1.5 × this free and is stopped beyond 2 × this + 1 GB), `tmp_dir` (spill files, about
-  12 bytes per stored value; default `<cache>/tmp`).
+  12 bytes per stored value; default `<cache>/tmp`), `threads` (4: threads of one conversion for
+  image and mask pyramids; each holds one source block, so this bounds memory and CPU on a shared
+  host).
 - Each job runs in its own process and logs to `dbx-worker-<pid>.jsonl` next to the server's log.
 - One server per cache folder (`server.lock`). A converted dataset is converted again only with
   `"force": true`. Free disk is checked before a job (about 20 bytes per stored value).
 - Sizing: a conversion needs about 0.3 GB + 1.2–1.5 × `jobs.memory_gb` + its obs/var (about 80
   bytes per cell plus the columns). For atlases of 10⁷–10⁸ cells set `memory_gb` to 16–64.
+  SpatialData conversions also hold transcripts (about 150 bytes each) and cell outlines (about
+  2.6 KB each) in memory, and `threads` image or mask blocks; a job that needs more than the
+  host has in total fails at once (`not_enough_memory`), see bench/README.md.
+- SpatialData whose transcripts have no declared gene column and several candidates: the
+  conversion fails with "Could not tell which transcript column holds the genes" and the
+  details then ask for the column name (API: `{"feature_key": "<column>"}`).
 - `dbx cache prune [--dry-run]` removes converted stores of dataset versions the catalog no
   longer knows (changed or removed files) and leftovers of failed conversions; run it with the
   server stopped.

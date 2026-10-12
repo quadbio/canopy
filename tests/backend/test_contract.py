@@ -346,3 +346,27 @@ def test_example_refuses_foreign_folder(tmp_path: Path) -> None:
     empty.mkdir()
     write_example_store(empty)
     write_example_store(empty)
+
+
+def test_non_finite_manifest_numbers_fail_and_problems_hide_names(
+    tmp_path: Path, store: Path
+) -> None:
+    from dbx.contract.validate import Report
+
+    bad = tmp_path / "bad"
+    shutil.copytree(store, bad)
+    text = (bad / "manifest.json").read_text()
+    m = json.loads(text)
+    pts = next(iter(m["points"].values()))
+    pts["bbox"][0] = float("nan")
+    (bad / "manifest.json").write_text(json.dumps(m))
+    rep = validate_store(bad)
+    assert not rep.ok and any("non-finite" in e for e in rep.errors)
+
+    r = Report(store="x")
+    r.error("tables/my_table", "obs/patient_42 missing")
+    r.error("images/img", "channel 'CD3 secret' window [0, 1] outside uint8")
+    assert r.problems() == [
+        {"element": "tables/my_table", "problem": "obs/<name> missing"},
+        {"element": "images/img", "problem": "channel <name> window [0, 1] outside uint8"},
+    ]

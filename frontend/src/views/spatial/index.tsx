@@ -7,24 +7,30 @@
 // Reading: the image tile by tile (only what is on screen). Cell outlines whole up to
 // MAX_VERTICES; for more, cell centres, and the outlines of the blocks in view once at most
 // OUTLINE_BUDGET cells are in view. Transcripts per gene: its range of the gene-sorted store; a
-// gene above the store's cap shows its even sample, and when zoomed in (at most IN_VIEW_POINTS
-// expected in view) the chunks of its range in view.
+// gene above the store's cap shows its even sample, and when zoomed in (its chunks in view hold
+// at most IN_VIEW_POINTS) the chunks of its range in view. Chunks are cached by api/store.ts, so
+// panning reads only new ones; stale reads are cancelled.
+//
+// Drawing: each polygon source (all cells, or one block) keeps one data object with its colour
+// values while they do not change, so other settings (opacity, sizes, transcripts) never make
+// deck.gl cut the polygons into triangles again. Filled and outlined cells are different layer
+// types with different ids.
 
 import { type Layer } from '@deck.gl/core';
 import { PathLayer, ScatterplotLayer, type ScatterplotLayerProps, SolidPolygonLayer } from '@deck.gl/layers';
-import { loadOmeZarr, MultiscaleImageLayer } from '@hms-dbmi/viv';
+import { loadOmeZarrFromStore, MultiscaleImageLayer } from '@hms-dbmi/viv';
 import { Matrix4 } from '@math.gl/core';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { useMeta } from '../../api/queries';
 import {
   type Affine,
+  elementStore,
   type Manifest,
-  readArray,
   readAttrs,
-  slice,
-  storeUrl,
+  readRows,
+  readWhole,
   useManifest,
   useStoreArray,
 } from '../../api/store';
@@ -32,7 +38,7 @@ import type { DatasetMeta, GeneList } from '../../api/types';
 import { MISSING_VALUE, type ValueColour, ValueColourExtension } from '../../colour/gpu';
 import { hexToRgb } from '../../colour/palettes';
 import { event } from '../../telemetry/telemetry';
-import { Field, formatCount, Help, RangeSlider, Select, Slider } from '../../ui/controls';
+import { ColourInput, Field, formatCount, Help, RangeSlider, Select, Slider } from '../../ui/controls';
 import { GeneSearch } from '../../ui/GeneSearch';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
 import {
@@ -63,6 +69,7 @@ export interface SpatialParams extends ColourParams {
   cellOpacity: number;
   transcripts: string | null; // points element; null: the first; '': none
   genes: string[]; // transcripts shown
+  geneColours: Record<string, string>; // gene → its colour (kept while shown)
   pointSize: number;
 }
 
@@ -87,8 +94,29 @@ const POLY_BLOCK = 4_096; // polygons per block (contract)
 const POINT_CHUNK = 16_384; // transcript rows per chunk (contract)
 export const MAX_GENES = 6;
 const MAX_CHANNELS = 6; // Viv's limit
-// Distinct colours for transcripts of up to MAX_GENES genes (bright on dark images).
-export const GENE_COLOURS = ['#ff4d4d', '#4dd2ff', '#ffd24d', '#7dff4d', '#ff4dff', '#ffffff'];
+// Distinct colours for transcripts of up to MAX_GENES genes (bright on dark images, and visible
+// on the light canvas when no image is shown). A gene keeps its colour while it is shown.
+export const GENE_COLOURS = ['#ff4d4d', '#4dd2ff', '#ffd24d', '#7dff4d', '#ff4dff', '#ff9f40'];
+
+/** Each shown gene's colour: the saved one, else the first not taken (in the order added). */
+export function geneColours(genes: string[], saved: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  const taken = new Set<string>();
+  for (const g of genes) {
+    const c = saved[g];
+    if (c && GENE_COLOURS.includes(c) && !taken.has(c)) {
+      out[g] = c;
+      taken.add(c);
+    }
+  }
+  for (const g of genes) {
+    if (out[g]) continue;
+    const c = GENE_COLOURS.find((x) => !taken.has(x)) ?? GENE_COLOURS[0];
+    out[g] = c;
+    taken.add(c);
+  }
+  return out;
+}
 const VALUE_COLOUR = new ValueColourExtension();
 
 /** The inverse of a 3×3 affine (row-major). */
@@ -179,11 +207,14 @@ export function channelSettings(p: SpatialParams, m: Manifest, image: string): C
   if (saved && saved.length === img.channels.length) return saved;
   // the first three channels with any signal (an empty channel's window spans one value)
   let shown = 0;
-  return img.channels.map((c) => ({
+  const out = img.channels.map((c) => ({
     on: c.window[1] - c.window[0] > 1 && shown++ < 3,
     colour: c.color ?? '#ffffff',
     window: c.window,
   }));
+  // one channel on its own in pure blue or red is nearly black: grey scale reads better
+  if (shown === 1) for (const c of out) if (c.on) c.colour = '#ffffff';
+  return out;
 }
 
 function normaliseParams(raw: unknown): SpatialParams | null {
@@ -219,6 +250,14 @@ function normaliseParams(raw: unknown): SpatialParams | null {
     cellOpacity: num(r.cellOpacity, 0, 1, 0.8),
     transcripts: str(r.transcripts),
     genes: Array.isArray(r.genes) ? r.genes.filter((g): g is string => typeof g === 'string').slice(0, MAX_GENES) : [],
+    geneColours:
+      r.geneColours && typeof r.geneColours === 'object'
+        ? Object.fromEntries(
+            Object.entries(r.geneColours as Record<string, unknown>).filter(
+              (e): e is [string, string] => typeof e[1] === 'string' && GENE_COLOURS.includes(e[1]),
+            ),
+          )
+        : {},
     pointSize: num(r.pointSize, 0.5, 10, 1.5),
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
   };
@@ -236,12 +275,12 @@ interface Polygons {
 function useCells(version: string | undefined, path: string | null, load: boolean) {
   return useQuery({
     queryKey: ['store-polygons', version, path],
-    queryFn: async (): Promise<Polygons> => {
+    queryFn: async ({ signal }): Promise<Polygons> => {
       const t0 = performance.now();
       const [starts, vertices, row] = await Promise.all([
-        readArray(version!, `${path}/starts`),
-        readArray(version!, `${path}/vertices`),
-        readArray(version!, `${path}/row`),
+        readWhole(version!, `${path}/starts`, { signal }),
+        readWhole(version!, `${path}/vertices`, { signal }),
+        readWhole(version!, `${path}/row`, { signal }),
       ]);
       const v = vertices.data as Float32Array;
       let x0 = Infinity;
@@ -265,19 +304,19 @@ function useCells(version: string | undefined, path: string | null, load: boolea
     enabled: !!version && !!path && load,
     staleTime: Infinity,
     gcTime: 60_000,
-    retry: false,
+    retry: 1,
   });
 }
 
-async function readBlock(version: string, path: string, n: number, b: number): Promise<Polygons> {
+async function readBlock(version: string, path: string, n: number, b: number, signal?: AbortSignal): Promise<Polygons> {
   const s0 = b * POLY_BLOCK;
   const s1 = Math.min(n, s0 + POLY_BLOCK);
-  const starts = (await readArray(version, `${path}/starts`, [slice(s0, s1 + 1)])).data;
+  const starts = (await readRows(version, `${path}/starts`, s0, s1 + 1, { signal })).data;
   const v0 = Number(starts[0]);
   const v1 = Number(starts[s1 - s0]);
   const [verts, row] = await Promise.all([
-    readArray(version, `${path}/vertices`, [slice(v0, v1), null]),
-    readArray(version, `${path}/row`, [slice(s0, s1)]),
+    readRows(version, `${path}/vertices`, v0, v1, { signal }),
+    readRows(version, `${path}/row`, s0, s1, { signal }),
   ]);
   const local = new Uint32Array(s1 - s0 + 1);
   for (let i = 0; i < local.length; i += 1) local[i] = Number(starts[i]) - v0;
@@ -296,6 +335,31 @@ function vertexValues(p: Polygons, values: Float32Array | null): Float32Array {
   return out;
 }
 
+type Attr = { value: Float32Array; size: number };
+/** deck.gl binary data of one polygon source, for filled (`fill`) and outlined (`line`) cells. */
+interface PolyData {
+  poly: Polygons;
+  values: Float32Array | null;
+  attr: Attr;
+  fill: unknown;
+  line: unknown;
+}
+
+/** One data object per polygon source and colour values (deck.gl compares data by identity:
+ * a new object makes it triangulate every polygon again). */
+function polyData(poly: Polygons, values: Float32Array | null, prev: PolyData | undefined): PolyData {
+  if (prev && prev.poly === poly && prev.values === values) return prev;
+  const attr = { value: vertexValues(poly, values), size: 1 };
+  const base = { length: poly.row.length, startIndices: poly.starts };
+  return {
+    poly,
+    values,
+    attr,
+    fill: { ...base, attributes: { getPolygon: { value: poly.vertices, size: 2 }, getColourValue: attr } },
+    line: { ...base, attributes: { getPath: { value: poly.vertices, size: 2 }, getColourValue: attr } },
+  };
+}
+
 function gatherByRow(rows: Int32Array, values: Float32Array | null): Float32Array {
   const out = new Float32Array(rows.length);
   for (let i = 0; i < rows.length; i += 1) {
@@ -308,16 +372,16 @@ function gatherByRow(rows: Int32Array, values: Float32Array | null): Float32Arra
 function useFeatures(version: string | undefined, path: string | null) {
   return useQuery({
     queryKey: ['store-features', version, path],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const attrs = await readAttrs(version!, path!);
       const names = ((attrs.dbx as { features?: string[] } | undefined)?.features ?? []).map(String);
-      const offsets = await readArray(version!, `${path}/offsets`);
-      const lod = await readArray(version!, `${path}/lod/offsets`);
+      const offsets = await readWhole(version!, `${path}/offsets`, { signal });
+      const lod = await readWhole(version!, `${path}/lod/offsets`, { signal });
       return { names, offsets: offsets.data as ArrayLike<number>, lod: lod.data as ArrayLike<number> };
     },
     enabled: !!version && !!path,
     staleTime: Infinity,
-    retry: false,
+    retry: 1,
   });
 }
 
@@ -348,7 +412,8 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     queryKey: ['viv', version, el?.image],
     queryFn: async () => {
       const t0 = performance.now();
-      const r = await loadOmeZarr(`${storeUrl(version!)}/${imageEntry!.path}`, { type: 'multiscales' });
+      // our store: no browser cache (B-B2), retries, counted reads, no zarr v2 probes
+      const r = await loadOmeZarrFromStore(elementStore(version!, imageEntry!.path) as never);
       event('image_opened', performance.now() - t0, { levels: r.data.length });
       return r.data;
     },
@@ -384,10 +449,10 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
   const blocks = useQueries({
     queries: blocksInView.map((b) => ({
       queryKey: ['store-block', version, shapes?.path, b],
-      queryFn: () => readBlock(version!, shapes!.path, shapes!.n, b),
+      queryFn: ({ signal }: { signal: AbortSignal }) => readBlock(version!, shapes!.path, shapes!.n, b, signal),
       staleTime: Infinity,
       gcTime: 30_000,
-      retry: false,
+      retry: 1,
     })),
   });
   const centroidRows = useStoreArray(version, shapes && !whole ? `${shapes.path}/row` : null);
@@ -396,17 +461,36 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
   // cells colour only when their table is the view's table
   const colourCells = !!shapes && shapes.table === el?.table;
   const values = colourCells ? (colouring.values?.value ?? null) : null;
-  const vertexAttr = useMemo(
-    () => (polys.data ? { value: vertexValues(polys.data, values), size: 1 } : null),
-    [polys.data, values],
-  );
-  const blockAttrs = useMemo(
-    () => blocks.map((q) => (q.data ? { value: vertexValues(q.data, values), size: 1 } : null)),
-    [blocks.map((q) => q.dataUpdatedAt).join(','), values], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const outlinesReady = blocksInView.length > 0 && blocks.every((q) => q.data);
+  // one data object per polygon source while its colour values stay the same
+  const polyCache = useRef(new Map<string, PolyData>());
+  const wholeData = useMemo(() => {
+    if (!polys.data) return null;
+    const d = polyData(polys.data, values, polyCache.current.get('cells'));
+    polyCache.current.set('cells', d);
+    return d;
+  }, [polys.data, values]);
+  const blocksKey = blocks.map((q) => q.dataUpdatedAt).join(',');
+  const blockData = useMemo(() => {
+    const next = new Map<string, PolyData>();
+    const out = blocks.map((q, k) => {
+      if (!q.data) return null;
+      const key = `b${blocksInView[k]}`;
+      const d = polyData(q.data, values, polyCache.current.get(key));
+      next.set(key, d);
+      return d;
+    });
+    if (wholeData) next.set('cells', wholeData);
+    polyCache.current = next;
+    return out;
+  }, [blocksKey, values, wholeData]); // eslint-disable-line react-hooks/exhaustive-deps
+  const failedBlocks = blocks.filter((q) => q.error).length;
+  const loadedBlocks = blocks.filter((q) => q.data).length;
+  const outlinesReady = blocksInView.length > 0 && loadedBlocks + failedBlocks === blocksInView.length && loadedBlocks > 0;
   const pointRows = centroidRows.data?.data as Int32Array | undefined;
   const pointAttr = useMemo(() => (pointRows ? { value: gatherByRow(pointRows, values), size: 1 } : null), [pointRows, values]);
+  useEffect(() => {
+    if (failedBlocks) event('spatial_blocks_failed', null, { failed: failedBlocks, of: blocksInView.length });
+  }, [failedBlocks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- transcripts
   const points = m && el?.transcripts ? m.points[el.transcripts] : null;
@@ -414,37 +498,31 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
   const chunkBox = useStoreArray(version, points ? `${points.path}/chunk_bbox` : null);
   const pAffine = points && system ? points.transforms[system] : null;
   const pRect = useMemo(() => (extent && pAffine ? transformBox(invert(pAffine), extent) : null), [extent, pAffine]);
-  // the share of the transcripts' area in view (for "how many would be in view")
-  const pShare = useMemo(() => {
-    if (!pRect || !points) return 1;
-    const [x0, y0, x1, y1] = points.bbox;
-    const w = Math.max(0, Math.min(x1, pRect[2]) - Math.max(x0, pRect[0]));
-    const h = Math.max(0, Math.min(y1, pRect[3]) - Math.max(y0, pRect[1]));
-    return Math.min(1, (w * h) / Math.max((x1 - x0) * (y1 - y0), 1e-12));
-  }, [pRect, points]);
+  const colours = geneColours(p.genes, p.geneColours ?? {});
   const geneReads = useQueries({
     queries: p.genes.map((g) => {
       const f = features.data ? features.data.names.indexOf(g) : -1;
       const lo = f >= 0 ? Number(features.data!.offsets[f]) : 0;
       const hi = f >= 0 ? Number(features.data!.offsets[f + 1]) : 0;
       const big = !!points && hi - lo > points.lod_cap;
-      // a common gene zoomed in: its chunks in view (else its even sample)
-      const inView = big && !!pRect && !!chunkBox.data && (hi - lo) * pShare <= IN_VIEW_POINTS;
+      // a common gene zoomed in: its chunks in view, when they hold few enough transcripts
+      const parts =
+        big && pRect && chunkBox.data
+          ? boxesInView(chunkBox.data.data, pRect, Math.floor(lo / POINT_CHUNK), Math.ceil(hi / POINT_CHUNK))
+          : null;
+      const inView = !!parts && parts.length * POINT_CHUNK <= IN_VIEW_POINTS;
       return {
-        queryKey: ['store-transcripts', version, points?.path, g, inView ? pRect : null],
-        queryFn: async () => {
+        queryKey: ['store-transcripts', version, points?.path, g, inView ? parts!.join(',') : null],
+        queryFn: async ({ signal }: { signal: AbortSignal }) => {
           if (f < 0) return null;
           const t0 = performance.now();
           let xy: Float32Array;
           let mode: 'all' | 'sample' | 'in view';
+          const path = `${points!.path}/xy`;
           if (inView) {
-            const parts = boxesInView(chunkBox.data!.data, pRect!, Math.floor(lo / POINT_CHUNK), Math.ceil(hi / POINT_CHUNK));
             const reads = await Promise.all(
-              parts.map((k) =>
-                readArray(version!, `${points!.path}/xy`, [
-                  slice(Math.max(lo, k * POINT_CHUNK), Math.min(hi, (k + 1) * POINT_CHUNK)),
-                  null,
-                ]),
+              parts!.map((k) =>
+                readRows(version!, path, Math.max(lo, k * POINT_CHUNK), Math.min(hi, (k + 1) * POINT_CHUNK), { signal }),
               ),
             );
             xy = new Float32Array(reads.reduce((a, r) => a + r.data.length, 0));
@@ -456,20 +534,20 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
             mode = 'in view';
           } else if (big) {
             const [a, b] = [Number(features.data!.lod[f]), Number(features.data!.lod[f + 1])];
-            xy = (await readArray(version!, `${points!.path}/lod/xy`, [slice(a, b), null])).data as Float32Array;
+            xy = (await readRows(version!, `${points!.path}/lod/xy`, a, b, { signal })).data as Float32Array;
             mode = 'sample';
           } else {
-            xy = (await readArray(version!, `${points!.path}/xy`, [slice(lo, hi), null])).data as Float32Array;
+            xy = (await readRows(version!, path, lo, hi, { signal })).data as Float32Array;
             mode = 'all';
           }
-          event('transcripts_loaded', performance.now() - t0, { n: xy.length / 2, mode });
+          event('transcripts_loaded', performance.now() - t0, { n: xy.length / 2, mode, chunks: parts?.length ?? 0 });
           return { gene: g, xy, n: hi - lo, mode };
         },
         placeholderData: (prev: unknown) => prev as never,
         enabled: !!features.data && !!points,
         staleTime: Infinity,
         gcTime: 30_000,
-        retry: false,
+        retry: 1,
       };
     }),
   });
@@ -498,17 +576,12 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     if (shapes && shapes.transforms[system]) {
       const mm = modelMatrix(shapes.transforms[system]);
       const vc = (colourCells ? valueColour : null) ?? CELL_BASE;
-      const outline = (name: string, poly: Polygons, attr: { value: Float32Array; size: number }) => {
-        const data = {
-          length: poly.row.length,
-          startIndices: poly.starts,
-          attributes: { getPolygon: { value: poly.vertices, size: 2 }, getColourValue: attr },
-        };
+      const cells = (name: string, d: PolyData) => {
         if (p.cellStyle === 'fill') {
           out.push(
             new SolidPolygonLayer({
-              id: id(name),
-              data: data as never,
+              id: id(`${name}-fill`),
+              data: d.fill as never,
               _normalize: false,
               filled: true,
               getFillColor: [...BASE_RGB, 255],
@@ -522,8 +595,8 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
         } else {
           out.push(
             new PathLayer({
-              id: id(name),
-              data: { ...data, attributes: { getPath: data.attributes.getPolygon, getColourValue: vertexAttr } } as never,
+              id: id(`${name}-line`),
+              data: d.line as never,
               _pathType: 'open',
               getColor: [...BASE_RGB, 255],
               getWidth: 1.2,
@@ -537,34 +610,45 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
           );
         }
       };
-      if (polys.data && vertexAttr) outline('cells', polys.data, vertexAttr);
-      else if ((centroids.data || circles.data) && pointAttr && !(outlinesReady && !circles.data)) {
-        const pos = (circles.data ?? centroids.data)!.data as Float32Array;
-        out.push(
-          new ScatterplotLayer({
-            id: id('cell-centres'),
-            data: {
-              length: pos.length / 2,
-              attributes: {
-                getPosition: { value: pos, size: 2 },
-                getColourValue: pointAttr,
-                ...(radius.data ? { getRadius: { value: radius.data.data as Float32Array, size: 1 } } : {}),
-              },
+      const centres = (name: string, pos: Float32Array, attr: Attr, r: Float32Array | null) =>
+        new ScatterplotLayer({
+          id: id(name),
+          data: {
+            length: pos.length / 2,
+            attributes: {
+              getPosition: { value: pos, size: 2 },
+              getColourValue: attr,
+              ...(r ? { getRadius: { value: r, size: 1 } } : {}),
             },
-            radiusUnits: radius.data ? 'common' : 'pixels',
-            getRadius: 2,
-            getFillColor: [...BASE_RGB, 255],
-            opacity: p.cellOpacity,
-            pickable: true,
-            modelMatrix: mm,
-            extensions: [VALUE_COLOUR],
-            valueColour: vc,
-          } as ScatterplotLayerProps & { valueColour: ValueColour }),
-        );
+          },
+          radiusUnits: r ? 'common' : 'pixels',
+          getRadius: 2,
+          getFillColor: [...BASE_RGB, 255],
+          opacity: p.cellOpacity,
+          pickable: true,
+          modelMatrix: mm,
+          extensions: [VALUE_COLOUR],
+          valueColour: vc,
+        } as ScatterplotLayerProps & { valueColour: ValueColour });
+      if (wholeData) cells('cells', wholeData);
+      else if (circles.data && pointAttr) {
+        out.push(centres('cell-centres', circles.data.data as Float32Array, pointAttr, (radius.data?.data as Float32Array) ?? null));
+      } else if (centroids.data && pointAttr && !outlinesReady) {
+        const pos = centroids.data.data as Float32Array;
+        if (!loadedBlocks) out.push(centres('cell-centres', pos, pointAttr, null));
+        else {
+          // while blocks load: centres only where outlines are not drawn yet
+          blocks.forEach((q, k) => {
+            if (q.data) return;
+            const b = blocksInView[k];
+            const [a, z] = [b * POLY_BLOCK, Math.min(shapes.n, (b + 1) * POLY_BLOCK)];
+            const sub = { value: pointAttr.value.subarray(a, z), size: 1 };
+            out.push(centres(`cell-centres-b${b}`, pos.subarray(2 * a, 2 * z), sub, null));
+          });
+        }
       }
-      blocks.forEach((q, k) => {
-        const attr = blockAttrs[k];
-        if (q.data && attr) outline(`cells-b${blocksInView[k]}`, q.data, attr);
+      blockData.forEach((d, k) => {
+        if (d) cells(`cells-b${blocksInView[k]}`, d);
       });
     }
     if (points && points.transforms[system]) {
@@ -572,7 +656,7 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       geneReads.forEach((q, k) => {
         const d = q.data;
         if (!d) return;
-        const rgb = hexToRgb(GENE_COLOURS[k % GENE_COLOURS.length]);
+        const rgb = hexToRgb(colours[d.gene] ?? GENE_COLOURS[k % GENE_COLOURS.length]);
         out.push(
           new ScatterplotLayer({
             id: id(`tx-${k}`),
@@ -588,7 +672,7 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       });
     }
     return out;
-  }, [m, system, imageEntry, loader.data, JSON.stringify(shownChannels), shapes, polys.data, vertexAttr, centroids.data, circles.data, radius.data, pointAttr, blockAttrs, outlinesReady, p.cellStyle, p.cellOpacity, p.pointSize, colourCells, valueColour, points, geneReads.map((q) => q.dataUpdatedAt).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [m, system, imageEntry, loader.data, JSON.stringify(shownChannels), shapes, wholeData, centroids.data, circles.data, radius.data, pointAttr, blockData, outlinesReady, loadedBlocks, p.cellStyle, p.cellOpacity, p.pointSize, colourCells, valueColour, points, JSON.stringify(colours), geneReads.map((q) => q.dataUpdatedAt).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- bounds: everything placed in the system
   const bounds = useMemo<Bounds | null>(() => {
@@ -611,34 +695,67 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     return union(boxes);
   }, [m, system, imageEntry, shapes, polys.data, blockBox.data, points]);
 
-  const blockData = blocks.map((q) => q.data);
   const tooltip = useCallback(
     (i: number, layer: string) => {
       if (!colourCells) return null;
-      const name = layer.slice(layer.lastIndexOf(':') + 1);
-      const rows = name === 'cells' ? polys.data?.row : name === 'cell-centres' ? pointRows : name.startsWith('cells-b') ? blockData[blocksInView.indexOf(Number(name.slice(7)))]?.row : undefined;
-      return rows && rows[i] >= 0 ? colouring.tooltip(rows[i]) : null;
+      const name = layer.slice(layer.lastIndexOf(':') + 1).replace(/-(fill|line)$/, '');
+      let rows: ArrayLike<number> | undefined;
+      let at = i;
+      if (name === 'cells') rows = polys.data?.row;
+      else if (name === 'cell-centres') rows = pointRows;
+      else if (name.startsWith('cell-centres-b')) {
+        rows = pointRows;
+        at = Number(name.slice(14)) * POLY_BLOCK + i;
+      } else if (name.startsWith('cells-b')) rows = blockData[blocksInView.indexOf(Number(name.slice(7)))]?.poly.row;
+      return rows && rows[at] >= 0 ? colouring.tooltip(rows[at]) : null;
     },
-    [colourCells, polys.data, pointRows, blockData.map((b) => (b ? 1 : 0)).join(''), blocksInView, colouring], // eslint-disable-line react-hooks/exhaustive-deps
+    [colourCells, polys.data, pointRows, blockData, blocksInView, colouring],
   );
   const loading = manifest.isLoading || loader.isLoading || polys.isLoading || features.isLoading;
   const fatal = meta.error ?? manifest.error;
-  const problem = loader.error ?? polys.error ?? features.error ?? colouring.error ?? geneReads.find((q) => q.error)?.error;
+  const failedGenes = geneReads.filter((q) => q.error).length;
+  const failedParts = [loader, polys, features, centroids, centroidRows, blockBox, chunkBox, circles, radius].filter((q) => q.error);
+  const problem =
+    failedParts[0]?.error ??
+    colouring.error ??
+    (failedBlocks ? new Error(`${failedBlocks} of ${blocksInView.length} outline blocks did not load`) : null) ??
+    (failedGenes ? new Error(`transcripts of ${failedGenes} gene${failedGenes > 1 ? 's' : ''} did not load`) : null);
+  const retry = () => {
+    for (const q of [...failedParts, ...blocks, ...geneReads]) if (q.error) void q.refetch();
+    colouring.retry();
+  };
+  const status: ViewOutput['status'] = fatal ? 'error' : bounds && !loading ? 'ready' : 'loading';
+  const t0 = useRef(performance.now());
+  const reported = useRef(false);
+  useEffect(() => {
+    if (status === 'ready' && !reported.current) {
+      reported.current = true;
+      event('view_ready', performance.now() - t0.current, {
+        type: 'spatial',
+        cells: shapes?.n ?? 0,
+        whole: whole,
+        image_levels: imageEntry?.levels.length ?? 0,
+        genes: p.genes.length,
+      });
+    }
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   return {
     layers,
     bounds,
+    // refit when the frame changes (another system), not when parts arrive after the user moved
+    fitKey: `${version}|${system}`,
     flipY: true,
-    status: fatal ? 'error' : bounds && !loading ? 'ready' : 'loading',
+    status,
     error: fatal
       ? String((fatal as Error).message)
       : meta.data && meta.data.mode !== 'converted'
         ? 'The spatial view needs the converted copy of this dataset.'
         : undefined,
     notice,
-    problem: problem ? { message: `Part of the view failed: ${(problem as Error).message}`, retry: colouring.retry } : undefined,
+    problem: problem ? { message: `Part of the view failed: ${(problem as Error).message}.`, retry } : undefined,
     tooltip,
     caption: shapes
-      ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' || outlinesReady ? '' : ' (centres; zoom in for outlines)'}`
+      ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' || outlinesReady ? '' : loadedBlocks ? ' (loading outlines…)' : ' (centres; zoom in for outlines)'}`
       : undefined,
     n: shapes?.n ?? 0,
     legend: colourCells ? colouring.legend : undefined,
@@ -652,6 +769,55 @@ const CELL_BASE: ValueColour = {
 };
 
 // ---------------------------------------------------------------- settings
+
+/** The slider's range for a channel: from the converter's window (a few times its top, so the
+ * track does not move while dragging), within the data type; never smaller than the setting. */
+export function contrastRange(stored: [number, number], current: [number, number], dtype: string) {
+  const cap = ({ uint8: 255, uint16: 65535, int16: 32767, uint32: 2 ** 32 - 1 } as Record<string, number>)[dtype];
+  const top = Math.max(stored[1] * 4, stored[0] + 1, current[1]);
+  const max = cap !== undefined ? Math.min(cap, niceCeil(top)) : niceCeil(top);
+  const min = Math.min(0, stored[0], current[0]);
+  const integer = cap !== undefined;
+  const step = integer ? Math.max(1, Math.round((max - min) / 1000)) : (max - min) / 1000;
+  return { min, max: Math.max(max, current[1]), step };
+}
+
+function niceCeil(v: number): number {
+  if (v <= 0) return 1;
+  const e = 10 ** Math.floor(Math.log10(v));
+  return Math.ceil(v / e) * e;
+}
+
+function ContrastSlider({
+  name,
+  value,
+  stored,
+  dtype,
+  onChange,
+}: {
+  name: string;
+  value: [number, number];
+  stored: [number, number];
+  dtype: string;
+  onChange: (w: [number, number]) => void;
+}) {
+  // the range is fixed while the pointer is down (it follows the setting only between drags)
+  const range = useRef<ReturnType<typeof contrastRange> | null>(null);
+  const r = contrastRange(stored, value, dtype);
+  if (!range.current || value[1] > range.current.max || value[0] < range.current.min) range.current = r;
+  const { min, max, step } = range.current;
+  const auto = value[0] === stored[0] && value[1] === stored[1];
+  return (
+    <div className="contrast">
+      <RangeSlider label={`Contrast of ${name}`} value={value} min={min} max={max} step={step} onChange={onChange} format={(v) => formatCount(v)} />
+      {!auto && (
+        <button className="link small" onClick={() => onChange([stored[0], stored[1]])} title="Back to the range found in the data">
+          auto
+        </button>
+      )}
+    </div>
+  );
+}
 
 function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
   const meta = useMeta(spec.datasetId, spec.table);
@@ -674,7 +840,6 @@ function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
     const next = channels.map((c, k) => (k === i ? { ...c, ...patch } : c));
     update(spec.id, { channels: { ...p.channels, [el.image]: next } });
   };
-  const dtypeMax = img ? ({ uint8: 255, uint16: 65535 } as Record<string, number>)[img.dtype] : undefined;
   // "None" is the Select's own empty choice (null), saved as '' (none, not automatic)
   const elementOptions = (els: Record<string, unknown>) =>
     Object.keys(els)
@@ -713,26 +878,16 @@ function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
             <div className="channel" key={img.channels[i].name}>
               <label className="check">
                 <input type="checkbox" checked={c.on} onChange={(e) => setChannel(i, { on: e.target.checked })} />
-                <span className="swatch-pick" title="Change the colour">
-                  <input
-                    type="color"
-                    aria-label={`Colour of channel ${img.channels[i].name}`}
-                    value={c.colour}
-                    onChange={(e) => setChannel(i, { colour: e.target.value })}
-                  />
-                  <span className="swatch" style={{ background: c.colour }} />
-                </span>
+                <ColourInput label={`Colour of channel ${img.channels[i].name}`} value={c.colour} onChange={(hex) => setChannel(i, { colour: hex })} />
                 {img.channels[i].name}
               </label>
               {c.on && (
-                <RangeSlider
-                  label={`Contrast of ${img.channels[i].name}`}
+                <ContrastSlider
+                  name={img.channels[i].name}
                   value={c.window}
-                  min={0}
-                  max={dtypeMax ?? Math.max(c.window[1] * 2, 1)}
-                  step={dtypeMax && dtypeMax > 255 ? 16 : 1}
+                  stored={img.channels[i].window}
+                  dtype={img.dtype}
                   onChange={(w) => setChannel(i, { window: w })}
-                  format={(v) => formatCount(v)}
                 />
               )}
             </div>
@@ -783,7 +938,8 @@ function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
         help={
           <p>
             Detected molecules of chosen genes (up to {MAX_GENES}), one colour per gene. Genes with very many transcripts show
-            an even sample of {formatCount(points?.lod_cap ?? 100_000)} of them.
+            an even sample of {formatCount(points?.lod_cap ?? 100_000)} of them when zoomed out, and all of their
+            transcripts in view once you zoom in far enough.
           </p>
         }
       >
@@ -801,16 +957,27 @@ function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
           {p.genes.length < MAX_GENES && (
             <GeneSearch
               genes={featureList}
-              onPick={(g) => !p.genes.includes(g) && update(spec.id, { genes: [...p.genes, g] })}
+              onPick={(g) => {
+                if (p.genes.includes(g)) return;
+                const genes = [...p.genes, g];
+                update(spec.id, { genes, geneColours: geneColours(genes, p.geneColours ?? {}) });
+              }}
               testId="transcript-search"
             />
           )}
           <ul className="gene-chips" data-testid="transcript-genes">
-            {p.genes.map((g, k) => (
+            {p.genes.map((g) => (
               <li key={g}>
-                <span className="swatch" style={{ background: GENE_COLOURS[k % GENE_COLOURS.length] }} />
+                <span className="swatch" style={{ background: geneColours(p.genes, p.geneColours ?? {})[g] }} />
                 {g}
-                <button className="icon-button" aria-label={`Remove ${g}`} onClick={() => update(spec.id, { genes: p.genes.filter((x) => x !== g) })}>
+                <button
+                  className="icon-button"
+                  aria-label={`Remove ${g}`}
+                  onClick={() => {
+                    const genes = p.genes.filter((x) => x !== g);
+                    update(spec.id, { genes, geneColours: geneColours(genes, p.geneColours ?? {}) });
+                  }}
+                >
                   ×
                 </button>
               </li>
@@ -851,6 +1018,7 @@ registerView<SpatialParams>({
       cellOpacity: 0.8,
       transcripts: null,
       genes: [],
+      geneColours: {},
       pointSize: 1.5,
     };
   },

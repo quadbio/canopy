@@ -36,7 +36,7 @@ from typing import Any
 
 from dbx.config import Config
 from dbx.jobs.db import ACTIVE, DB_FILE, Job, JobsDB
-from dbx.logs import get_logger, memory_headroom
+from dbx.logs import get_logger, memory_headroom, memory_total
 
 GB = 2**30
 _LOCKS: dict[str, Any] = {}  # cache folders this process holds the lock of
@@ -231,25 +231,40 @@ class JobManager:
                 self.on_done(job)
 
     def _start_queued(self) -> None:
+        """Start the oldest queued job that fits in memory now. A job that can never fit (it
+        needs more than the host or its cgroup has in total) fails; a job waiting for memory
+        does not hold back smaller ones behind it."""
         with self._lock:
             running = len(self.procs)
         if running >= self.cfg.jobs.max_running:
             return
         launched = set(self.procs)
-        queued = [j for j in sorted(self.db.find(states=("queued",)), key=lambda j: j.id)]
-        job = next((j for j in queued if j.id not in launched), None)
-        if job is None:
-            return
-        need = int(1.5 * self.cfg.jobs.memory_gb * GB) + table_bytes(job)
+        queued = sorted(self.db.find(states=("queued",)), key=lambda j: j.id)
         available = memory_headroom()
-        if available < need:
-            info = {"need_bytes": need, "available_bytes": available}
-            if job.stage != "waiting_for_memory":
-                self.log.warning("job_waiting_for_memory", job=job.id, **info)
-            self.db.update(job.id, stage="waiting_for_memory", info=info)
+        total = memory_total()
+        for job in queued:
+            if job.id in launched:
+                continue
+            need = int(1.5 * self.cfg.jobs.memory_gb * GB) + table_bytes(job, self.cfg.jobs.threads)
+            info = {"need_bytes": need, "available_bytes": available, "total_bytes": total}
+            if need > total:
+                self.db.update(
+                    job.id,
+                    state="failed",
+                    error="not_enough_memory",
+                    finished=time.time(),
+                    info=info,
+                )
+                self.log.error("job_needs_more_memory_than_host", job=job.id, **info)
+                continue
+            if available < need:
+                if job.stage != "waiting_for_memory":
+                    self.log.warning("job_waiting_for_memory", job=job.id, **info)
+                self.db.update(job.id, stage="waiting_for_memory", info=info)
+                continue
+            self.clean_tmp()
+            self._launch(job)
             return
-        self.clean_tmp()
-        self._launch(job)
 
     def _launch(self, job: Job) -> None:
         # The worker gets this server's configuration in a file of its own (written atomically).
@@ -274,7 +289,7 @@ class JobManager:
         self.log.info("job_started", job=job.id, worker_pid=proc.pid, kind=job.kind)
 
 
-def table_bytes(job: Job) -> int:
+def table_bytes(job: Job, threads: int = 4) -> int:
     """Estimated memory the converter reads whole (tables; for SpatialData also points,
     shapes and labels)."""
     from dbx.convert.anndata import job_memory_estimate
@@ -284,7 +299,7 @@ def table_bytes(job: Job) -> int:
         fp = Fingerprint.model_validate_json(job.fingerprint)
     except ValueError:
         return 0
-    return job_memory_estimate(fp)
+    return job_memory_estimate(fp, threads)
 
 
 def _size(path: Path) -> int:

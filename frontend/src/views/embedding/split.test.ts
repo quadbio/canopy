@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { splitGroups, yDown } from '.';
+import { boundsOf, splitGroups, yDown } from '.';
 
 describe('splitGroups', () => {
   const pos = Float32Array.from([0, 0, 1, 1, 2, 2, 3, 3, 4, 4]);
@@ -26,5 +26,21 @@ describe('yDown', () => {
     expect(yDown('spatial')).toBe(true);
     expect(yDown('X_spatial')).toBe(true);
     expect(yDown('X_umap')).toBe(false);
+  });
+});
+
+describe('panel bounds', () => {
+  it('a few stray cells do not widen a large panel', () => {
+    const n = 2000;
+    const pos = new Float32Array(2 * n);
+    for (let i = 0; i < n; i += 1) {
+      pos[2 * i] = i % 100;
+      pos[2 * i + 1] = Math.floor(i / 100);
+    }
+    pos[0] = 1e6; // one stray cell
+    const b = boundsOf(pos, Int32Array.from({ length: n }, (_, i) => i))!;
+    expect(b[2]).toBeLessThan(200);
+    const small = boundsOf(pos, Int32Array.from([0, 1, 2]))!;
+    expect(small[2]).toBe(1e6); // small panels keep every cell
   });
 });

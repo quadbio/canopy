@@ -7,16 +7,26 @@ zarrita, with HTTP Range requests (contract SPEC §1.7).
 - Replies are streamed in 1 MB blocks, so a large range never sits in memory as a whole.
 - Paths are relative keys inside one complete store (one with `manifest.json`); hidden or
   `.`/`..` segments are refused and the resolved path must stay inside the store.
-- A store URL contains the dataset version, so its files never change: they are cacheable
-  forever (`immutable`).
+- A store URL contains the dataset version, so its files never change: whole files are
+  cacheable forever (`immutable`, with an ETag). Range replies are not cached by the browser
+  (`no-store`) and never answered with 304: browsers that combine cached parts of a shard file
+  with many concurrent ranges returned empty bodies (review S6, B-B2). The app keeps its own
+  caches of what it decoded.
+- Requests are logged in aggregate (`store_requests`, once a minute per store and element
+  kind: count, bytes, statuses, time), not one line each; failures and slow replies (> 1 s) are
+  also logged one by one.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import threading
+import time
+from collections import defaultdict
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -28,6 +38,58 @@ CONTRACT = re.compile(r"c\d{1,3}")
 RANGE = re.compile(r"bytes=(\d*)-(\d*)")
 BLOCK = 1 << 20
 CACHE_FOREVER = "public, max-age=31536000, immutable"
+NO_STORE = "no-store"
+FLUSH_S = 60.0
+SLOW_MS = 1000.0
+
+
+class StoreStats:
+    """Store requests summed per (store version, element kind), logged once a minute."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self._since = time.monotonic()
+
+    def record(self, path: str, status: int, size: int, ms: float, log: Any) -> None:
+        parts = path.split("/")  # "", "api", "stores", version, contract, kind, …
+        version = parts[3] if len(parts) > 3 else "?"
+        kind = parts[5] if len(parts) > 5 else "?"
+        kind = kind if kind in ("images", "labels", "shapes", "points", "tables", "aux") else "meta"
+        with self._lock:
+            row = self._rows.setdefault(
+                (version, kind),
+                {"n": 0, "bytes": 0, "ms_total": 0.0, "ms_max": 0.0, "status": defaultdict(int)},
+            )
+            row["n"] += 1
+            row["bytes"] += size
+            row["ms_total"] += ms
+            row["ms_max"] = max(row["ms_max"], ms)
+            row["status"][str(status)] += 1
+            due = time.monotonic() - self._since >= FLUSH_S
+        if due:
+            self.flush(log)
+
+    def flush(self, log: Any) -> None:
+        with self._lock:
+            rows, self._rows = self._rows, {}
+            seconds = round(time.monotonic() - self._since, 1)
+            self._since = time.monotonic()
+        for (version, kind), r in rows.items():
+            log.info(
+                "store_requests",
+                version=version,
+                kind=kind,
+                seconds=seconds,
+                n=r["n"],
+                bytes=r["bytes"],
+                ms_mean=round(r["ms_total"] / max(r["n"], 1), 2),
+                ms_max=round(r["ms_max"], 2),
+                status=dict(r["status"]),
+            )
+
+
+stats = StoreStats()
 
 
 def store_file(cache_dir: Path, version: str, contract: str, key: str) -> Path:
@@ -92,7 +154,10 @@ def store(request: Request, version: str, contract: str, key: str) -> Response:
     st = path.stat()
     etag = f'"{st.st_size:x}-{st.st_mtime_ns:x}"'
     headers = {"accept-ranges": "bytes", "etag": etag, "cache-control": CACHE_FOREVER}
-    if request.headers.get("if-none-match") == etag:
+    ranged = bool(request.headers.get("range"))
+    if ranged:
+        headers["cache-control"] = NO_STORE
+    elif request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     rng = parse_range(request.headers.get("range", ""), st.st_size)
     media = "application/json" if path.suffix == ".json" else "application/octet-stream"

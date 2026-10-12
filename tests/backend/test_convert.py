@@ -16,7 +16,7 @@ from scipy import sparse
 from test_datasets import client_for
 
 from dbx.catalog import entry_id
-from dbx.config import Config, JobsConfig
+from dbx.config import Config
 from dbx.contract import validate_store
 from dbx.convert.anndata import (
     ConvertOptions,
@@ -210,8 +210,12 @@ def test_convert_job_end_to_end(cfg: Config) -> None:
     assert "job_started" in events and "dataset_converted" in events
 
 
-def test_queued_jobs_can_be_cancelled_and_wait_for_memory(cfg: Config) -> None:
-    cfg.jobs = JobsConfig(memory_gb=1e6)  # more than any host has: the guard keeps it queued
+def test_queued_jobs_can_be_cancelled_and_wait_for_memory(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dbx.jobs import manager
+
+    monkeypatch.setattr(manager, "memory_headroom", lambda: 2**20)  # 1 MB free just now
     source(cfg.data_roots[0].path / "m.h5ad")
     c = client_for(cfg)
     id = entry_id("data", "m.h5ad")
@@ -491,3 +495,37 @@ def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
     assert not old.parent.exists()
     version = c.get(f"/api/catalog/datasets/{id}").json()["version"]
     assert has_store(cfg.cache_dir, version)
+
+
+def test_a_job_larger_than_the_host_fails_and_does_not_block_others(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dbx.jobs import manager
+
+    source(cfg.data_roots[0].path / "big.h5ad")
+    source(cfg.data_roots[0].path / "small.h5ad")
+    c = client_for(cfg)
+    sizes = {entry_id("data", "big.h5ad"): 10**15, entry_id("data", "small.h5ad"): 0}
+    monkeypatch.setattr(manager, "table_bytes", lambda job, threads=4: sizes[job.dataset])
+    big = c.post(f"/api/datasets/{entry_id('data', 'big.h5ad')}/convert", json={}).json()
+    small = c.post(f"/api/datasets/{entry_id('data', 'small.h5ad')}/convert", json={}).json()
+    done = _wait(c, small["id"], c.app)
+    assert done["state"] == "done"
+    b = c.get(f"/api/jobs/{big['id']}").json()
+    assert b["state"] == "failed" and b["error"] == "not_enough_memory"
+    assert any(e["event"] == "job_needs_more_memory_than_host" for e in log_events())
+
+    # one waiting for memory (too big just now) does not hold back a smaller one behind it
+    sizes[entry_id("data", "big.h5ad")] = 2**33
+    monkeypatch.setattr(manager, "memory_headroom", lambda: 2**32)
+    monkeypatch.setattr(manager, "memory_total", lambda: 2**40)
+    again = c.post(
+        f"/api/datasets/{entry_id('data', 'big.h5ad')}/convert", json={"x_source": "layers/counts"}
+    ).json()
+    sizes[entry_id("data", "small.h5ad")] = 0
+    small2 = c.post(
+        f"/api/datasets/{entry_id('data', 'small.h5ad')}/convert",
+        json={"x_source": "layers/counts", "force": True},
+    ).json()
+    assert _wait(c, small2["id"], c.app)["state"] == "done"
+    assert c.get(f"/api/jobs/{again['id']}").json()["stage"] == "waiting_for_memory"

@@ -93,4 +93,17 @@ export function installErrorReporting() {
   window.addEventListener('pagehide', () => flush(true));
 }
 
+/** A deck.gl error as codes without names: the layer class and the message with the
+ * parenthesised parts (layer ids, which hold element names) and quoted text removed. */
+export function deckErrorFields(e: Error | null | undefined): Record<string, string> {
+  const msg = String(e?.message ?? '');
+  const layer = /\b([A-Z][A-Za-z0-9]*Layer)\b/.exec(msg)?.[1] ?? 'none';
+  const text = msg
+    .replace(/\([^)]*\)/g, '()')
+    .replace(/(["'`])[^"'`]*\1/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
+  return { type: e?.name ?? 'Error', layer, message: text };
+}
+
 export const sessionId = SESSION;

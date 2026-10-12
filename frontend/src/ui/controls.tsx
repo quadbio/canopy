@@ -2,12 +2,13 @@
 // styled only through design tokens (styles/app.css).
 
 import { Popover as RPopover, Select as RSelect, Slider as RSlider } from 'radix-ui';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 export interface Option {
   value: string;
   label: string;
   hint?: string;
+  disabled?: boolean; // listed (with its hint saying why) but not choosable
 }
 
 export interface OptionGroup {
@@ -52,7 +53,7 @@ export function Select({
               <RSelect.Group key={g.label}>
                 {groups.length > 1 && <RSelect.Label className="select-label">{g.label}</RSelect.Label>}
                 {g.options.map((o) => (
-                  <RSelect.Item key={o.value} value={o.value} className="select-item">
+                  <RSelect.Item key={o.value} value={o.value} className="select-item" disabled={o.disabled}>
                     <RSelect.ItemText>{o.label}</RSelect.ItemText>
                     {o.hint && <span className="select-hint">{o.hint}</span>}
                   </RSelect.Item>
@@ -186,6 +187,13 @@ export function formatCount(n: number | null | undefined): string {
   return String(n);
 }
 
+/** A short count for tight places (panel titles): 950, 1.2k, 35k, 1.2M. */
+export function compactCount(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+  return String(n);
+}
+
 export function formatBytes(n: number | null | undefined): string {
   if (n === null || n === undefined) return '–';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -196,4 +204,53 @@ export function formatBytes(n: number | null | undefined): string {
     i += 1;
   }
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/** A colour input that shows the colour at once while it is dragged and passes it on after a
+ * short pause (or when the picker closes), not on every pointer movement: each change is saved
+ * with the workspace and rebuilds a colour table. */
+export function ColourInput({
+  value,
+  onChange,
+  label,
+  tabIndex,
+  swatchClass = 'swatch',
+}: {
+  value: string; // #rrggbb
+  onChange: (hex: string) => void;
+  label: string;
+  tabIndex?: number;
+  swatchClass?: string;
+}) {
+  const [shown, setShown] = useState(value);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<string | null>(null);
+  const latest = useRef(onChange);
+  latest.current = onChange;
+  useEffect(() => setShown(value), [value]);
+  const commit = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    if (pending.current !== null) latest.current(pending.current);
+    pending.current = null;
+  };
+  useEffect(() => commit, []);
+  return (
+    <span className="swatch-pick" title={label}>
+      <input
+        type="color"
+        aria-label={label}
+        value={shown}
+        tabIndex={tabIndex}
+        onChange={(e) => {
+          setShown(e.target.value);
+          pending.current = e.target.value;
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = setTimeout(commit, 250);
+        }}
+        onBlur={commit}
+      />
+      <span className={swatchClass} style={{ background: shown }} />
+    </span>
+  );
 }

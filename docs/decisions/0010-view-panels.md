@@ -26,13 +26,24 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
 - **Linked pan and zoom:** `link: 'none' | 'zoom' | 'pan+zoom'` (default `pan+zoom`).
   - A moved panel's change is applied to the others relative to their own fitted state: the same
     zoom steps and the same distance on screen.
-  - `sameScale` (default on) fits all panels at the smallest zoom, so sizes compare. Off, each
-    panel fills its space, and linking still works.
+  - How panels are fitted (review S6, B-M5): `sameCoordinates` shows the union of all panels'
+    data in every panel at one view state, so positions compare (a UMAP split by condition);
+    `sameScale` fits each panel around its own cells at the smallest zoom, so sizes compare
+    (sections); with neither, each panel fills its space. Linking works in all three.
+  - The embedding's **Panels** setting offers *Same area* (default for embeddings),
+    *Same scale* (default for coordinates named like `spatial`) and *Fill each panel*.
+  - Panel bounds hold 99 % of a panel's cells in each direction (0.5–99.5 %), so a few stray
+    cells do not shrink every panel (B-m7).
 - **Per-output view options:** `flipY` (y grows downwards). The embedding view sets it for
   coordinates named like `spatial`, as scanpy and squidpy plot them.
 - **Legend-aware fitting:** fitting leaves the title row and, when the legend is open, 250 px on
   the right free (`fitBounds` insets). Opening or closing the legend refits a view the user has
   not moved yet.
+- **Refitting (B-m8):** a view may give a `fitKey` (what its data are, e.g. dataset and
+  coordinate system). It refits when the key changes; more of the same data arriving (new
+  bounds, same key) refits only a view the user has not moved. Without a key, every new
+  `bounds` counts as new data (the embedding).
+- **Ids:** view ids never contain `/` or `:`, panel ids never `:` (`panelKey` refuses them).
 - **Split by** (embedding):
   - Any categorical column with 2–64 categories (or a boolean) splits the view into one panel per
     category, in natural order; missing values form an "NA" panel.
@@ -62,5 +73,7 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
   - 3 panels with one legend, each drawing;
   - uploads ≤ 1.2 × one copy;
   - zooming one panel zooms all;
-  - the own-scale fit;
+  - the fill fit, and *Same area* for the UMAP (identical view states);
   - back to one panel.
+- Unit tests `panels.test.ts` (`fitLayout` in its three modes) and `split.test.ts` (robust
+  bounds).

@@ -12,7 +12,7 @@ import type { ColumnMeta, DatasetMeta, GeneList } from '../../api/types';
 import { constantColouring } from '../../colour/colouring';
 import { type ValueColour, ValueColourExtension } from '../../colour/gpu';
 import { event } from '../../telemetry/telemetry';
-import { Field, formatCount, Help, Select, Slider } from '../../ui/controls';
+import { compactCount, Field, formatCount, Help, Select, Slider } from '../../ui/controls';
 import { useWorkspace, type ViewSpec } from '../../state/workspace';
 import {
   BASE_RGB,
@@ -40,8 +40,17 @@ export interface EmbeddingParams extends ColourParams {
   opacity: number;
   allCells: boolean; // large datasets: always draw every cell (else a subset when zoomed out)
   splitBy: string | null; // a category column: one panel per category (small multiples)
-  sameScale: boolean; // split: all panels at one scale (else each fills its panel)
+  panelFit: PanelFit | null; // split: how panels are fitted; null: by the embedding
 }
+
+/** Split panels: the same area (positions compare), the same scale around each panel's own
+ * cells (sizes compare; sections), or each filling its panel. */
+export type PanelFit = 'coordinates' | 'scale' | 'fill';
+const PANEL_FITS: PanelFit[] = ['coordinates', 'scale', 'fill'];
+
+/** Spatial coordinates are split into sections (each centred); other embeddings into panels
+ * showing the same area, so where cells sit compares between panels. */
+export const defaultPanelFit = (embedding: string): PanelFit => (/spatial/i.test(embedding) ? 'scale' : 'coordinates');
 
 const VALUE_COLOUR = new ValueColourExtension();
 // At most this many panels when splitting by a column.
@@ -81,7 +90,7 @@ export function normaliseParams(raw: unknown): EmbeddingParams | null {
     opacity: num(r.opacity, 0.05, 1, 0.85),
     allCells: typeof r.allCells === 'boolean' ? r.allCells : false,
     splitBy: typeof r.splitBy === 'string' && r.splitBy ? r.splitBy : null,
-    sameScale: typeof r.sameScale === 'boolean' ? r.sameScale : true,
+    panelFit: PANEL_FITS.includes(r.panelFit as PanelFit) ? (r.panelFit as PanelFit) : r.sameScale === false ? 'fill' : null,
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
   };
 }
@@ -276,7 +285,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       const boost = c < g.cells.length ? Math.min(1.5, (g.cells.length / c) ** 0.25) : 1;
       return {
         id: g.id,
-        title: `${g.label} · ${formatCount(g.cells.length)}`,
+        title: `${g.label} · ${compactCount(g.cells.length)}`,
         layers: [pointsLayer(g.id, prefixOf(shownData as PointData, g.cells, c), boost)],
         bounds: g.bounds,
         tooltip: (i: number) => shownTooltip(g.cells[i]),
@@ -326,7 +335,8 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     layers: waitingForOrder || waitingForSplit || split ? [] : layers,
     bounds,
     panels: split ? panels : undefined,
-    sameScale: p.sameScale,
+    sameScale: (p.panelFit ?? defaultPanelFit(p.embedding)) !== 'fill',
+    sameCoordinates: (p.panelFit ?? defaultPanelFit(p.embedding)) === 'coordinates',
     flipY: yDown(p.embedding),
     status,
     error: fatal ? String((fatal as Error).message) : undefined,
@@ -411,21 +421,27 @@ export function splitGroups(
   return out;
 }
 
-function boundsOf(pos: Float32Array, cells: Int32Array): Bounds | null {
-  let x0 = Infinity;
-  let y0 = Infinity;
-  let x1 = -Infinity;
-  let y1 = -Infinity;
-  for (const i of cells) {
+/** The box holding 99 % of a panel's cells in each direction (0.5–99.5 %; all for small
+ * panels), so a few stray cells do not shrink every panel. */
+export function boundsOf(pos: Float32Array, cells: Int32Array): Bounds | null {
+  const step = Math.max(1, Math.floor(cells.length / 20_000)); // a sample is enough
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let j = 0; j < cells.length; j += step) {
+    const i = cells[j];
     const x = pos[2 * i];
     const y = pos[2 * i + 1];
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    if (x < x0) x0 = x;
-    if (x > x1) x1 = x;
-    if (y < y0) y0 = y;
-    if (y > y1) y1 = y;
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      xs.push(x);
+      ys.push(y);
+    }
   }
-  return Number.isFinite(x0) ? [x0, y0, x1, y1] : null;
+  if (!xs.length) return null;
+  xs.sort((a, b) => a - b);
+  ys.sort((a, b) => a - b);
+  const cut = xs.length >= 1000 ? Math.floor(xs.length * 0.005) : 0;
+  const hi = xs.length - 1 - cut;
+  return [xs[cut], ys[cut], xs[hi], ys[hi]];
 }
 
 interface Shown {
@@ -510,27 +526,63 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
             groups={[
               {
                 label: 'Columns',
-                options: m.obs.filter(splittable).map((c) => ({
-                  value: c.name,
-                  label: c.name,
-                  hint: c.kind === 'boolean' ? 'yes/no' : `${c.categories!.length}`,
-                })),
+                options: [
+                  ...m.obs.filter(splittable).map((c) => ({
+                    value: c.name,
+                    label: c.name,
+                    hint: c.kind === 'boolean' ? 'yes/no' : `${c.categories!.length}`,
+                  })),
+                  ...m.obs
+                    .filter((c) => c.kind === 'categorical' && (c.categories?.length ?? 0) > MAX_PANELS)
+                    .map((c) => ({
+                      value: c.name,
+                      label: c.name,
+                      hint: `${c.categories!.length}: more than ${MAX_PANELS}`,
+                      disabled: true,
+                    })),
+                ],
               },
             ]}
           />
         </Field>
       )}
       {p.splitBy && (
-        <label className="check" data-testid="same-scale">
-          <input type="checkbox" checked={p.sameScale} onChange={(e) => update(spec.id, { sameScale: e.target.checked })} />
-          Same scale in all panels
-          <Help label="About “Same scale in all panels”">
-            <p>
-              Ticked, every panel uses one scale, so sizes compare (a small section looks small). Unticked, each panel is
-              zoomed to fill its space. Either way, zooming or panning one panel moves the others along.
-            </p>
-          </Help>
-        </label>
+        <Field
+          label="Panels"
+          help={
+            <>
+              <p>
+                <b>Same area</b>: every panel shows the same part of the embedding, so where cells sit compares between
+                panels (e.g. a UMAP split by condition).
+              </p>
+              <p>
+                <b>Same scale</b>: each panel is centred on its own cells at one shared scale, so sizes compare (e.g.
+                tissue sections).
+              </p>
+              <p>
+                <b>Fill</b>: each panel is zoomed to fill its space. Either way, zooming or panning one panel moves the
+                others along.
+              </p>
+            </>
+          }
+        >
+          <Select
+            label="Panels"
+            testId="panel-fit"
+            value={p.panelFit ?? defaultPanelFit(p.embedding)}
+            onChange={(v) => v && update(spec.id, { panelFit: v as PanelFit })}
+            groups={[
+              {
+                label: 'fit',
+                options: [
+                  { value: 'coordinates', label: 'Same area' },
+                  { value: 'scale', label: 'Same scale' },
+                  { value: 'fill', label: 'Fill each panel' },
+                ],
+              },
+            ]}
+          />
+        </Field>
       )}
       <Field label="Point size">
         <Slider
@@ -591,7 +643,7 @@ registerView<EmbeddingParams>({
       opacity: 0.85,
       allCells: false,
       splitBy: null,
-      sameScale: true,
+      panelFit: null,
     };
   },
   normalise: normaliseParams,

@@ -24,6 +24,8 @@ from dbx.contract.models import (
     CONTRACT_MAJOR,
     CONTRACT_MINOR,
     DOWNSAMPLE_THRESHOLD,
+    IMAGE_SHARD,
+    IMAGE_SHARD_ABOVE,
     INDPTR_CHUNK,
     NAME_PATTERN,
     OBSM_CHUNK,
@@ -48,6 +50,16 @@ MANIFEST = "manifest.json"
 SCAN_ROWS = 1_048_576
 
 
+# Names inside validator messages: quoted values and the part after a group prefix (obs/<col>).
+_NAMES_IN = re.compile(
+    r"'[^']*'|\"[^\"]*\"|\b(obs|var|obsm|uns|layers|downsample|gene_stats)/[^\s:,]+"
+)
+
+
+def _name_free(m: re.Match[str]) -> str:
+    return f"{m.group(1)}/<name>" if m.group(1) else "<name>"
+
+
 @dataclass
 class Report:
     store: str
@@ -61,6 +73,15 @@ class Report:
 
     def error(self, where: str, msg: str) -> None:
         self.errors.append(f"{where}: {msg}")
+
+    def problems(self, n: int = 20) -> list[dict[str, str]]:
+        """The first errors for logs: `element` (the where, a name field: tokenised at strict)
+        and `problem` (the message with the names in it replaced by `<name>`)."""
+        out = []
+        for e in self.errors[:n]:
+            where, _, msg = e.partition(": ")
+            out.append({"element": where, "problem": _NAMES_IN.sub(_name_free, msg)})
+        return out
 
     def warn(self, where: str, msg: str) -> None:
         self.warnings.append(f"{where}: {msg}")
@@ -90,13 +111,22 @@ def validate_store(store: Path, deep: bool = False) -> Report:
     if not (store / MANIFEST).is_file():
         rep.error("store", "manifest.json missing (incomplete store)")
         return rep
+    non_finite: list[str] = []
+
+    def constant(c: str) -> float:
+        non_finite.append(c)
+        return float(c)
+
     try:
-        raw = json.loads((store / MANIFEST).read_text())
+        raw = json.loads((store / MANIFEST).read_text(), parse_constant=constant)
         m = Manifest.model_validate(raw)
     except (ValidationError, json.JSONDecodeError) as e:
         rep.error("manifest", str(e).replace("\n", " | "))
         return rep
     rep.manifest = m
+    if non_finite:
+        # JSON has no NaN or Infinity: browsers cannot parse such a manifest
+        rep.error("manifest", f"{len(non_finite)} non-finite numbers (NaN or Infinity)")
     if m.major != CONTRACT_MAJOR:
         rep.error("manifest", f"contract major {m.major} != supported {CONTRACT_MAJOR}")
         return rep
@@ -395,6 +425,13 @@ def _multiscale(
         ch = list(a.chunks)
         if ch[-tile_axes:] != [min(TILE, s) for s in a.shape[-tile_axes:]]:
             rep.error(w, f"level {i} chunks {ch} are not {TILE}x{TILE} tiles")
+        if a.shards is not None and (
+            max(a.shape[-2:]) <= IMAGE_SHARD_ABOVE
+            or list(a.shards[-tile_axes:])
+            != [IMAGE_SHARD if v >= TILE else v for v in a.shape[-tile_axes:]]
+            or any(v != 1 for v in a.shards[:-tile_axes])
+        ):
+            rep.error(w, f"level {i} shards {a.shards} are not 1x{IMAGE_SHARD}x{IMAGE_SHARD}")
         _codec(rep, w, a, f"level {i}")
         if i > 0:
             prev = levels[i - 1]

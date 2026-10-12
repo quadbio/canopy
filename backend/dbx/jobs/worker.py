@@ -125,7 +125,7 @@ def run(job_id: int, config_file: Path) -> int:
     from dbx.inspect.models import Fingerprint
 
     fp = Fingerprint.model_validate_json(job.fingerprint)
-    tables = job_memory_estimate(fp)
+    tables = job_memory_estimate(fp, cfg.jobs.threads)
     limit = int((2 * cfg.jobs.memory_gb + 1) * GB + 1.5 * tables)
     sampler = MemorySampler(cfg.logging.memory_sample_interval, cfg.cache_dir)
     sampler.start()
@@ -204,25 +204,24 @@ def _execute(cfg: Config, kind: str, job: Any, fp: Any, ctl: Control) -> dict[st
         memory_bytes=int(cfg.jobs.memory_gb * GB),
         tmp_dir=cfg.jobs.tmp_dir,
         job=job.id,
+        feature_key=job.options.get("feature_key"),
+        threads=cfg.jobs.threads,
     )
     convert = convert_spatialdata if fp.kind == "spatialdata_zarr" else convert_anndata
     r = convert(Path(job.source), fp, cfg.cache_dir, opts, ctl.progress)
     m = r.manifest
-    t = next(iter(m.tables.values()), None)
-    if t is None:
-        return {
-            "warnings": r.warnings,
-            "elements": {k: len(getattr(m, k)) for k in ("images", "labels", "shapes", "points")},
-            "seconds": m.converter.duration_s,
-        }
-    return {
-        "warnings": r.warnings,
-        "n_obs": t.n_obs,
-        "n_vars": t.n_vars,
-        "nnz": t.nnz,
-        "x_source": t.x_source,
-        "seconds": r.manifest.converter.duration_s,
-    }
+    out: dict[str, Any] = {"warnings": sorted(set(r.warnings)), "seconds": m.converter.duration_s}
+    tables = list(m.tables.values())
+    if len(tables) == 1 and fp.kind != "spatialdata_zarr":
+        t = tables[0]
+        return out | {"n_obs": t.n_obs, "n_vars": t.n_vars, "nnz": t.nnz, "x_source": t.x_source}
+    # SpatialData: sizes of every element (numbers only; names stay out of the job row)
+    out["tables"] = [{"n_obs": t.n_obs, "n_vars": t.n_vars, "nnz": t.nnz} for t in tables]
+    out["images"] = [e.levels[0] for e in m.images.values()]
+    out["labels"] = [{"n_labels": e.n_labels, "shape": e.levels[0]} for e in m.labels.values()]
+    out["shapes"] = [{"n": e.n, "kind": e.kind} for e in m.shapes.values()]
+    out["points"] = [{"n": e.n, "n_features": e.n_features} for e in m.points.values()]
+    return out
 
 
 def _wal(cfg: Config) -> bool:

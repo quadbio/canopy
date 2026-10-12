@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Manifest } from '../../api/store';
-import { boxesInView, channelSettings, invert, modelMatrix, resolveElements, type SpatialParams, transformBox } from '.';
+import {
+  boxesInView,
+  channelSettings,
+  contrastRange,
+  GENE_COLOURS,
+  geneColours,
+  invert,
+  modelMatrix,
+  resolveElements,
+  type SpatialParams,
+  transformBox,
+} from '.';
 
 const I = [
   [1, 0, 0],
@@ -70,5 +81,51 @@ describe('reading in view', () => {
     const boxes = [0, 0, 10, 10, 20, 20, 30, 30, 5, 5, 25, 25];
     expect(boxesInView(boxes, [12, 12, 18, 18])).toEqual([2]);
     expect(boxesInView(boxes, [0, 0, 100, 100], 1)).toEqual([1, 2]);
+  });
+});
+
+describe('transcript colours', () => {
+  it('a gene keeps its colour when another is removed; no white', () => {
+    const a = geneColours(['A', 'B', 'C'], {});
+    expect(new Set(Object.values(a)).size).toBe(3);
+    const b = geneColours(['B', 'C'], a);
+    expect(b.B).toBe(a.B);
+    expect(b.C).toBe(a.C);
+    const c = geneColours(['B', 'C', 'D'], b);
+    expect(c.D).toBe(a.A); // the freed colour is reused
+    expect(GENE_COLOURS).not.toContain('#ffffff');
+  });
+});
+
+describe('contrast slider range', () => {
+  it('follows the stored window, not the data type', () => {
+    const r = contrastRange([120, 2400], [120, 2400], 'uint16');
+    expect(r.max).toBe(10_000);
+    expect(r.min).toBe(0);
+    expect(r.step).toBeGreaterThanOrEqual(1);
+    expect(contrastRange([0, 30], [0, 30], 'uint8').max).toBe(200);
+    expect(contrastRange([0, 250], [0, 250], 'uint8').max).toBe(255); // capped by the type
+    expect(contrastRange([0, 1], [0, 50], 'uint16').max).toBeGreaterThanOrEqual(50); // never below the setting
+    expect(contrastRange([0.1, 0.4], [0.1, 0.4], 'float32').max).toBe(2);
+  });
+});
+
+describe('channel defaults', () => {
+  it('a single channel shown alone starts grey scale', () => {
+    const one = {
+      ...manifest,
+      images: {
+        img: {
+          ...manifest.images.img,
+          channels: [
+            { name: 'empty', window: [0, 1], color: '#ff0000' },
+            { name: 'dapi', window: [3, 200], color: '#0000ff' },
+          ],
+        },
+      },
+    } as unknown as Manifest;
+    const c = channelSettings({ channels: {} } as unknown as SpatialParams, one, 'img');
+    expect(c.map((x) => x.on)).toEqual([false, true]);
+    expect(c[1].colour).toBe('#ffffff');
   });
 });
