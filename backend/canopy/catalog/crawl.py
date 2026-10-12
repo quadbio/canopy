@@ -310,13 +310,23 @@ def _check_one(
         fingerprint=fp.model_dump_json(),
         inspect_ms=_ms(t0),
     )
+    summary = row["summary"]
     log.info(
         "dataset_inspected",
+        # links requests (dataset_id) to the content version and the file (tokens at strict)
+        dataset_id=entry_id(c.root, c.relpath),
+        version=fp.dataset_id,
         root=c.root,
         path=c.relpath,
         kind=fp.kind,
         size_bytes=fp.size_bytes,
+        n_obs=summary.get("n_obs"),
+        n_vars=summary.get("n_vars"),
+        x_encoding=summary.get("x_encoding"),
+        n_obs_columns=summary.get("n_obs_columns"),
+        n_embeddings=len(summary.get("embeddings") or []),
         n_errors=len(fp.errors),
+        n_warnings=len(fp.warnings),
         ms=row["inspect_ms"],
     )
     return row

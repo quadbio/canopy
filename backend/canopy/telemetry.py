@@ -3,9 +3,15 @@ screen size, frame rates), which are written to the server log as `client_event`
 on the host can be analysed from the log files alone.
 
 Events carry numbers and short codes only, never names or values. The server enforces it:
-string values are accepted only for fields on `STRING_FIELDS` (codes the frontend defines, plus
-GPU and browser facts); any other string is dropped and counted. Each browser session may send
-at most `RATE_PER_MINUTE` events per minute; the rest are dropped and counted.
+- string values are accepted only for fields in `CODE_FIELDS` (codes the frontend defines, error
+  classes, code locations in the app bundle, GPU and browser facts) and `TEXT_FIELDS` (short
+  messages, already stripped of quoted parts and parenthesised ids by the browser);
+- at `strict` privacy the text fields are dropped (only their presence is kept): a message can
+  hold a name; the code location (`where`) and the build still identify the failure;
+- any other string is dropped and counted.
+Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client address and
+`GLOBAL_PER_MINUTE` in all, so one client cannot flood the log; the rest are dropped and counted
+(one warning per batch).
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ import threading
 import time
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, StringConstraints
 
 from canopy.logs import get_logger
@@ -23,10 +29,29 @@ router = APIRouter(prefix="/api/telemetry", tags=["telemetry"])
 
 Code = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.:/ ()-]{1,80}$")]
 Value = float | int | bool | Code
-STRING_FIELDS = frozenset(
-    {"type", "kind", "mode", "status", "code", "gpu", "gpu_vendor", "gl_version", "browser"}
+CODE_FIELDS = frozenset(
+    {
+        "type",  # error class, view type
+        "mode",
+        "status",
+        "layer",  # deck.gl layer class
+        "where",  # bundle file:line:col of an error
+        "build",  # frontend build id
+        "browser",  # browser family and major version
+        "view",  # the view's random id
+        "dataset",  # catalog id (a hash; tokenised at strict as c_dataset)
+        "fit",
+        "x_source",  # "X" or "layer"
+        "gpu",
+        "gpu_vendor",
+        "gl_version",
+    }
 )
+TEXT_FIELDS = frozenset({"message", "code", "kind"})
+STRING_FIELDS = CODE_FIELDS | TEXT_FIELDS  # the frontend's list must match (test)
 RATE_PER_MINUTE = 600
+ADDRESS_PER_MINUTE = 1_500
+GLOBAL_PER_MINUTE = 3_000
 
 
 class ClientEvent(BaseModel):
@@ -47,8 +72,8 @@ class _RateLimit:
         self._lock = threading.Lock()
         self._window: dict[str, tuple[int, int]] = {}  # session -> (minute, count)
 
-    def allow(self, session: str, n: int) -> int:
-        """How many of `n` events this session may still log in the current minute."""
+    def allow(self, session: str, n: int, per_minute: int | None = None) -> int:
+        """How many of `n` events this key may still log in the current minute."""
         minute = int(time.time() // 60)
         with self._lock:
             if len(self._window) > 10_000:  # forget old sessions
@@ -56,24 +81,36 @@ class _RateLimit:
             m, count = self._window.get(session, (minute, 0))
             if m != minute:
                 count = 0
-            ok = max(0, min(n, RATE_PER_MINUTE - count))
+            cap = RATE_PER_MINUTE if per_minute is None else per_minute
+            ok = max(0, min(n, cap - count))
             self._window[session] = (minute, count + ok)
             return ok
 
 
 _limit = _RateLimit()
+_by_address = _RateLimit()
+_overall = _RateLimit()
 
 
 @router.post("", status_code=204)
-def telemetry(batch: ClientBatch) -> None:
+def telemetry(batch: ClientBatch, request: Request) -> None:
     log = get_logger("canopy.client")
-    allowed = _limit.allow(batch.session, len(batch.events))
+    strict = request.app.state.config.logging.privacy == "strict"
+    address = request.client.host if request.client else "?"
+    allowed = min(
+        _limit.allow(batch.session, len(batch.events)),
+        _by_address.allow(address, len(batch.events), ADDRESS_PER_MINUTE),
+        _overall.allow("*", len(batch.events), GLOBAL_PER_MINUTE),
+    )
     dropped_fields = 0
     for e in batch.events[:allowed]:
-        fields = {}
+        fields: dict[str, object] = {}
         for k, v in e.fields.items():
             if isinstance(v, str) and k not in STRING_FIELDS:
                 dropped_fields += 1
+                continue
+            if isinstance(v, str) and strict and k in TEXT_FIELDS:
+                fields[f"c_{k}"] = "(text dropped at strict)"
                 continue
             fields[f"c_{k}"] = v
         log.info(

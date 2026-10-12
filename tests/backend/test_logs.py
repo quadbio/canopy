@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -221,7 +222,13 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
     text = (tmp_path / "logs" / log_file_name("test")).read_text()
     leaks = [w for w in ("SECRET", str(tmp_path)) if w in text]
     assert leaks == [], [line for line in text.splitlines() if "SECRET" in line][:3]
-    assert id in text  # the dataset id (a hash) is kept: it is how requests are traced
+    # the dataset id is a plain hash of root and path: at strict it is a salted token, the same
+    # on every line, so requests still link to the inspection of their file
+    assert id not in text and token(id, "s") in text
+    lines = [json.loads(x) for x in text.splitlines()]
+    inspected = next(e for e in lines if e.get("event") == "dataset_inspected" and e.get("kind"))
+    assert inspected["dataset_id"] == token(id, "s") and inspected["version"]
+    assert {"n_obs", "n_vars", "x_encoding"} <= set(inspected)
 
 
 def test_io_errors_keep_their_errno_at_every_level(tmp_path: Path) -> None:
@@ -258,3 +265,51 @@ def test_io_errors_keep_their_errno_at_every_level(tmp_path: Path) -> None:
         and text.startswith("Can't read data (errno = 5")
         and "Input/output error" not in text
     )
+
+
+def test_every_path_setting_is_a_name_field() -> None:
+    """A new setting holding a path must be tokenised at strict (its field name in NAME_FIELDS)."""
+    import typing
+
+    from pydantic import BaseModel
+
+    from canopy.config import Config
+    from canopy.logs import NAME_FIELDS
+
+    def paths(model: type[BaseModel], prefix: str = "") -> list[str]:
+        out = []
+        for name, f in model.model_fields.items():
+            ann = f.annotation
+            args = typing.get_args(ann) or (ann,)
+            if any(a is Path for a in args) or "Path" in str(ann):
+                out.append(name)
+            for a in args:
+                if isinstance(a, type) and issubclass(a, BaseModel):
+                    out += paths(a, f"{prefix}{name}.")
+        return out
+
+    missing = [p for p in paths(Config) if p not in NAME_FIELDS]
+    assert missing == []
+
+
+def test_token_find_names_a_strict_token(cfg: Config, tmp_path: Path) -> None:
+    import anndata as ad2
+    import numpy as np
+    from typer.testing import CliRunner
+
+    from canopy.cli import app
+    from canopy.privacy import installation_salt
+
+    ad2.AnnData(X=np.zeros((2, 2), np.float32)).write_h5ad(cfg.data_roots[0].path / "PRIVATE.h5ad")
+    conf = tmp_path / "c.toml"
+    root = cfg.data_roots[0].path
+    conf.write_text(
+        f'cache_dir = "{cfg.cache_dir}"\n[[data_roots]]\nname = "data"\npath = "{root}"\n'
+    )
+    from canopy.catalog import Catalog
+    from canopy.config import load_config
+
+    Catalog(load_config(conf)).scan_now()
+    t = token("PRIVATE.h5ad", installation_salt(cfg.cache_dir))
+    r = CliRunner().invoke(app, ["token", "find", t, "--config", str(conf)])
+    assert r.exit_code == 0 and "PRIVATE.h5ad" in r.output

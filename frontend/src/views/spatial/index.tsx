@@ -732,6 +732,8 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       reported.current = true;
       event('view_ready', performance.now() - t0.current, {
         type: 'spatial',
+        view: spec.id,
+        dataset: spec.datasetId,
         cells: shapes?.n ?? 0,
         whole: whole,
         image_levels: imageEntry?.levels.length ?? 0,

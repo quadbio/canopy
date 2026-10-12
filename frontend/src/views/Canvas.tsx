@@ -242,7 +242,7 @@ class FrameStats {
     this.since = now;
     const g = this.gaps.sort((a, b) => a - b);
     this.gaps = [];
-    if (g.length < 10) return;
+    if (g.length < 10 && !g.some((x) => x > 50)) return; // a stall is reported however few frames
     const q = (f: number) => g[Math.min(g.length - 1, Math.floor(f * g.length))];
     event('frames', null, { n: g.length, median_ms: Math.round(q(0.5) * 10) / 10, p95_ms: Math.round(q(0.95) * 10) / 10, over_50ms: g.filter((x) => x > 50).length });
   }
@@ -564,7 +564,7 @@ export function Canvas() {
               const t0 = readyAt.current[v.id];
               if (t0 !== undefined && !drawn.current.has(v.id)) {
                 drawn.current.add(v.id);
-                event('view_first_draw', performance.now() - t0, { type: v.type, n: outputs[v.id]?.n ?? 0 });
+                event('view_first_draw', performance.now() - t0, { type: v.type, view: v.id, dataset: v.datasetId, n: outputs[v.id]?.n ?? 0 });
               }
             }
           }}

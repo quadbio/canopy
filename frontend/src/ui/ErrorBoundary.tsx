@@ -4,7 +4,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 import { STORAGE_KEY } from '../state/workspace';
-import { code, event } from '../telemetry/telemetry';
+import { code, event, messageCode, where } from '../telemetry/telemetry';
 
 interface Props {
   scope: 'app' | 'view';
@@ -21,9 +21,13 @@ export class ErrorBoundary extends Component<Props, { error: Error | null }> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Only the error type and the first component frame (code locations, never data).
-    const frame = info.componentStack?.trim().split('\n')[0]?.trim() ?? '';
-    event('ui_error', null, { kind: this.props.scope, type: code(error.name), code: code(frame.slice(0, 80)) });
+    // The error type, its message without names and where it happened (code locations only).
+    event('ui_error', null, {
+      kind: this.props.scope,
+      type: code(error.name),
+      message: messageCode(error.message),
+      where: where(error.stack ?? info.componentStack ?? undefined),
+    });
   }
 
   render() {

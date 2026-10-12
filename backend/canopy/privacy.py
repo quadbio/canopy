@@ -21,6 +21,9 @@ SALT_FILE = ".canopy_salt"
 # Names defined by the file formats or near-universal conventions: kept in strict mode.
 KEEP = frozenset(
     {
+        "X",  # the expression matrix and its raw copy: format names, not user names
+        "raw",
+        "raw/X",
         "global",
         "x",
         "y",

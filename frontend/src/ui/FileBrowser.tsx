@@ -127,7 +127,7 @@ function Details({ id }: { id: string }) {
             setProblem(`At most ${MAX_VIEWS} views fit in the canvas: close one first.`);
             return;
           }
-          event('view_opened', null, { type: t.type, kind: d.kind ?? '', n_obs: meta.n_obs, remembered: saved ? 1 : 0 });
+          event('view_opened', null, { type: t.type, kind: d.kind ?? '', dataset: d.id, n_obs: meta.n_obs, remembered: saved ? 1 : 0 });
           return;
         }
       }

@@ -14,16 +14,76 @@ const FLUSH_MS = 5000;
 const queue: ClientEvent[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 
+/** Fields that may carry strings: codes and short texts. The server accepts exactly these
+ * (backend/canopy/telemetry.py; a test keeps both lists equal); others are dropped here. */
+export const STRING_FIELDS = [
+  'type',
+  'mode',
+  'status',
+  'layer',
+  'where',
+  'build',
+  'browser',
+  'view',
+  'dataset',
+  'fit',
+  'x_source',
+  'gpu',
+  'gpu_vendor',
+  'gl_version',
+  'message',
+  'code',
+  'kind',
+] as const;
+const STRINGS = new Set<string>(STRING_FIELDS);
+
 /** Strings are reduced to the characters the server accepts (codes, not free text). */
 export function code(s: string): string {
   return s.replace(/[^A-Za-z0-9_.:/ ()-]/g, '_').slice(0, 80) || '_';
+}
+
+/** A message without its quoted and parenthesised parts (names, ids) and addresses, as a code. */
+export function messageCode(msg: string): string {
+  return code(
+    msg
+      .replace(/\([^)]*\)/g, '()')
+      .replace(/(["'`])[^"'`]*\1/g, '_')
+      .replace(/https?:\/\/\S+/g, '_url_')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
+}
+
+/** Where an error was thrown: the top frame of its stack as `file:line:col` in the bundle. */
+export function where(stack: string | undefined): string {
+  for (const line of (stack ?? '').split('\n')) {
+    const m = /([^/\s(]+\.(?:js|ts|tsx|mjs)):(\d+):(\d+)/.exec(line);
+    if (m) return code(`${m[1]}:${m[2]}:${m[3]}`);
+  }
+  return 'unknown';
+}
+
+/** Browser family and major version, from the user agent (e.g. "Chrome 140"). */
+export function browser(ua: string): string {
+  for (const [name, re] of [
+    ['Edge', /Edg\/(\d+)/],
+    ['Firefox', /Firefox\/(\d+)/],
+    ['Chrome', /Chrome\/(\d+)/],
+    ['Safari', /Version\/(\d+).*Safari/],
+  ] as const) {
+    const m = re.exec(ua);
+    if (m) return `${name} ${m[1]}`;
+  }
+  return 'other';
 }
 
 function clean(fields: Record<string, Value | null | undefined>): Record<string, Value> {
   const out: Record<string, Value> = {};
   for (const [k, v] of Object.entries(fields).slice(0, 24)) {
     if (v === null || v === undefined) continue;
-    out[k.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40)] = typeof v === 'string' ? code(v) : v;
+    const key = k.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40);
+    if (typeof v === 'string' && !STRINGS.has(key)) continue; // the server would drop it
+    out[key] = typeof v === 'string' ? code(v) : v;
   }
   return out;
 }
@@ -86,11 +146,28 @@ export function reportEnvironment(gl?: { renderer?: string; vendor?: string; ver
 }
 
 export function installErrorReporting() {
-  window.addEventListener('error', (e) => event('js_error', null, { type: code(e.error?.name ?? 'Error') }));
-  window.addEventListener('unhandledrejection', (e) =>
-    event('js_unhandled_rejection', null, { type: code((e.reason as Error)?.name ?? 'Error') }),
-  );
+  const report = (name: string, e: unknown) => {
+    const err = e as { name?: string; message?: string; stack?: string } | null;
+    event(name, null, {
+      type: code(err?.name ?? 'Error'),
+      message: messageCode(String(err?.message ?? '')),
+      where: where(err?.stack),
+    });
+  };
+  window.addEventListener('error', (e) => report('js_error', e.error ?? { name: 'Error', message: e.message }));
+  window.addEventListener('unhandledrejection', (e) => report('js_unhandled_rejection', e.reason));
   window.addEventListener('pagehide', () => flush(true));
+}
+
+/** Facts about this page load that explain what a log shows: browser, window, app build. */
+export function pageFacts(): Record<string, Value> {
+  return {
+    browser: browser(navigator.userAgent),
+    build: typeof __CANOPY_BUILD__ === 'string' ? __CANOPY_BUILD__ : 'unknown',
+    viewport_w: window.innerWidth,
+    viewport_h: window.innerHeight,
+    dpr: window.devicePixelRatio,
+  };
 }
 
 /** A deck.gl error as codes without names: the layer class and the message with the
@@ -98,12 +175,7 @@ export function installErrorReporting() {
 export function deckErrorFields(e: Error | null | undefined): Record<string, string> {
   const msg = String(e?.message ?? '');
   const layer = /\b([A-Z][A-Za-z0-9]*Layer)\b/.exec(msg)?.[1] ?? 'none';
-  const text = msg
-    .replace(/\([^)]*\)/g, '()')
-    .replace(/(["'`])[^"'`]*\1/g, '_')
-    .replace(/\s+/g, ' ')
-    .slice(0, 80);
-  return { type: e?.name ?? 'Error', layer, message: text };
+  return { type: e?.name ?? 'Error', layer, message: messageCode(msg) };
 }
 
 export const sessionId = SESSION;

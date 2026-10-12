@@ -6,13 +6,13 @@ import { App } from './app/App';
 import { restoreWorkspace } from './state/workspace';
 import './styles/tokens.css';
 import './styles/app.css';
-import { event, installErrorReporting } from './telemetry/telemetry';
+import { event, installErrorReporting, pageFacts } from './telemetry/telemetry';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import './views';
 
 installErrorReporting();
 restoreWorkspace(); // after './views' has registered every view type
-event('page_load', performance.now());
+event('page_load', performance.now(), pageFacts());
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false } },

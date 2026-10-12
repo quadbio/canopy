@@ -220,7 +220,18 @@ class DatasetCache:
                 return hit  # type: ignore[no-any-return]
             # converted, re-converted or deleted since it was opened: open it again
             self.drop_version(version)
-        with timed("open_dataset", kind=fp.kind, dataset_id=dataset) as extra:
+        ad = fp.anndata
+        if ad is None and fp.spatialdata is not None:
+            ad = next(iter(fp.spatialdata.tables.values()), None)
+        with timed(
+            "open_dataset",
+            kind=fp.kind,
+            dataset_id=dataset,
+            version=fp.dataset_id,
+            n_obs=ad.n_obs if ad else None,
+            x_encoding=ad.X.encoding if ad and ad.X else None,
+            layout=ad.layout if ad else None,
+        ) as extra:
             src = open_source(
                 fp, path, table, self.small_file, None if original else self.cache_dir
             )

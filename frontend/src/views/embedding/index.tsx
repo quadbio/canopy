@@ -307,9 +307,9 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   useEffect(() => {
     if (status === 'ready' && !reported.current) {
       reported.current = true;
-      event('view_ready', performance.now() - t0.current, { type: 'embedding', n: n ?? 0, mode: meta.data?.mode ?? '' });
+      event('view_ready', performance.now() - t0.current, { type: 'embedding', view: spec.id, dataset: spec.datasetId, n: n ?? 0, mode: meta.data?.mode ?? '' });
     }
-  }, [status, n, meta.data?.mode]);
+  }, [status, n, meta.data?.mode, spec.id, spec.datasetId]);
   // Time from choosing a colouring to its first draw, for every change (not only the first).
   const colourKey = JSON.stringify(p.colorBy);
   const asked = useRef<{ key: string; at: number } | null>(null);

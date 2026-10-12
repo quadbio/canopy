@@ -66,7 +66,17 @@ NAME_FIELDS = frozenset(
         "config_file",
         "log_dir",
         "cache_dir",
+        "state_dir",
+        "tmp_dir",
         "dir",
+        "allowed_hosts",  # the server's host names
+        "host",
+        # Catalog ids are a plain hash of root name and path: anyone guessing a file name could
+        # confirm it from a log. At strict they become salted tokens (consistent within an
+        # installation, so lines still link up).
+        "dataset_id",
+        "dataset",
+        "c_dataset",  # the same id, sent by the browser
         "data_roots",
         "target",
         "ignore",

@@ -111,6 +111,85 @@ def serve(config: ConfigOpt = None) -> None:
     )
 
 
+token_app = _typer("Strict-privacy tokens in logs")
+app.add_typer(token_app, name="token")
+
+
+def _strings(value: object, out: set[str]) -> None:
+    """Every string (and dict key) in a JSON value: the names a fingerprint holds."""
+    if isinstance(value, str):
+        if 0 < len(value) <= 300:
+            out.add(value)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _strings(k, out)
+            _strings(v, out)
+    elif isinstance(value, list):
+        for v in value:
+            _strings(v, out)
+
+
+@token_app.command("find")
+def token_find(
+    tokens: Annotated[
+        list[str], typer.Argument(help="Tokens from a strict log, e.g. h_fb26d42600")
+    ],
+    config: ConfigOpt = None,
+) -> None:
+    """Which name a strict-log token stands for. Run it on the host only: it reads the index
+    and prints real names (to the terminal, never to a log)."""
+    from canopy.catalog.db import DB_FILE, CatalogDB
+    from canopy.privacy import token
+
+    cfg = _load(config)
+    salt = _salt(cfg)
+    candidates: dict[str, str] = {}
+
+    def add(kind: str, value: object) -> None:
+        if isinstance(value, str) and value:
+            candidates.setdefault(token(value, salt), f"{kind}: {value}")
+
+    for r in cfg.data_roots:
+        add("data root", r.name)
+        add("data root path", str(r.path))
+    for kind, v in (
+        ("cache folder", cfg.cache_dir),
+        ("state folder", cfg.state),
+        ("log folder", cfg.logging.dir),
+        ("job tmp folder", cfg.jobs.tmp_dir),
+        ("config file", config),
+    ):
+        if v is not None:
+            add(kind, str(v))
+    for h in cfg.server.allowed_hosts:
+        add("host name", h)
+    for g in cfg.catalog.ignore:
+        add("ignore pattern", g)
+    db = CatalogDB(cfg.state / DB_FILE)
+    with db.connect() as con:
+        rows = con.execute(
+            "SELECT id, root, relpath, version, fingerprint FROM datasets"
+        ).fetchall()
+    for row in rows:
+        id_, root, rel, version, fp = row[0], row[1], row[2], row[3], row[4]
+        add(f"dataset id ({root}/{rel})", id_)
+        add("dataset path", rel)
+        add("dataset path", f"{root}/{rel}")
+        for part in Path(rel).parts:
+            add(f"file or folder name in {root}", part)
+        if version:
+            add(f"dataset version ({root}/{rel})", version)
+        names: set[str] = set()
+        if fp:
+            _strings(json.loads(fp), names)
+        for n in names:
+            add(f"name in {root}/{rel}", n)
+    for t in tokens:
+        typer.echo(
+            f"{t}  →  {candidates.get(t, 'not found (a gene name, or a name not in the index)')}"
+        )
+
+
 @app.command("link")
 def link_cmd(config: ConfigOpt = None) -> None:
     """Print the access link of this installation (with its token) again."""

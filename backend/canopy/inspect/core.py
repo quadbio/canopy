@@ -179,7 +179,7 @@ def inspect_path(path: Path, *, measure_size: bool = True) -> Fingerprint:
                 Node(zarr.open_group(path, mode="r")), path, fp.errors
             )
         fp.warnings = _warnings(fp)
-        extra["dataset_id"] = fp.dataset_id
+        extra["version"] = fp.dataset_id  # the content version (the catalog id is `dataset_id`)
         extra["size_bytes"] = size
         extra["n_errors"] = len(fp.errors)
     return fp
