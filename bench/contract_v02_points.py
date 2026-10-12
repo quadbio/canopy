@@ -19,7 +19,7 @@ import numpy as np
 import pyarrow.dataset as ds
 import zarr
 
-from dbx.contract.write import array, morton_order
+from canopy.contract.write import array, morton_order
 
 V01_CHUNK = 1_048_576
 V02_CHUNK = 65_536

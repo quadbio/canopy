@@ -4,7 +4,7 @@ Date: 2026-10-10 · Status: accepted (S3 + review batch 3)
 
 ## Context
 S3 adds the first background work in the server (the crawler) and S5 will add worker processes
-(conversion jobs). On the host, dbx is tested by the owner alone and only log files come back
+(conversion jobs). On the host, canopy is tested by the owner alone and only log files come back
 (the data policy forbids direct access), so the logs must be complete, safe to copy off the host,
 and correct when several processes write at once. Review findings P2, P3, P5–P8 (see
 `reviews/code_review_S0-S2/SUMMARY.md`).
@@ -32,7 +32,7 @@ and correct when several processes write at once. Review findings P2, P3, P5–P
   answers from the index.
 
 **Logging**
-- One rotating file per process, `dbx-<role>-<pid>.jsonl`; every line has `pid`, `role`, `build`.
+- One rotating file per process, `canopy-<role>-<pid>.jsonl`; every line has `pid`, `role`, `build`.
   Old files of any process are pruned after `retention_days`.
 - Names go in dedicated fields (`NAME_FIELDS`), tokenised under `strict`. Exceptions are logged as
   type, code locations (no home/install prefix), chain types and a message redacted to the level;
@@ -45,14 +45,14 @@ and correct when several processes write at once. Review findings P2, P3, P5–P
 - Hangs are visible (review A-M2): `slow_request` while a request runs too long, `scan_progress`
   heartbeats, and `kill -USR1` stack dumps to `stacks-<pid>.txt`.
 - Build identity: `_build.json` in a packaged install (written in S9), else the git commit read
-  from `.git`; `dbx --version`, `x-dbx-build` header, `/api/version`.
+  from `.git`; `canopy --version`, `x-canopy-build` header, `/api/version`.
 - Environment snapshot adds the HDF5 version and locking setting, available memory, and file
   system type and free space of the cache and each root (by root name, never by path).
 
 ## Evidence
 - Example data (2 h5ad, 2 SpatialData) indexed in 130 ms; a 10,000-file synthetic tree with 300
   datasets indexed and rescanned in tests (rescan inspects nothing).
-- A live `dbx serve` run with `privacy = "strict"`: the log file contains no user name, data
+- A live `canopy serve` run with `privacy = "strict"`: the log file contains no user name, data
   root, dataset or folder name (checked by grep).
 - Tests push secret names through fields, nested config, exception messages and chains, warnings
   and third-party log lines at all three levels.

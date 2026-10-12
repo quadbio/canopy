@@ -19,7 +19,7 @@ Example data: two MERSCOPE regions, each with:
 
 ## Decisions
 
-### Converter (`dbx.convert.spatialdata`)
+### Converter (`canopy.convert.spatialdata`)
 - **Reading:** `spatialdata.read_zarr` reads images, labels, shapes and points only. Tables go
   through `write_table` (the AnnData path), so no table matrix is ever loaded whole by the
   reader (review S6, A-B2: it had loaded every matrix, uncounted).

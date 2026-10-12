@@ -1,4 +1,4 @@
-"""The SpatialData converter (SpatialData zarr → dbx store, SPEC §5–§8)."""
+"""The SpatialData converter (SpatialData zarr → canopy store, SPEC §5–§8)."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ import zarr
 from test_convert import _wait
 from test_datasets import client_for
 
-from dbx.catalog import entry_id
-from dbx.config import Config
-from dbx.contract import read_manifest, validate_store
-from dbx.convert.anndata import ConvertOptions
-from dbx.convert.matrix import ConversionError
-from dbx.convert.spatialdata import convert_spatialdata, feature_column, safe_name
-from dbx.inspect import inspect_path
-from dbx.synth import write_spatialdata
-from dbx.synth.spec import (
+from canopy.catalog import entry_id
+from canopy.config import Config
+from canopy.contract import read_manifest, validate_store
+from canopy.convert.anndata import ConvertOptions
+from canopy.convert.matrix import ConversionError
+from canopy.convert.spatialdata import convert_spatialdata, feature_column, safe_name
+from canopy.inspect import inspect_path
+from canopy.synth import write_spatialdata
+from canopy.synth.spec import (
     AnnDataSpec,
     ColumnSpec,
     ImageSpec,
@@ -90,7 +90,7 @@ def test_synthetic_spatialdata_converts_faithfully(tmp_path: Path) -> None:
     assert pts.n == 20_000 and pts.feature_key == "gene" and not pts.feature_key_inferred
     off = root["points/tx/offsets"][...]
     genes = sd.points["tx"]["gene"].compute()
-    feats = root["points/tx"].attrs["dbx"]["features"]
+    feats = root["points/tx"].attrs["canopy"]["features"]
     for f in (0, 5):
         assert off[f + 1] - off[f] == int((genes == feats[f]).sum())
     assert m.coordinate_systems == ["global"]
@@ -153,7 +153,7 @@ def test_merscope_example_converts(tmp_path: Path, example) -> None:  # type: ig
     root = zarr.open_group(r.store, mode="r")
     cell = root["points/signal/cell"][...]
     off = root["points/signal/offsets"][...]
-    feats = root["points/signal"].attrs["dbx"]["features"]
+    feats = root["points/signal"].attrs["canopy"]["features"]
     sd = spatialdata.read_zarr(src, selection=("points", "tables"))
     t = sd.tables["table_cells"]
     key = t.uns["spatialdata_attrs"]["instance_key"]
@@ -387,7 +387,7 @@ def test_feature_column_from_option_or_text_names() -> None:
 
 
 def test_spatial_names_never_collide_or_hide() -> None:
-    from dbx.convert.spatialdata import unique_names
+    from canopy.convert.spatialdata import unique_names
 
     assert safe_name("..") == "_.." and safe_name(".hidden") == "_.hidden"
     assert unique_names(["a b", "a/b", "a_b"]) == {"a b": "a_b", "a/b": "a_b_2", "a_b": "a_b_3"}

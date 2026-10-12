@@ -13,7 +13,7 @@ Time needed: about 20–30 minutes.
 In a terminal:
 
 ```bash
-cd /Users/hezhi/Tools/Projects/data_browser_server/dbx
+cd /Users/hezhi/Tools/Projects/data_browser_server/canopy
 pixi run -e dev demo
 ```
 
@@ -29,13 +29,13 @@ open **http://127.0.0.1:8765** in Chrome (Safari and Firefox should also work; C
 reference). Leave the terminal open; **Ctrl+C** stops the server.
 
 If it says the port is in use, an old server is still running: stop it, or start on another port
-with `DBX_DEMO_PORT=8766 pixi run -e dev demo` and open `http://127.0.0.1:8766`.
+with `CANOPY_DEMO_PORT=8766 pixi run -e dev demo` and open `http://127.0.0.1:8766`.
 
 ## 2. The screen
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ dbx  data browser                         Indexed 14:02  Refresh  Theme  │
+│ canopy  data browser                         Indexed 14:02  Refresh  Theme  │
 ├───────────────┬─────────────────────────────────────────┬────────────────┤
 │ Search…       │                                         │ View settings  │
 │ ▾ examples    │        views (1–9, in a grid)           │ Embedding      │
@@ -81,7 +81,7 @@ The examples are small (at most 52 k cells), so they say little about speed. To 
 cells (synthetic: 40 clusters, made up on this Mac, about 1.1 GB, generated once in ~1 minute):
 
 ```bash
-DBX_DEMO_LARGE=1 pixi run -e dev demo
+CANOPY_DEMO_LARGE=1 pixi run -e dev demo
 ```
 
 A third folder, **synthetic**, appears. Measured on this MacBook (M2, Chrome): open → picture in
@@ -142,7 +142,7 @@ Tips:
 | Problem | What to do |
 |---|---|
 | Page is blank or old | Hard reload: Cmd+Shift+R |
-| "Port … already in use" | Stop the other server, or use `DBX_DEMO_PORT=8766` |
+| "Port … already in use" | Stop the other server, or use `CANOPY_DEMO_PORT=8766` |
 | A view stays on the spinner | Note the time and dataset, close the view, report it |
 | You want a clean start | **Close all** in the header |
 | The terminal shows an error and the server stopped | Copy the last ~20 lines of the terminal into the report |

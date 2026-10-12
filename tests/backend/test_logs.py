@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 from conftest import log_events
 
-from dbx.build import build_id
-from dbx.config import Config, LoggingConfig
-from dbx.logs import (
+from canopy.build import build_id
+from canopy.config import Config, LoggingConfig
+from canopy.logs import (
     current_log_file,
     get_logger,
     log_file_name,
@@ -21,7 +21,7 @@ from dbx.logs import (
     setup_logging,
     timed,
 )
-from dbx.privacy import redact_text, token
+from canopy.privacy import redact_text, token
 
 SECRET_NAME = "patient_0042_tumour"
 SECRET_DIR = "/home/alice/secret_project/cohort7"
@@ -41,7 +41,7 @@ def test_timed_logs_stage_and_extra_fields(cfg: Config) -> None:
 
 def test_timed_nests_and_reports_peak_memory(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
     rss = [100.0]
-    monkeypatch.setattr("dbx.logs.rss_mb", lambda: rss[0])
+    monkeypatch.setattr("canopy.logs.rss_mb", lambda: rss[0])
     with timed("convert"):
         with timed("x_csc"):
             rss[0] = 500.0  # a short spike, gone before the stage ends
@@ -72,7 +72,7 @@ def test_timed_logs_failure_and_reraises(cfg: Config) -> None:
 def test_every_line_has_pid_role_build(cfg: Config) -> None:
     get_logger("x").info("hello")
     f = current_log_file()
-    assert f is not None and f.name == log_file_name("test") == f"dbx-test-{os.getpid()}.jsonl"
+    assert f is not None and f.name == log_file_name("test") == f"canopy-test-{os.getpid()}.jsonl"
     for ev in log_events():
         assert ev["pid"] == os.getpid() and ev["role"] == "test" and ev["build"] == build_id()
 
@@ -84,7 +84,7 @@ def test_build_id_has_commit() -> None:
 def _fail_everywhere() -> None:
     """Secret names through every logging path: fields, exceptions, chains, warnings,
     third-party log lines."""
-    log = get_logger("dbx.test")
+    log = get_logger("canopy.test")
     log.info("dataset_opened", path=f"{SECRET_DIR}/{SECRET_NAME}.h5ad", column=SECRET_NAME)
     log.info("nested", config={"data_roots": [{"name": SECRET_NAME, "path": SECRET_DIR}]})
     try:
@@ -152,8 +152,8 @@ def test_redact_text_limits_length() -> None:
 
 
 def test_prune_removes_only_old_log_files(tmp_path: Path) -> None:
-    old = tmp_path / "dbx-server-1.jsonl"
-    new = tmp_path / "dbx-worker-2.jsonl.1"
+    old = tmp_path / "canopy-server-1.jsonl"
+    new = tmp_path / "canopy-worker-2.jsonl.1"
     other = tmp_path / "notes.txt"
     for f in (old, new, other):
         f.write_text("x")
@@ -178,9 +178,9 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
     import pandas as pd
     from fastapi.testclient import TestClient
 
-    from dbx.app import create_app
-    from dbx.catalog import entry_id
-    from dbx.config import CatalogConfig, Config, DataRoot, ServerConfig
+    from canopy.app import create_app
+    from canopy.catalog import entry_id
+    from canopy.config import CatalogConfig, Config, DataRoot, ServerConfig
 
     data = tmp_path / "SECRETROOT"
     (data / "SECRETFOLDER").mkdir(parents=True)
@@ -199,7 +199,7 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
         catalog=CatalogConfig(ignore=["SECRETIGNORE*"]),
     )
     setup_logging(cfg.logging, role="test", salt="s", to_console=False)
-    get_logger("dbx.config").info("config_loaded", config=cfg.model_dump(mode="json"))
+    get_logger("canopy.config").info("config_loaded", config=cfg.model_dump(mode="json"))
     app = create_app(cfg, background=False)
     app.state.catalog.scan_now()
     id = entry_id("SECRETNAME", "SECRETFOLDER/SECRETFILE.h5ad")
@@ -225,7 +225,7 @@ def test_strict_server_log_has_no_names(tmp_path: Path) -> None:
 
 
 def test_io_errors_keep_their_errno_at_every_level(tmp_path: Path) -> None:
-    from dbx.privacy import redact_text
+    from canopy.privacy import redact_text
 
     for level in ("strict", "standard"):
         setup_logging(
@@ -234,7 +234,7 @@ def test_io_errors_keep_their_errno_at_every_level(tmp_path: Path) -> None:
             salt="s",
             to_console=False,
         )
-        log = get_logger("dbx.test")
+        log = get_logger("canopy.test")
         try:
             raise OSError(5, "Input/output error")
         except OSError:

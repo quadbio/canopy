@@ -96,7 +96,7 @@ export function reportStoreReads() {
 }
 if (typeof window !== 'undefined') {
   setInterval(reportStoreReads, 10_000);
-  (window as unknown as { __dbxStoreStats?: unknown }).__dbxStoreStats = storeStats; // tests, debugging
+  (window as unknown as { __canopyStoreStats?: unknown }).__canopyStoreStats = storeStats; // tests, debugging
 }
 
 // ---------------------------------------------------------------- the store
@@ -154,7 +154,7 @@ function keyUrl(base: string, key: string) {
 const V2_METADATA = /(^|\/)\.(zgroup|zattrs|zarray|zmetadata)$/;
 
 /** Range reads of a store (zarrita's AsyncReadable). */
-export class DbxStore {
+export class CanopyStore {
   constructor(readonly base: string) {}
 
   get(key: string, opts: Opts = {}) {
@@ -197,21 +197,21 @@ class WholeFileStore {
 
 // ---------------------------------------------------------------- arrays
 
-type Arr = zarr.Array<zarr.DataType, DbxStore>;
-const stores = new Map<string, DbxStore>();
+type Arr = zarr.Array<zarr.DataType, CanopyStore>;
+const stores = new Map<string, CanopyStore>();
 const arrays = new Map<string, Promise<Arr>>();
 
 function store(version: string) {
   let s = stores.get(version);
   if (!s) {
-    s = new DbxStore(storeUrl(version));
+    s = new CanopyStore(storeUrl(version));
     stores.set(version, s);
   }
   return s;
 }
 
 /** A store rooted at one element (e.g. an image for Viv). */
-export const elementStore = (version: string, path: string) => new DbxStore(`${storeUrl(version)}/${path}`);
+export const elementStore = (version: string, path: string) => new CanopyStore(`${storeUrl(version)}/${path}`);
 
 /** An opened array, cached per version (its metadata and shard indexes are read once). */
 function open(version: string, path: string): Promise<Arr> {

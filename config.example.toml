@@ -1,4 +1,4 @@
-# dbx configuration. Relative paths are resolved against this file's folder.
+# canopy configuration. Relative paths are resolved against this file's folder.
 
 cache_dir = "cache"          # converted stores (rebuildable), never inside a data root
 

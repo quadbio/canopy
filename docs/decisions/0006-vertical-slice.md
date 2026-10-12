@@ -22,7 +22,7 @@ structure that all later views use (reviewer B's S4 checklist, review items S6â€
   colouring; codes are still served.
 - Converted stores served at `/api/stores/<version>/c<major>/<key>` with single, suffix and
   clamped ranges, `immutable` caching, hidden keys answered 404 (Viv probes `.zattrs`).
-  `check-store-js` now runs Viv + zarrita against a real `dbx serve`.
+  `check-store-js` now runs Viv + zarrita against a real `canopy serve`.
 - Client-side telemetry goes to the server log (`client_event`), bounded to numbers and codes.
 
 **Frontend**

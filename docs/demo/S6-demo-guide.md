@@ -5,11 +5,11 @@ Start, screen layout and how to report are as in the S4 guide (`S4-demo-guide.md
 built:
 
 ```bash
-cd /Users/hezhi/Tools/Projects/data_browser_server/dbx
+cd /Users/hezhi/Tools/Projects/data_browser_server/canopy
 pixi run -e dev demo        # then open http://127.0.0.1:8765
 ```
 
-The large synthetic datasets are optional this time (`DBX_DEMO_LARGE=1` as before). Report in
+The large synthetic datasets are optional this time (`CANOPY_DEMO_LARGE=1` as before). Report in
 `feedback-S6.md`. About 25 minutes.
 
 Updated after the cold review (batch R6, 2026-10-12): steps 5, 8 and 9 changed slightly.

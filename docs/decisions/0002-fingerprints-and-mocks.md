@@ -10,7 +10,7 @@ file's structure before reading it.
 
 ## Decision
 
-1. **Fingerprint** (`dbx.inspect`, `fingerprint_version` 1): a JSON description of a dataset's
+1. **Fingerprint** (`canopy.inspect`, `fingerprint_version` 1): a JSON description of a dataset's
    structure, read from metadata only (HDF5/zarr attributes, array shapes/dtypes/chunks/codecs,
    parquet footers). **It never contains values**: no expression values, barcodes, coordinates,
    category labels or gene names.
@@ -23,7 +23,7 @@ file's structure before reading it.
    - `dataset_id` = hash(real path, mtime of the file or the store's root metadata).
    - `warnings`: structural facts that change serving (CSR matrix, non-float X, no pyramid,
      single-chunk image, points without feature_key).
-2. **Privacy levels** (`dbx.inspect.redact`): `standard` keeps names; `strict` replaces every
+2. **Privacy levels** (`canopy.inspect.redact`): `standard` keeps names; `strict` replaces every
    user-chosen name (path, file and element names, columns, keys, channels, coordinate systems)
    with a salted hash token, keeping format-defined names (`global`, `x`, `y`, `X_umap`, …).
    Tokens are stable for a given salt, so bundles from one installation stay comparable.
@@ -34,7 +34,7 @@ file's structure before reading it.
    free text, and unreadable elements are recorded in `errors` instead of aborting.
    Fingerprint version 2 adds these, `layout` (anndata `current` / `0.7` / `pre-0.7`) and an
    optional `size_bytes`.
-3. **Synthetic data** (`dbx.synth`): `SynthMatrix` defines a matrix by hashing (row, column), so
+3. **Synthetic data** (`canopy.synth`): `SynthMatrix` defines a matrix by hashing (row, column), so
    the same values can be streamed in row blocks (CSR, dense) or column blocks (CSC). Files of
    any size are written with bounded memory (~1.4 GB peak at 1 M × 2 k).
 4. **Mocks**: `write_mock(fingerprint)` rebuilds a look-alike dataset with random values and the

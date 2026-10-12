@@ -12,10 +12,10 @@ import pytest
 from conftest import CACHE, EXAMPLES, log_events, missing_example
 from fastapi.testclient import TestClient
 
-from dbx.app import create_app
-from dbx.catalog import Catalog, CatalogDB, PathEscapeError, entry_id, scan
-from dbx.catalog.db import DB_FILE
-from dbx.config import CatalogConfig, Config, DataRoot
+from canopy.app import create_app
+from canopy.catalog import Catalog, CatalogDB, PathEscapeError, entry_id, scan
+from canopy.catalog.db import DB_FILE
+from canopy.config import CatalogConfig, Config, DataRoot
 
 
 def tiny_h5ad(path: Path) -> Path:
@@ -365,7 +365,7 @@ def test_cli_scan_leaves_a_live_scan_alone(cfg: Config) -> None:
 
 
 def test_scan_progress_heartbeat(cfg: Config, data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from dbx.catalog import crawl
+    from canopy.catalog import crawl
 
     monkeypatch.setattr(crawl.Progress, "HEARTBEAT_S", 0.05)
     tiny_h5ad(data / "a.h5ad")

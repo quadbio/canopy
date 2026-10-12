@@ -18,7 +18,7 @@ type Theme = 'system' | 'light' | 'dark';
 function useTheme(): [Theme, () => void] {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
-      return (localStorage.getItem('dbx-theme') as Theme) || 'system';
+      return (localStorage.getItem('canopy-theme') as Theme) || 'system';
     } catch {
       return 'system';
     }
@@ -27,7 +27,7 @@ function useTheme(): [Theme, () => void] {
     if (theme === 'system') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', theme);
     try {
-      localStorage.setItem('dbx-theme', theme);
+      localStorage.setItem('canopy-theme', theme);
     } catch {
       // storage unavailable: the choice lasts for this page only
     }
@@ -131,8 +131,9 @@ export function App() {
   return (
     <div className="app">
       <header className="header">
-        <span className="brand">dbx</span>
-        <span className="muted small">data browser</span>
+        <img className="brand-logo" src="/canopy-64.png" srcSet="/canopy-64.png 1x, /canopy-128.png 2x" alt="" width={28} height={28} />
+        <span className="brand">Canopy</span>
+        <span className="muted small">single-cell and spatial data browser</span>
         <div className="spacer" />
         <CatalogStatus />
         <ResetWorkspace />

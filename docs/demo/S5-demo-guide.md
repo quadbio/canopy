@@ -4,8 +4,8 @@ Start, screen layout and how to report are as in the S4 guide (`S4-demo-guide.md
 2, 6 and 7). Start with the large synthetic datasets included:
 
 ```bash
-cd /Users/hezhi/Tools/Projects/data_browser_server/dbx
-DBX_DEMO_LARGE=1 pixi run -e dev demo        # then open http://127.0.0.1:8765
+cd /Users/hezhi/Tools/Projects/data_browser_server/canopy
+CANOPY_DEMO_LARGE=1 pixi run -e dev demo        # then open http://127.0.0.1:8765
 ```
 
 Report in `feedback-S5.md` (same format as before). About 20 minutes.

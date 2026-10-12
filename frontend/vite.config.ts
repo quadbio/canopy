@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
-// The dev server proxies API calls to the dbx backend (`pixi run serve`).
+// The dev server proxies API calls to the canopy backend (`pixi run serve`).
 export default defineConfig({
   plugins: [react()],
   // deck.gl + luma.gl + Viv make one ~1.1 MB bundle (330 KB gzipped); it is cached by the browser

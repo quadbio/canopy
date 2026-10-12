@@ -60,8 +60,8 @@
     },
     "ConverterInfo": {
       "properties": {
-        "dbx_version": {
-          "title": "Dbx Version",
+        "canopy_version": {
+          "title": "Canopy Version",
           "type": "string"
         },
         "created": {
@@ -93,7 +93,7 @@
         }
       },
       "required": [
-        "dbx_version",
+        "canopy_version",
         "created",
         "duration_s"
       ],
@@ -670,8 +670,8 @@
   },
   "properties": {
     "contract": {
-      "const": "dbx-store",
-      "default": "dbx-store",
+      "const": "canopy-store",
+      "default": "canopy-store",
       "title": "Contract",
       "type": "string"
     },
@@ -750,7 +750,7 @@
     "source",
     "converter"
   ],
-  "title": "dbx store manifest (contract 0.2.0)",
+  "title": "canopy store manifest (contract 0.2.0)",
   "type": "object",
-  "$id": "https://dbx.local/contract/0.2.0/manifest.schema.json"
+  "$id": "https://canopy.local/contract/0.2.0/manifest.schema.json"
 }

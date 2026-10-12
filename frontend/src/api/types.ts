@@ -1,4 +1,4 @@
-// Shapes of the backend's JSON replies (see backend/dbx/catalog/api.py, backend/dbx/data/api.py).
+// Shapes of the backend's JSON replies (see backend/canopy/catalog/api.py, backend/canopy/data/api.py).
 
 export interface DatasetSummary {
   n_obs?: number;

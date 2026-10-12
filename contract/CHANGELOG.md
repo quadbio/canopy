@@ -4,7 +4,7 @@
 
 From the cold code review (comparison: `history/v0.1-to-v0.2-comparison.md`).
 - Compatibility: readers ignore unknown fields; newer minor versions open with a warning;
-  `dbx validate` strict for its own version (§9). Validator rules listed in §12.
+  `canopy validate` strict for its own version (§9). Validator rules listed in §12.
 - Points: 16,384-row chunks in shards of 64; `feature` array dropped; `offsets` uint32;
   `chunk_bbox`; materialised `overview/`; per-gene `lod/` above 100,000 points.
 - Polygons: closed counter-clockwise rings; `starts` uint32; Morton order of centroids;

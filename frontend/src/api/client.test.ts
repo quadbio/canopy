@@ -31,15 +31,15 @@ describe('decodeGene', () => {
     const g = decodeGene(
       buf,
       headers({
-        'x-dbx-encoding': 'sparse',
-        'x-dbx-n': '6',
-        'x-dbx-nnz': '3',
-        'x-dbx-dtype': 'uint16',
-        'x-dbx-offset': '1',
-        'x-dbx-scale': String(1 / 65534),
-        'x-dbx-max': '2',
-        'x-dbx-min': '0',
-        'x-dbx-p99': '2',
+        'x-canopy-encoding': 'sparse',
+        'x-canopy-n': '6',
+        'x-canopy-nnz': '3',
+        'x-canopy-dtype': 'uint16',
+        'x-canopy-offset': '1',
+        'x-canopy-scale': String(1 / 65534),
+        'x-canopy-max': '2',
+        'x-canopy-min': '0',
+        'x-canopy-p99': '2',
       }),
     );
     expect(Array.from(g.values.slice(0, 5))).toEqual([0, 1, 0, 0, 2]);
@@ -49,7 +49,7 @@ describe('decodeGene', () => {
 
   it('reads dense float32 replies as they are', () => {
     const buf = new Float32Array([0.5, 0, 2]).buffer;
-    const g = decodeGene(buf, headers({ 'x-dbx-encoding': 'dense', 'x-dbx-n': '3', 'x-dbx-nnz': '2', 'x-dbx-dtype': 'float32' }));
+    const g = decodeGene(buf, headers({ 'x-canopy-encoding': 'dense', 'x-canopy-n': '3', 'x-canopy-nnz': '2', 'x-canopy-dtype': 'float32' }));
     expect(Array.from(g.values)).toEqual([0.5, 0, 2]);
   });
 });

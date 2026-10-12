@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from dbx.config import Config, DataRoot, LoggingConfig, ServerConfig
-from dbx.logs import current_log_file, setup_logging
+from canopy.config import Config, DataRoot, JobsConfig, LoggingConfig, ServerConfig
+from canopy.logs import current_log_file, setup_logging
 
 
 def log_events() -> list[dict[str, Any]]:
@@ -28,6 +28,8 @@ def cfg(tmp_path: Path) -> Config:
         # "testserver" is the Host header of FastAPI's TestClient.
         server=ServerConfig(allowed_hosts=["testserver", "127.0.0.1", "localhost"]),
         logging=LoggingConfig(dir=tmp_path / "logs", memory_sample_interval=0),
+        # small: jobs must not wait for free memory on a busy test machine
+        jobs=JobsConfig(memory_gb=0.25),
     )
     setup_logging(c.logging, role="test", salt="test-salt", to_console=False)
     return c
@@ -35,7 +37,7 @@ def cfg(tmp_path: Path) -> Config:
 
 # ---------------------------------------------------------------- example datasets
 # The lab's example data lives next to the repository (not committed). Tests using it are
-# skipped when it is missing, or fail when DBX_REQUIRE_EXAMPLES=1 (so a run that is meant to
+# skipped when it is missing, or fail when CANOPY_REQUIRE_EXAMPLES=1 (so a run that is meant to
 # cover them cannot pass silently). SpatialData archives are extracted once into .cache/.
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO.parent / "example_datasets"
@@ -43,8 +45,8 @@ CACHE = REPO / ".cache" / "examples"
 
 
 def missing_example(what: str) -> None:
-    if os.environ.get("DBX_REQUIRE_EXAMPLES") == "1":
-        pytest.fail(f"example dataset {what} not available (DBX_REQUIRE_EXAMPLES=1)")
+    if os.environ.get("CANOPY_REQUIRE_EXAMPLES") == "1":
+        pytest.fail(f"example dataset {what} not available (CANOPY_REQUIRE_EXAMPLES=1)")
     pytest.skip(f"example dataset {what} not available")
 
 

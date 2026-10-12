@@ -1,4 +1,6 @@
-# dbx: lab single-cell and spatial data browser
+<img src="docs/assets/canopy-logo.png" alt="Canopy logo" width="160" align="right" />
+
+# Canopy: lab single-cell and spatial data browser
 
 Browse the lab data share, open h5ad / AnnData-zarr / SpatialData datasets, and view embeddings,
 gene expression and spatial images side by side. Status: **stage 1 (local prototype)**.
@@ -26,9 +28,9 @@ During frontend work, `pixi run -e dev fe-dev` starts Vite on :5173 with `/api` 
 
 ## Configuration, logs and privacy
 
-- Every command takes `--config FILE` (or the `DBX_CONFIG` environment variable). Unknown keys,
+- Every command takes `--config FILE` (or the `CANOPY_CONFIG` environment variable). Unknown keys,
   missing data roots and a cache inside a data root are errors, so typos never fall back silently.
-- Logs go to `[logging] dir` of the config, else to `~/.cache/dbx/logs` (or `$XDG_CACHE_HOME`),
+- Logs go to `[logging] dir` of the config, else to `~/.cache/canopy/logs` (or `$XDG_CACHE_HOME`),
   never to the current folder.
 - `[logging] privacy` sets what log files may contain (they are meant to be copied off the host):
   - `standard` (default): names are kept in their own fields (`path`, `root`, `column`, …);
@@ -38,14 +40,14 @@ During frontend work, `pixi run -e dev fe-dev` starts Vite on :5173 with `/api` 
     fixed-template lines are redacted as in `standard`); exceptions keep their type and code
     locations only.
   - `debug`: everything, including full tracebacks; for the developer's own machine only.
-- `dbx inspect PATH --level strict` replaces user-chosen names with tokens salted by a random
-  secret created once per installation (`<cache_dir>/.dbx_salt`, or `~/.cache/dbx/.dbx_salt`
+- `canopy inspect PATH --level strict` replaces user-chosen names with tokens salted by a random
+  secret created once per installation (`<cache_dir>/.canopy_salt`, or `~/.cache/canopy/.canopy_salt`
   without a config). The salt stays on the host; never copy it off with diagnostic bundles.
 
 ## Catalog
 
 The server indexes the data roots at start-up, every `[catalog] rescan_minutes`, and on demand
-(`POST /api/catalog/refresh`). `dbx catalog scan [--full] --config FILE` does one scan from the
+(`POST /api/catalog/refresh`). `canopy catalog scan [--full] --config FILE` does one scan from the
 command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at any time.
 
 - Recognised: `.h5ad` files, AnnData-zarr and SpatialData-zarr stores. Zarr stores are never
@@ -64,7 +66,7 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   the categories, a shorter one is not used and logged as `uns_colors_ignored`), embeddings,
   matrices. `table` picks a SpatialData table.
 - `GET /api/datasets/{id}/obs?column=` and `/obsm?key=&dims=0,1`: binary little-endian arrays
-  (`x-dbx-dtype`, `x-dbx-shape`, `x-dbx-kind` headers; weak ETag, 304 before any read). Category
+  (`x-canopy-dtype`, `x-canopy-shape`, `x-canopy-kind` headers; weak ETag, 304 before any read). Category
   and boolean codes are int8/16/32 with -1 for missing; numbers float32 (NaN for missing; integers
   above 2^24 lose precision, so ID-like columns should be strings). Floats are not gzipped (they
   barely compress); JSON and codes are. `GET …/obs/labels?column=` gives the labels behind the
@@ -76,10 +78,10 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   float32 copy built once, up to `memory.small_file_gb` and half of `memory.cache_gb`) or
   `needs_conversion`. ETag.
 - `GET /api/datasets/{id}/gene?i=&matrix=X&q=0|16`: gene `i` across all cells. Sparse (uint32
-  cell indices, then values) when smaller, else dense (`x-dbx-encoding`, `x-dbx-n`,
-  `x-dbx-nnz`); `q=16` sends uint16 codes, value = `x-dbx-offset` + code × `x-dbx-scale`
-  (65535 = missing; integer counts and zeros exact). `x-dbx-min`/`x-dbx-max` (all cells),
-  `x-dbx-p99` (non-zero values) and `x-dbx-n-expressing` describe the gene. Errors:
+  cell indices, then values) when smaller, else dense (`x-canopy-encoding`, `x-canopy-n`,
+  `x-canopy-nnz`); `q=16` sends uint16 codes, value = `x-canopy-offset` + code × `x-canopy-scale`
+  (65535 = missing; integer counts and zeros exact). `x-canopy-min`/`x-canopy-max` (all cells),
+  `x-canopy-p99` (non-zero values) and `x-canopy-n-expressing` describe the gene. Errors:
   404 `unknown_gene` / `unknown_matrix`, 409 `needs_conversion:matrix_<layout>`, 503
   `memory_busy` (the copy would exceed `memory.budget_gb` or the host's free memory).
 - Every error reply is `{"detail": {"code", "message"}, "request_id"}`; the code is also logged.
@@ -100,7 +102,7 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 ## Conversion and jobs
 
 - `POST /api/datasets/{id}/convert` `{"x_source": "X" | "layers/<name>"}` starts (or returns the
-  running) conversion of an h5ad, AnnData-zarr or SpatialData store into a dbx store in the cache; `GET
+  running) conversion of an h5ad, AnnData-zarr or SpatialData store into a canopy store in the cache; `GET
   /api/jobs?dataset=`, `GET /api/jobs/{job}`, `POST /api/jobs/{job}/cancel`. Once converted, the
   dataset is served from the store (every gene a direct read). Design: ADR 0009; SpatialData
   (images as zoom levels, cell outlines, transcripts by gene, one affine per coordinate system):
@@ -110,7 +112,7 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   12 bytes per stored value; default `<cache>/tmp`), `threads` (4: threads of one conversion for
   image and mask pyramids; each holds one source block, so this bounds memory and CPU on a shared
   host).
-- Each job runs in its own process and logs to `dbx-worker-<pid>.jsonl` next to the server's log.
+- Each job runs in its own process and logs to `canopy-worker-<pid>.jsonl` next to the server's log.
 - One server per cache folder (`server.lock`). A converted dataset is converted again only with
   `"force": true`. Free disk is checked before a job (about 20 bytes per stored value).
 - Sizing: a conversion needs about 0.3 GB + 1.2–1.5 × `jobs.memory_gb` + its obs/var (about 80
@@ -121,7 +123,7 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 - SpatialData whose transcripts have no declared gene column and several candidates: the
   conversion fails with "Could not tell which transcript column holds the genes" and the
   details then ask for the column name (API: `{"feature_key": "<column>"}`).
-- `dbx cache prune [--dry-run]` removes converted stores of dataset versions the catalog no
+- `canopy cache prune [--dry-run]` removes converted stores of dataset versions the catalog no
   longer knows (changed or removed files) and leftovers of failed conversions; run it with the
   server stopped.
 
@@ -138,10 +140,10 @@ directly (`api/store.ts`: manifest, zarrita range reads; images through Viv).
 ## Checks
 
 `pixi run -e dev check` runs ruff, mypy and pytest (backend), eslint, tsc and vitest (frontend)
-and the browser-library read check of the reference store served by `dbx serve`.
+and the browser-library read check of the reference store served by `canopy serve`.
 `pixi run -e dev test-examples` runs the backend tests with the example datasets required.
 `pixi run -e dev e2e` builds the frontend and runs the Playwright tests in Chromium (software
-WebGL) against `dbx serve` on the example datasets; screenshots go to
+WebGL) against `canopy serve` on the example datasets; screenshots go to
 `frontend/test-results/screens/`. `pixi run -e dev check-all` runs all of these.
 
 ## Environments and versions
@@ -155,7 +157,7 @@ WebGL) against `dbx serve` on the example datasets; screenshots go to
 ## Layout
 
 ```
-backend/dbx/     Python package (FastAPI app, CLI, logging, config)
+backend/canopy/     Python package (FastAPI app, CLI, logging, config)
 frontend/        React + TypeScript + deck.gl 9 + Viv 0.23
 contract/        data contract spec and schemas (S2)
 tests/           backend tests
@@ -166,9 +168,9 @@ scripts/         git hooks and helpers
 
 ## Logs
 
-Structured JSON lines, one rotating file per process: `<logging.dir>/dbx-<role>-<pid>.jsonl`
+Structured JSON lines, one rotating file per process: `<logging.dir>/canopy-<role>-<pid>.jsonl`
 (`role` is `server`, `cli` or, later, `worker`). Every line carries `pid`, `role` and `build`
-(version + git commit, also shown by `dbx --version` and the `x-dbx-build` response header).
+(version + git commit, also shown by `canopy --version` and the `x-canopy-build` response header).
 Requests log their route template, status and duration and return `x-request-id`; failures
 return a 500 reply that carries the request id. `timed()` stages nest (`convert/x_csc/write`)
 and log duration, RSS at exit, change and peak. Python warnings are logged as `python_warning`.
@@ -178,6 +180,6 @@ To collect logs from the host, copy the whole log folder.
 - requests running longer than `server.slow_request_s` (20 s) are logged as `slow_request` every
   30 s while they run, with route and dataset id; scans log `scan_progress` every 30 s, naming the
   file being inspected for longest;
-- `kill -USR1 <pid>` (pid: in the log lines, or `pgrep -f "dbx serve"`) writes the stack of every
+- `kill -USR1 <pid>` (pid: in the log lines, or `pgrep -f "canopy serve"`) writes the stack of every
   thread to `stacks-<pid>.txt` in the log folder: code locations only, no data. A hard crash
   writes its stack there too. Copy that file with the logs.

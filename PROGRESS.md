@@ -1,4 +1,4 @@
-# dbx progress log
+# Canopy progress log
 
 Plan: `../reports/10_implementation_plan.md` (approved 2026-10-09). Decisions: `docs/decisions/`.
 Resume rule: read this file, then continue with the first unchecked step.
@@ -20,25 +20,25 @@ Resume rule: read this file, then continue with the first unchecked step.
 ## Log
 
 - 2026-10-09 S0 done.
-  - Repo `dbx/` (git, branch main). pixi workspace: default/dev/frontend envs; `pixi.lock` for
+  - Repo `canopy/` (git, branch main). pixi workspace: default/dev/frontend envs; `pixi.lock` for
     osx-arm64 + linux-64. Resolved: Python 3.14.8, anndata 0.13.4, zarr 3.4.1, spatialdata 0.8.0,
     fastapi 0.143, node 26, pnpm 12. Frontend: React 19.3, deck.gl 9.4.0, luma.gl 9.4.2, Viv 0.23.0,
     zarrita 0.5.4, Vite 7, vitest 3.
   - Backend: config (TOML, pydantic), structlog JSON logging (rotating file, request ids,
     `timed()` stages, memory sampler incl. cgroup v2), FastAPI app (/api/health, /api/version,
-    serves frontend/dist), CLI (`dbx serve`, `dbx env`). 7 tests.
+    serves frontend/dist), CLI (`canopy serve`, `canopy env`). 7 tests.
   - Frontend: smoke screen (backend health + one deck.gl canvas with two views), API client + 2 tests.
   - Checks: `pixi run -e dev check`; pre-commit hook via `pixi run -e dev install-hooks`.
   - Compatibility results in docs/decisions/0001: contract will use zarr v3 + OME-NGFF 0.5.
   - Next: S1 (inspector + synthetic generator).
 - 2026-10-09 S1 done.
-  - `dbx.inspect`: fingerprint (structure only) for h5ad, AnnData-zarr, SpatialData; detection;
+  - `canopy.inspect`: fingerprint (structure only) for h5ad, AnnData-zarr, SpatialData; detection;
     warnings; strict/standard redaction. Example timings: 9–75 ms per dataset.
-  - `dbx.synth`: deterministic hash-defined matrix (identical CSR/CSC/dense), streaming AnnData
+  - `canopy.synth`: deterministic hash-defined matrix (identical CSR/CSC/dense), streaming AnnData
     writer (h5ad/zarr, chunks, compression, layers, colours), SpatialData writer (images with
     pyramids, labels, points, shapes, tables, transforms), mock from fingerprint +
     `structure_signature`. Round trip matches on all 3 example datasets.
-  - CLI: `dbx inspect PATH [--level strict]`, `dbx synth anndata …`, `dbx synth mock FP OUT`.
+  - CLI: `canopy inspect PATH [--level strict]`, `canopy synth anndata …`, `canopy synth mock FP OUT`.
   - Bench fixtures: `pixi run -e dev synth-bench` (1 M × 2 k CSR/CSC, ~53 s each, 1.4 GB RSS).
   - 26 backend tests (6 s). Decision record 0002. Example SpatialData archives are extracted
     to `.cache/examples/` by the tests.
@@ -47,8 +47,8 @@ Resume rule: read this file, then continue with the first unchecked step.
 - 2026-10-09 S2 drafted (awaiting user approval).
   - contract/SPEC.md (v0.1), contract/schema/manifest.schema.json (generated:
     `pixi run -e dev contract-schema`), contract/CHANGELOG.md, decision record 0003.
-  - backend/dbx/contract: models (manifest), validate (`dbx validate STORE [--deep]`),
-    write (array/pyramid/Morton helpers for the converter), example (`dbx contract example OUT`).
+  - backend/canopy/contract: models (manifest), validate (`canopy validate STORE [--deep]`),
+    write (array/pyramid/Morton helpers for the converter), example (`canopy contract example OUT`).
   - JS check: frontend/scripts/read-store.mjs (Viv + zarrita read the reference store).
     Finding: zarrita 0.5.4 cannot read zarr v3 string arrays -> names stored as attributes.
   - frontend: added zarrita ~0.5.4 as a direct dependency (same version as Viv's).
@@ -63,7 +63,7 @@ Resume rule: read this file, then continue with the first unchecked step.
     reviews/code_review_S0-S2.md; then adapt; then S3.
 - 2026-10-10 Cold review results in ../reviews/code_review_S0-S2/SUMMARY.md (finding IDs C*, I*,
   P*, S*). Fix batches 1–4 planned; contract v0.2 awaits user sign-off.
-- 2026-10-10 Review batch 1 DONE (a687539): config strict + path checks + DBX_CONFIG; CLI logs
+- 2026-10-10 Review batch 1 DONE (a687539): config strict + path checks + CANOPY_CONFIG; CLI logs
   never in cwd, --config everywhere; contract example safe; legacy h5ad (pre-0.7, 0.7);
   fixed-length strings; per-element errors; SpatialData w/o root attrs; HDF5 locking=False;
   dataset_id with size/store metadata; optional size; secret per-install salt, validated level,
@@ -81,35 +81,35 @@ Resume rule: read this file, then continue with the first unchecked step.
   deep checks), writer helpers for S5/S6 (sharded, polygon_layout, points_layout, relabel),
   example store v0.2; JS check automated (`check-store-js`, in `check`). 91 backend tests.
   Findings: @zarrita/storage 0.1.4 suffix-read bug -> use useSuffixRequest; Viv probes v2 (2x404).
-  Still open from review S8: JS check against `dbx serve` (needs S3/S4 store serving),
+  Still open from review S8: JS check against `canopy serve` (needs S3/S4 store serving),
   Playwright + check-all (S4), examples pytest marker. Batch 3 (logging for workers) before S5.
   - Next: S3 crawler + catalog (batch 3 alongside S3/S4).
 - 2026-10-10 S3 DONE with review batch 3 (ADR 0005).
-  - `dbx.catalog`: scandir walk (h5ad + AnnData/SpatialData zarr, never inside stores, hidden and
+  - `canopy.catalog`: scandir walk (h5ad + AnnData/SpatialData zarr, never inside stores, hidden and
     `catalog.ignore` skipped, symlinks leaving a root skipped, loop-safe, max_depth), SQLite index
     in `<cache>/catalog.sqlite`, incremental rescans by version stamp, threaded inspection
     (`inspect_workers`), states inspected/unsupported/failed with reason codes, unavailable roots
     keep entries. Server: scan at start-up, every `rescan_minutes`, `POST /api/catalog/refresh`.
     API: roots, tree, search, datasets/{id} (fingerprint with root-relative path), status.
-    `Catalog.resolve()` re-checks the root at open time (for S4 loaders). CLI `dbx catalog scan`.
-  - Batch 3: `dbx.privacy` (salt, tokens, free-text redaction); per-process log files
-    `dbx-<role>-<pid>.jsonl` with pid/role/build on every line, retention pruning; exceptions as
+    `Catalog.resolve()` re-checks the root at open time (for S4 loaders). CLI `canopy catalog scan`.
+  - Batch 3: `canopy.privacy` (salt, tokens, free-text redaction); per-process log files
+    `canopy-<role>-<pid>.jsonl` with pid/role/build on every line, retention pruning; exceptions as
     type + code locations + redacted message; warnings captured; strict tokenises name fields;
     nested `timed()` with sampled peak RSS; request failures -> 500 JSON with request id, route
-    template logged, bounded request ids; `dbx --version`, `x-dbx-build`; env adds HDF5 version,
+    template logged, bounded request ids; `canopy --version`, `x-canopy-build`; env adds HDF5 version,
     locking, available memory, filesystem type per root/cache.
-  - `pixi run -e dev test-examples` (DBX_REQUIRE_EXAMPLES=1). 124 backend tests.
+  - `pixi run -e dev test-examples` (CANOPY_REQUIRE_EXAMPLES=1). 124 backend tests.
   - Measured: examples (4 datasets) indexed in 130 ms; 10k-file tree (300 datasets) in tests.
     Live strict-mode server log checked: no names or paths.
   - Next: S4 vertical slice. First task: adopt reviewer B's S4 kickoff checklist (SUMMARY 2.4
     note); also S6/S7 review items (SPA fallback, gzip, v3-only opens), Playwright + check-all,
-    JS read check against `dbx serve`.
+    JS read check against `canopy serve`.
 - 2026-10-10 S4 DONE (ADR 0006), demo ready for the user.
-  - Backend: `dbx.data` (element-wise preview reads for h5ad / AnnData-zarr / SpatialData tables,
+  - Backend: `canopy.data` (element-wise preview reads for h5ad / AnnData-zarr / SpatialData tables,
     legacy layouts loaded whole below small_file_gb, LRU cache for files + arrays with idle
     timeout), dataset API (meta, obs, obsm as binary + ETag), `/api/stores` with Range (single,
     suffix, clamped; hidden keys 404), gzip for /api, SPA fallback, `/api/telemetry`.
-    `check-store-js` now runs against a real `dbx serve`.
+    `check-store-js` now runs against a real `canopy serve`.
   - Frontend (reviewer B checklist): api/ state/ views/ ui/ colour/ telemetry/ styles/; zustand,
     TanStack Query, Radix, tokens light/dark, colour Web Worker, view registry, one Deck with a
     grid of OrthographicViews; file browser (tree, search, details, Open); embedding view
@@ -135,7 +135,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - 2026-10-11 S4 demo feedback (docs/demo/feedback-S4.md): all 16 steps worked, no correctness
   issue. Batch F1 (triage: docs/demo/S4-feedback-triage.md): `?` help (Radix Tooltip) for Table
   and Embedding; table hint (rows, annotated region); dataset notes in plain language with
-  take-home (ui/notes.tsx); guide steps 11/12/14 reworded; `DBX_DEMO_LARGE=1` adds synthetic 1M/3M
+  take-home (ui/notes.tsx); guide steps 11/12/14 reworded; `CANOPY_DEMO_LARGE=1` adds synthetic 1M/3M
   h5ad; synth embeddings clustered by the first categorical column. 8 e2e tests.
   - Measured (Chrome, M2 GPU via ANGLE Metal): 1M/3M open -> ready 0.45/0.41 s; idle 58 fps;
     3M zoomed out ~60 ms/frame at 1440x900 (144 ms at 720x450: overdraw), zoomed in ~18 ms.
@@ -158,7 +158,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   3M cells: ready 0.67 s, switch to numbers 0.4 s.
   - Next in S5: F7 gene endpoint (CSC direct, quantised) + gene colouring; then converter/jobs/
     memory guard; subset drawing when zoomed out.
-- 2026-10-11 S5 gene expression DONE (ADR 0008). Backend: dbx.data.genes (access per matrix:
+- 2026-10-11 S5 gene expression DONE (ADR 0008). Backend: canopy.data.genes (access per matrix:
   direct CSC/dense, memory = CSR loaded once as CSC within small_file_gb and half the cache,
   needs_conversion above), /genes (names, symbols for Ensembl-like indexes, matrices) and /gene
   (sparse/dense, uint16 option, min/max/p99 headers). Frontend: gene search (combobox), Values
@@ -186,8 +186,8 @@ Resume rule: read this file, then continue with the first unchecked step.
   datasets' colour lists (15 columns) are used. 208 backend tests, 14 e2e.
   - Note for the converter (S5): SPEC 4.3 copies `<col>_colors`; apply the same rules there.
 - 2026-10-11 S5 converter + jobs + memory guard (IN PROGRESS, committed, all tests pass: 222 backend,
-  15 e2e). dbx.convert (out-of-core CSR/CSC/dense -> contract CSC via per-gene-bucket spill files,
-  gene stats, stratified downsample, colours, validate, atomic publish), dbx.jobs (SQLite jobs,
+  15 e2e). canopy.convert (out-of-core CSR/CSC/dense -> contract CSC via per-gene-bucket spill files,
+  gene stats, stratified downsample, colours, validate, atomic publish), canopy.jobs (SQLite jobs,
   worker processes, cancel via SIGTERM, interrupted on restart, memory guard 1.5x jobs.memory_gb
   free, RSS watchdog), API /api/datasets/{id}/convert, /api/jobs; converted stores served
   (mode "converted", genes direct); UI Convert button + progress + cancel/retry.
@@ -206,7 +206,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   conversion UX 5, colours 8; 1 blocker, 15 major. All accepted; batch R5 DONE (SUMMARY §4): job
   robustness (leftover cleanup by job id, disk check, heartbeats, re-queue on server stop, one
   server per cache, one store per version + atomic swap, layers kept), memory guard with obs
-  estimate + cgroup, richer worker logs, strict-safe, faithfulness fixes, dbx cache prune;
+  estimate + cgroup, richer worker logs, strict-safe, faithfulness fixes, canopy cache prune;
   frontend: server-truth conversion state + app-wide job watcher, LOD as prefix of a representative
   order with a canvas budget (3M: 18 ms zoomed out; 4 views 21 ms vs 72). 234 backend, 46 unit,
   16 e2e.
@@ -215,7 +215,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   smooth. Batch F3 DONE (triage docs/demo/S5-feedback-triage.md): palettes extended by OKLCH
   midpoints instead of repeating (no duplicate colours); colours picked by hand in the legend
   (per column/category, remembered, reset); generated example_with_layers.h5ad (counts layer + log
-  X, marker genes, 80-category column; `dbx synth demo`, new root "generated" in demo + e2e);
+  X, marker genes, 80-category column; `canopy synth demo`, new root "generated" in demo + e2e);
   Layers row in details. 235 backend, 49 unit, 17 e2e.
   - Proposed (awaiting user choice): Plot view for two features (scatter/density, violin, stacked
     bars; server-side summaries), ~4-6 days; recommended after S6 as start of S7.

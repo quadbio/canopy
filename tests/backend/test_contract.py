@@ -10,11 +10,11 @@ import numpy as np
 import pytest
 import zarr
 
-from dbx.config import Config
-from dbx.contract import MANIFEST, validate_store
-from dbx.contract.example import write_example_store
-from dbx.contract.models import manifest_json_schema
-from dbx.contract.write import morton_order, pyramid_levels
+from canopy.config import Config
+from canopy.contract import MANIFEST, validate_store
+from canopy.contract.example import write_example_store
+from canopy.contract.models import manifest_json_schema
+from canopy.contract.write import morton_order, pyramid_levels
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -43,7 +43,7 @@ def test_table_is_plain_anndata(example_store: Path) -> None:
     assert a.shape == (300, 40)
     assert a.X.format == "csc" and a.X.dtype == np.float32
     assert list(a.uns["cluster_colors"])[:1] == ["#1b9e77"]
-    assert set(a.uns["dbx"]["gene_stats"]) == {"nnz", "mean", "max", "p99"}
+    assert set(a.uns["canopy"]["gene_stats"]) == {"nnz", "mean", "max", "p99"}
 
 
 def test_schema_file_in_sync() -> None:
@@ -155,7 +155,7 @@ def test_unknown_manifest_field_rejected(cfg: Config, store: Path) -> None:
 
 def test_newer_minor_version_is_read_with_warning(cfg: Config, store: Path) -> None:
     """SPEC §9: readers ignore unknown fields; a newer minor version is only a warning."""
-    from dbx.contract.validate import read_manifest
+    from canopy.contract.validate import read_manifest
 
     _edit_manifest(store, lambda m: m.update(contract_version="0.9.0", new_feature={"a": 1}))
     assert read_manifest(store).contract_version == "0.9.0"  # the reader opens it
@@ -168,7 +168,7 @@ def test_newer_minor_version_is_read_with_warning(cfg: Config, store: Path) -> N
 # ---------------------------------------------------------------- v0.2 layout rules
 def _rewrite(store: Path, path: str, **kw: object) -> None:
     """Rewrite an array with different chunking/codec, keeping its values and attributes."""
-    from dbx.contract.write import array
+    from canopy.contract.write import array
 
     parent, name = path.rsplit("/", 1)
     a = zarr.open_array(store / path, mode="r")
@@ -193,7 +193,7 @@ def test_uncompressed_rejected(cfg: Config, store: Path) -> None:
 
 
 def test_points_must_be_sharded(cfg: Config, store: Path) -> None:
-    from dbx.contract.models import POINT_CHUNK
+    from canopy.contract.models import POINT_CHUNK
 
     _rewrite(store, "points/transcripts/xy", chunks=(POINT_CHUNK, 2))
     assert "xy: shards" in _errors(store)
@@ -277,7 +277,7 @@ def test_labels_need_image_label_metadata(cfg: Config, store: Path) -> None:
 
 
 def test_relabel() -> None:
-    from dbx.contract.write import needs_relabel, relabel
+    from canopy.contract.write import needs_relabel, relabel
 
     lab = np.array([[0, 7_000_000_000, 5], [5, -1, 7_000_000_000]], dtype=np.int64)
     new, original = relabel(lab)
@@ -289,7 +289,7 @@ def test_relabel() -> None:
 
 
 def test_polygon_layout_normalises_rings() -> None:
-    from dbx.contract.write import polygon_layout, signed_area
+    from canopy.contract.write import polygon_layout, signed_area
 
     cw_open = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], np.float32)  # clockwise, not closed
     ccw_closed = np.array([[5, 5], [6, 5], [6, 6], [5, 6], [5, 5]], np.float32)
@@ -302,7 +302,7 @@ def test_polygon_layout_normalises_rings() -> None:
 
 
 def test_points_layout_reduced_views() -> None:
-    from dbx.contract.write import points_layout
+    from canopy.contract.write import points_layout
 
     rng = np.random.default_rng(1)
     xy = rng.random((5000, 2)).astype(np.float32)
@@ -351,7 +351,7 @@ def test_example_refuses_foreign_folder(tmp_path: Path) -> None:
 def test_non_finite_manifest_numbers_fail_and_problems_hide_names(
     tmp_path: Path, store: Path
 ) -> None:
-    from dbx.contract.validate import Report
+    from canopy.contract.validate import Report
 
     bad = tmp_path / "bad"
     shutil.copytree(store, bad)

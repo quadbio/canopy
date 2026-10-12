@@ -531,8 +531,8 @@ export function Canvas() {
       {views.length > 0 && size.width > 0 && (
         <DeckGL
           ref={(r) => {
-            // For tests and debugging in the browser console (`__dbxDeck.deck`).
-            (window as unknown as { __dbxDeck?: unknown }).__dbxDeck = r ?? undefined;
+            // For tests and debugging in the browser console (`__canopyDeck.deck`).
+            (window as unknown as { __canopyDeck?: unknown }).__canopyDeck = r ?? undefined;
           }}
           views={deckViews}
           viewState={viewState}

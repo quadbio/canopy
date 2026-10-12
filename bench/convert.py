@@ -18,8 +18,8 @@ from pathlib import Path
 
 import psutil
 
-from dbx.convert.anndata import ConvertOptions, convert_anndata
-from dbx.inspect import inspect_path
+from canopy.convert.anndata import ConvertOptions, convert_anndata
+from canopy.inspect import inspect_path
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
         if fp.anndata is None or fp.anndata.X is None:
             continue
         for gb in args.budget_gb:
-            cache = Path(tempfile.mkdtemp(prefix="dbx-bench-convert-"))
+            cache = Path(tempfile.mkdtemp(prefix="canopy-bench-convert-"))
             proc = psutil.Process()
             peak = [proc.memory_info().rss]
             stop = threading.Event()

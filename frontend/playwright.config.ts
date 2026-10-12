@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// End-to-end tests against a real `dbx serve` on the example datasets, serving the built
+// End-to-end tests against a real `canopy serve` on the example datasets, serving the built
 // frontend (run `pnpm build` first; `pixi run -e dev e2e` does both).
-const port = Number(process.env.DBX_E2E_PORT ?? 8791);
+const port = Number(process.env.CANOPY_E2E_PORT ?? 8791);
 
 export default defineConfig({
   testDir: 'e2e',
@@ -32,6 +32,6 @@ export default defineConfig({
     url: `http://127.0.0.1:${port}/api/health`,
     reuseExistingServer: false,
     timeout: 60_000,
-    env: { DBX_E2E_PORT: String(port) },
+    env: { CANOPY_E2E_PORT: String(port) },
   },
 });

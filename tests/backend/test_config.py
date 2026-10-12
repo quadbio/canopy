@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dbx.config import ConfigError, load_config
+from canopy.config import ConfigError, load_config
 
 
 def test_relative_paths_resolve_against_config_file(tmp_path: Path) -> None:
@@ -58,6 +58,6 @@ def test_example_config_is_valid() -> None:
     text = example.read_text()
     import tomllib
 
-    from dbx.config import Config
+    from canopy.config import Config
 
     Config.model_validate(tomllib.loads(text))  # schema only; roots differ per machine

@@ -11,7 +11,7 @@ machine and numbers, so changes can be compared across releases.
 | `synth_1m_csr.h5ad` | 1,000,000 × 2,000 | 5 % (100 M values) | CSR, gzip | 0.56 GB | 52 s | 1.45 GB |
 | `synth_1m_csc.h5ad` | same matrix | 5 % | CSC, gzip | 0.52 GB | 55 s | 1.43 GB |
 
-Both files hold the identical matrix (`dbx.synth.SynthMatrix`, seed 0), so results from the two
+Both files hold the identical matrix (`canopy.synth.SynthMatrix`, seed 0), so results from the two
 layouts can be compared value for value. Generation streams X in blocks: peak memory does not grow
 with file size, and 5 GB fixtures take proportionally longer (~5 min).
 
@@ -44,7 +44,7 @@ Before R6 (review S6, reviewer A): the table's matrix was also loaded whole by t
 27 B/px against 16.
 
 
-### 2026-10-11 · conversion (`dbx.convert`) · MacBook Pro M2, 16 GB, local SSD · S5
+### 2026-10-11 · conversion (`canopy.convert`) · MacBook Pro M2, 16 GB, local SSD · S5
 
 | source | values | budget | time | peak RSS |
 |---|---|---|---|---|
@@ -57,7 +57,7 @@ gene 11 s, deep validation 1 s.
 
 ### 2026-10-11 · gene requests (`bench/genes.py`) · MacBook Pro M2, 16 GB, local SSD · S5 R4
 
-Fixtures: `dbx synth anndata <f> --n-obs 300000 --n-vars 20000 --density 0.02` (120 M values,
+Fixtures: `canopy synth anndata <f> --n-obs 300000 --n-vars 20000 --density 0.02` (120 M values,
 0.96 GB as a float32 CSC copy), once `--encoding csr`, once `--encoding csc` (gzip, ~0.43 GB
 each). Requests with `q=16`; 20 genes after the first, then 8 new genes in parallel.
 

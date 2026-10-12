@@ -97,7 +97,7 @@ test('a broken saved workspace does not break the app', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() =>
     localStorage.setItem(
-      'dbx-workspace',
+      'canopy-workspace',
       JSON.stringify({
         state: {
           views: [
@@ -695,7 +695,7 @@ test('spatial view of many cells: centres when zoomed out, outlines of the block
   expect(mainColours(await drawnColours(page, cell, { x0: 0, x1: 0.6 }), 0.0005).length).toBeGreaterThan(4);
   await page.screenshot({ path: 'test-results/screens/spatial-blocks-outlines.png' });
   // panning away and back reads what it has seen from the cache, with no failed reads
-  const stats = () => page.evaluate(() => (window as unknown as { __dbxStoreStats: () => Record<string, number> }).__dbxStoreStats());
+  const stats = () => page.evaluate(() => (window as unknown as { __canopyStoreStats: () => Record<string, number> }).__canopyStoreStats());
   await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.1, box.y + box.height * 0.45, { steps: 5 });
@@ -710,7 +710,7 @@ test('spatial view of many cells: centres when zoomed out, outlines of the block
 /** The view states of the canvas's panels (deck.gl views). */
 async function panelStates(page: Page) {
   return page.evaluate(() => {
-    const deck = (window as unknown as { __dbxDeck?: { deck?: { props: { viewState: Record<string, { target: number[]; zoom: number }> } } } }).__dbxDeck?.deck;
+    const deck = (window as unknown as { __canopyDeck?: { deck?: { props: { viewState: Record<string, { target: number[]; zoom: number }> } } } }).__canopyDeck?.deck;
     const vs = deck?.props.viewState ?? {};
     return Object.keys(vs)
       .filter((k) => !k.endsWith('/main'))

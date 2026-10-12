@@ -1,0 +1,320 @@
+"""Command-line interface: `canopy serve`, `canopy env`, …"""
+
+from __future__ import annotations
+
+import json
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated
+
+import typer
+import uvicorn
+
+from canopy.app import create_app
+from canopy.build import build_id, build_info
+from canopy.config import Config, ConfigError, LoggingConfig, load_config
+from canopy.environment import environment_snapshot
+from canopy.logs import default_log_dir, get_logger, install_stack_dumps, setup_logging
+from canopy.privacy import installation_salt
+
+
+def _typer(help: str) -> typer.Typer:
+    # Tracebacks on the terminal never show local variables (they can hold data values).
+    return typer.Typer(help=help, no_args_is_help=True, pretty_exceptions_show_locals=False)
+
+
+app = _typer("Canopy: single-cell and spatial data browser")
+synth_app = _typer("Generate synthetic datasets and mocks")
+app.add_typer(synth_app, name="synth")
+contract_app = _typer("Data contract tools")
+app.add_typer(contract_app, name="contract")
+catalog_app = _typer("Index the data roots")
+app.add_typer(catalog_app, name="catalog")
+
+ConfigOpt = Annotated[
+    Path | None,
+    typer.Option("--config", "-c", help="Path to config.toml", exists=True, envvar="CANOPY_CONFIG"),
+]
+
+
+class Level(StrEnum):
+    standard = "standard"
+    strict = "strict"
+
+
+def _version(value: bool) -> None:
+    if value:
+        typer.echo(f"canopy {build_id()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool,
+        typer.Option("--version", callback=_version, is_eager=True, help="Show version and build"),
+    ] = False,
+) -> None:
+    """canopy data browser."""
+
+
+def _load(config: Path | None) -> Config:
+    try:
+        return load_config(config)
+    except ConfigError as e:
+        typer.echo(f"config error: {e}", err=True)
+        raise typer.Exit(2) from e
+
+
+@app.command()
+def serve(config: ConfigOpt = None) -> None:
+    """Start the web server."""
+    cfg = _load(config)
+    log_dir = setup_logging(cfg.logging, role="server", salt=_salt(cfg))
+    stacks = install_stack_dumps(log_dir)
+    get_logger("canopy.config").info(
+        "config_loaded",
+        config_file=str(config) if config else None,
+        log_dir=str(log_dir) if log_dir else None,
+        stack_dump_file=stacks.name if stacks else None,
+        config=cfg.model_dump(mode="json"),
+        build=build_info(),
+    )
+    from canopy.jobs.manager import CacheInUseError
+
+    try:
+        server = create_app(cfg)
+    except CacheInUseError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    # Requests are logged by our middleware, so uvicorn's access log is off.
+    uvicorn.run(
+        server,
+        host=cfg.server.host,
+        port=cfg.server.port,
+        log_config=None,
+        access_log=False,
+    )
+
+
+@app.command()
+def env() -> None:
+    """Print the environment snapshot as JSON."""
+    typer.echo(json.dumps(environment_snapshot(), indent=2))
+
+
+def _cli_logging(config: Path | None) -> Config | None:
+    """CLI tools log to the configured log folder (or the per-user fallback, never the current
+    directory) without echoing JSON events onto the terminal."""
+    cfg = _load(config) if config else None
+    log_cfg = cfg.logging if cfg else LoggingConfig(dir=default_log_dir())
+    setup_logging(log_cfg, role="cli", salt=_salt(cfg), to_console=False)
+    return cfg
+
+
+def _salt(cfg: Config | None) -> str:
+    return installation_salt(cfg.cache_dir if cfg else default_log_dir().parent)
+
+
+@app.command()
+def inspect(
+    path: Annotated[Path, typer.Argument(exists=True, help="h5ad file or zarr store")],
+    level: Annotated[Level, typer.Option(case_sensitive=False)] = Level.standard,
+    config: ConfigOpt = None,
+) -> None:
+    """Print a dataset's fingerprint (structure only, no values) as JSON.
+
+    strict replaces every user-chosen name with a token salted by this installation's secret.
+    """
+    from canopy.inspect import inspect_path, redact
+
+    cfg = _cli_logging(config)
+    fp = inspect_path(path)
+    fp = redact(fp, level.value, _salt(cfg) if level is Level.strict else "")
+    typer.echo(fp.model_dump_json(indent=2))
+
+
+@synth_app.command("anndata")
+def synth_anndata(
+    out: Annotated[Path, typer.Argument(help="Output .h5ad or .zarr")],
+    n_obs: Annotated[int, typer.Option()] = 100_000,
+    n_vars: Annotated[int, typer.Option()] = 2_000,
+    density: Annotated[float, typer.Option()] = 0.05,
+    encoding: Annotated[str, typer.Option(help="csr | csc | dense")] = "csr",
+    dtype: Annotated[str, typer.Option()] = "float32",
+    chunk: Annotated[int | None, typer.Option(help="1-D chunk length of X data")] = None,
+    compression: Annotated[str, typer.Option(help="gzip | lzf | zstd | none")] = "gzip",
+    n_clusters: Annotated[int, typer.Option()] = 30,
+    config: ConfigOpt = None,
+) -> None:
+    """Write a synthetic AnnData file (X is streamed, so it may exceed RAM)."""
+    from canopy.synth import write_anndata
+    from canopy.synth.spec import AnnDataSpec, ColumnSpec, MatrixSpec
+
+    _cli_logging(config)
+    spec = AnnDataSpec(
+        n_obs=n_obs,
+        n_vars=n_vars,
+        X=MatrixSpec.model_validate(
+            {
+                "encoding": encoding,
+                "dtype": dtype,
+                "density": density,
+                "chunk": chunk,
+                "compression": compression,
+            }
+        ),
+        obs=[
+            ColumnSpec(name="cluster", kind="categorical", n_categories=n_clusters, colors=True),
+            ColumnSpec(name="total_counts", kind="numeric"),
+        ],
+        obsm={"X_umap": 2, "X_pca": 50},
+    )
+    typer.echo(str(write_anndata(spec, out)))
+
+
+@synth_app.command("demo")
+def synth_demo(
+    out: Annotated[Path, typer.Argument(help="Output .h5ad")],
+    n_obs: Annotated[int, typer.Option()] = 8_000,
+    config: ConfigOpt = None,
+) -> None:
+    """Write the small example with layers (counts + normalised X, marker genes)."""
+    from canopy.synth import write_demo
+
+    _cli_logging(config)
+    typer.echo(str(write_demo(out, n_obs=n_obs)))
+
+
+@synth_app.command("mock")
+def synth_mock(
+    fingerprint: Annotated[Path, typer.Argument(exists=True, help="Fingerprint JSON")],
+    out: Annotated[Path, typer.Argument(help="Output path (.h5ad or .zarr)")],
+    scale: Annotated[float, typer.Option(help="Fraction of cells/rows to generate")] = 0.1,
+    max_side: Annotated[int, typer.Option(help="Largest image side in pixels")] = 1024,
+    max_obs: Annotated[int, typer.Option()] = 200_000,
+    config: ConfigOpt = None,
+) -> None:
+    """Rebuild a look-alike dataset from a fingerprint (random values, same structure)."""
+    from canopy.inspect import Fingerprint
+    from canopy.synth import write_mock
+
+    _cli_logging(config)
+    fp = Fingerprint.model_validate_json(fingerprint.read_text())
+    typer.echo(str(write_mock(fp, out, scale=scale, max_side=max_side, max_obs=max_obs)))
+
+
+@app.command()
+def validate(
+    store: Annotated[Path, typer.Argument(exists=True, help="canopy store folder (…/c0)")],
+    deep: Annotated[bool, typer.Option(help="Also read large arrays fully")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Check a canopy store against the data contract. Exit code 1 if invalid."""
+    from canopy.contract import validate_store
+
+    _cli_logging(config)
+    rep = validate_store(store, deep=deep)
+    for e in rep.errors:
+        typer.echo(f"ERROR   {e}")
+    for w in rep.warnings:
+        typer.echo(f"WARNING {w}")
+    typer.echo("valid" if rep.ok else f"invalid ({len(rep.errors)} errors)")
+    raise typer.Exit(0 if rep.ok else 1)
+
+
+@contract_app.command("schema")
+def contract_schema(
+    out: Annotated[Path | None, typer.Option(help="Write to file instead of stdout")] = None,
+) -> None:
+    """Print (or write) the manifest JSON schema."""
+    from canopy.contract.models import manifest_json_schema
+
+    text = json.dumps(manifest_json_schema(), indent=2) + "\n"
+    if out is None:
+        typer.echo(text, nl=False)
+    else:
+        out.write_text(text)
+
+
+@contract_app.command("example")
+def contract_example(
+    out: Annotated[Path, typer.Argument(help="Output store folder, e.g. .cache/example/c0")],
+    force: Annotated[
+        bool, typer.Option(help="Replace OUT even if it is a non-empty folder that is not a store")
+    ] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Write the small synthetic reference store that shows every contract element.
+
+    An existing canopy store at OUT is replaced; any other non-empty folder is refused.
+    """
+    from canopy.contract.example import write_example_store
+
+    _cli_logging(config)
+    try:
+        typer.echo(str(write_example_store(out, force=force)))
+    except FileExistsError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+@catalog_app.command("scan")
+def catalog_scan(
+    full: Annotated[bool, typer.Option(help="Inspect every dataset again")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Index the configured data roots once (what the server does in the background)."""
+    from canopy.catalog import CatalogDB, scan
+    from canopy.catalog.db import DB_FILE
+
+    cfg = _cli_logging(config) or _load(None)
+    db = CatalogDB(cfg.cache_dir / DB_FILE)
+    counts = scan(db, cfg.data_roots, cfg.catalog, full=full, trigger="cli")
+    typer.echo(json.dumps(counts.as_dict(), indent=2))
+
+
+cache_app = _typer("The cache folder: converted stores and indexes.")
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("prune")
+def cache_prune(
+    config: ConfigOpt = None,
+    dry_run: Annotated[bool, typer.Option(help="Only list what would be removed")] = False,
+) -> None:
+    """Remove converted stores of dataset versions the catalog no longer knows (old versions of
+    changed files, removed files) and leftovers of failed conversions. Refuses while a server
+    uses the cache."""
+    import shutil
+
+    from canopy.catalog import Catalog
+    from canopy.jobs.manager import CacheInUseError, lock_cache, tmp_dirs
+
+    cfg = _cli_logging(config) or _load(None)
+    try:
+        lock_cache(cfg.cache_dir)
+    except CacheInUseError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    versions = Catalog(cfg).db.versions()
+    log = get_logger("canopy.cache")
+    removed = 0
+    for d in sorted(p for p in cfg.cache_dir.iterdir() if p.is_dir()):
+        if not any(d.glob("c*/manifest.json")) and not any(d.glob("c*.tmp-*")):
+            continue  # not a store folder (logs, tmp, jobs, …)
+        if d.name in versions:
+            continue
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        typer.echo(
+            f"{'would remove' if dry_run else 'removing'} store {d.name} ({size / 2**30:.2f} GB)"
+        )
+        if not dry_run:
+            shutil.rmtree(d, ignore_errors=True)
+            log.info("store_pruned", version=d.name, bytes=size)
+        removed += size
+    for t in tmp_dirs(cfg.cache_dir, cfg.jobs.tmp_dir):
+        typer.echo(f"{'would remove' if dry_run else 'removing'} leftover {t.name}")
+        if not dry_run:
+            shutil.rmtree(t, ignore_errors=True)
+    typer.echo(f"{'would free' if dry_run else 'freed'} {removed / 2**30:.2f} GB")

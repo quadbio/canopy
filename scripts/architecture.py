@@ -2,7 +2,7 @@
 
 Reads the code itself, so the page stays true to the implementation:
 - backend (Python, `ast`): modules with their docstrings, classes, methods, functions,
-  HTTP routes, and which dbx modules each imports;
+  HTTP routes, and which canopy modules each imports;
 - frontend (TypeScript): files with their header comments, exported names, and relative imports.
 
 Run: `pixi run -e dev python scripts/architecture.py` (also a pixi task: `architecture`).
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-BACKEND = REPO / "backend" / "dbx"
+BACKEND = REPO / "backend" / "canopy"
 FRONTEND = REPO / "frontend" / "src"
 OUT = REPO / "docs" / "architecture" / "index.html"  # standalone page (open in a browser)
 OUT_BODY = REPO / "docs" / "architecture" / "artifact.html"  # body only, for publishing
@@ -93,10 +93,10 @@ def backend_module(path: Path) -> dict[str, Any]:
                         prefix = str(kw.value.value)
     imports: list[list[Any]] = []  # [module, [names]]
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("dbx"):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("canopy"):
             imports.append([node.module, [a.name for a in node.names]])
         elif isinstance(node, ast.Import):
-            imports += [[a.name, []] for a in node.names if a.name.startswith("dbx.")]
+            imports += [[a.name, []] for a in node.names if a.name.startswith("canopy.")]
     classes, functions, routes = [], [], []
 
     def visit_fn(fn: ast.FunctionDef | ast.AsyncFunctionDef, nested_in: str | None = None) -> dict[str, Any]:
@@ -212,8 +212,8 @@ def _node(mod_id: str) -> str:
 
 
 # Used by nearly every module: drawing those edges hides the structure. The explorer lists them.
-FOUNDATION = {"dbx.logs", "dbx.config", "dbx.build", "dbx.privacy", "dbx.environment"}
-ENTRY_POINTS = {"dbx.cli"}
+FOUNDATION = {"canopy.logs", "canopy.config", "canopy.build", "canopy.privacy", "canopy.environment"}
+ENTRY_POINTS = {"canopy.cli"}
 
 
 def dependency_graph(modules: list[dict[str, Any]], side: str) -> str:
@@ -252,7 +252,7 @@ def main() -> None:
         if not p.name.endswith((".test.ts", ".test.tsx", ".d.ts"))
     ]
     ids = {m["id"] for m in modules}
-    # `from dbx.catalog import Catalog` names the package; follow its __init__ re-exports to the
+    # `from canopy.catalog import Catalog` names the package; follow its __init__ re-exports to the
     # module that defines the name, so edges connect real modules.
     reexports: dict[str, dict[str, str]] = {}
     for m in modules:
@@ -267,7 +267,7 @@ def main() -> None:
         for mod, names in m["imports"]:
             for n in names or [""]:
                 target = reexports.get(mod, {}).get(n, mod) if mod != m["id"] else mod
-                if f"{mod}.{n}" in ids:  # `from dbx.catalog import api`
+                if f"{mod}.{n}" in ids:  # `from canopy.catalog import api`
                     target = f"{mod}.{n}"
                 if target in ids:
                     resolved.add(target)
@@ -276,7 +276,7 @@ def main() -> None:
     modules = [
         m
         for m in modules
-        if not (m["side"] == "backend" and m["file"].endswith("__init__.py") and m["id"] != "dbx")
+        if not (m["side"] == "backend" and m["file"].endswith("__init__.py") and m["id"] != "canopy")
     ]
     ids = {m["id"] for m in modules}
     for m in modules:

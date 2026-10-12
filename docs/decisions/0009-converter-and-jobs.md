@@ -4,12 +4,12 @@ Date: 2026-10-11 · Status: accepted (S5)
 
 ## Context
 The preview path cannot serve gene expression from large cell-major (CSR) or badly chunked dense
-matrices (ADR 0008). Plan F8: convert such files once into a dbx store (contract/SPEC.md §2–§4),
+matrices (ADR 0008). Plan F8: convert such files once into a canopy store (contract/SPEC.md §2–§4),
 in the background, with progress, on a shared host with no guaranteed free memory, and debuggable
 from logs alone.
 
 ## Decisions
-- **Converter** (`dbx.convert`): h5ad and AnnData-zarr (current layout) → `<cache>/<version>/c0/`.
+- **Converter** (`canopy.convert`): h5ad and AnnData-zarr (current layout) → `<cache>/<version>/c0/`.
   - obs and var read whole; embeddings copied in row blocks (float32, 65,536-row chunks);
     `<col>_colors` with the preview's rules (names → hex, longer lists cut, unusable dropped with
     a warning), also for text columns.
@@ -22,10 +22,10 @@ from logs alone.
   - The matrix chosen as X: `X` (default), a layer, or `raw/X` when X is missing (SPEC §4.2).
   - Downsampling (> 200 k cells): 200 k and 1 M cell indices, stratified by the first coloured
     categorical column (every group keeps at least one cell), fixed seed.
-  - Built in `c0.tmp-*`, validated deeply (`dbx validate --deep` rules), then renamed; anything
+  - Built in `c0.tmp-*`, validated deeply (`canopy validate --deep` rules), then renamed; anything
     that fails or is stopped removes its temporary store and spill files.
-- **Jobs** (`dbx.jobs`): a SQLite job table in the cache; each job runs in its own worker process
-  (`python -m dbx.jobs.worker`), logging to `dbx-worker-<pid>.jsonl`. States queued → running →
+- **Jobs** (`canopy.jobs`): a SQLite job table in the cache; each job runs in its own worker process
+  (`python -m canopy.jobs.worker`), logging to `canopy-worker-<pid>.jsonl`. States queued → running →
   done | failed | cancelled; a job whose process vanished becomes `interrupted` at the next start.
   Cancel = SIGTERM, honoured at the next progress report. An identical active job is reused.
 - **Memory guard:** a job starts only when the host has 1.5 × `jobs.memory_gb` available (else it
@@ -62,7 +62,7 @@ from logs alone.
     integers above 2²⁴ are reported as warnings; a file changed since its inspection or during
     the conversion is refused (`source_changed`). Downsampling works with more categories than
     cells to keep and stratifies by the main annotation (cell type / cluster first).
-  - **`dbx cache prune`** removes stores of versions the catalog no longer knows, and leftovers.
+  - **`canopy cache prune`** removes stores of versions the catalog no longer knows, and leftovers.
 - **Sizing for atlases:** `jobs.memory_gb` sets the matrix working memory; a job needs about
   0.3 GB + 1.2–1.5 × `memory_gb` + the obs/var estimate. For 10⁷–10⁸ cells use 16–64 GB: fewer,
   larger buckets and row blocks (each block appends to every bucket; appends are buffered up to

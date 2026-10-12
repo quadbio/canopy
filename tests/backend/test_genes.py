@@ -19,12 +19,12 @@ from fastapi.testclient import TestClient
 from scipy import sparse
 from test_datasets import _examples_cfg, client_for
 
-from dbx.catalog import entry_id
-from dbx.config import Config, MemoryConfig
-from dbx.data import genes as genes_mod
-from dbx.data import reader
-from dbx.data.cache import DatasetCache, MemoryBusyError
-from dbx.data.genes import (
+from canopy.catalog import entry_id
+from canopy.config import Config, MemoryConfig
+from canopy.data import genes as genes_mod
+from canopy.data import reader
+from canopy.data.cache import DatasetCache, MemoryBusyError
+from canopy.data.genes import (
     GeneValues,
     access,
     column_read_bytes,
@@ -35,7 +35,7 @@ from dbx.data.genes import (
     quantise,
     unique_names,
 )
-from dbx.inspect.models import ArrayInfo, MatrixInfo
+from canopy.inspect.models import ArrayInfo, MatrixInfo
 
 N, G = 400, 30
 
@@ -102,9 +102,9 @@ def test_gene_reply_headers_errors_and_etags(cfg: Config) -> None:
     r = c.get(f"/api/datasets/{id}/gene", params={"i": 7})
     h = r.headers
     col = dense_x(a)[:, 7]
-    assert h["x-dbx-encoding"] == "sparse"  # 80 % zeros: indices + values are smaller
-    assert int(h["x-dbx-n-expressing"]) == int(np.count_nonzero(col))
-    assert float(h["x-dbx-min"]) == 0.0 and float(h["x-dbx-max"]) == pytest.approx(col.max())
+    assert h["x-canopy-encoding"] == "sparse"  # 80 % zeros: indices + values are smaller
+    assert int(h["x-canopy-n-expressing"]) == int(np.count_nonzero(col))
+    assert float(h["x-canopy-min"]) == 0.0 and float(h["x-canopy-max"]) == pytest.approx(col.max())
     assert h["content-encoding"] == "identity"
     again = c.get(f"/api/datasets/{id}/gene", params={"i": 7}, headers={"if-none-match": h["etag"]})
     assert again.status_code == 304
@@ -116,7 +116,7 @@ def test_gene_reply_headers_errors_and_etags(cfg: Config) -> None:
         == 304
     )
     zero = c.get(f"/api/datasets/{id}/gene", params={"i": 0}).headers
-    assert (zero["x-dbx-n-expressing"], zero["x-dbx-max"]) == ("0", "0.0")
+    assert (zero["x-canopy-n-expressing"], zero["x-canopy-max"]) == ("0", "0.0")
     for params, status, code in [
         ({"i": G}, 404, "unknown_gene"),
         ({"i": 1, "matrix": "nope"}, 404, "unknown_matrix"),
@@ -341,7 +341,7 @@ def test_encoding_round_trips_sparse_dense_and_missing() -> None:
     g = GeneValues(n, np.array([3, 10, 999]), np.array([1.5, np.nan, -2.0], dtype=np.float32))
     for q in (False, True):
         e = encode(g, quantise_values=q)
-        assert e.headers["x-dbx-encoding"] == "sparse"
+        assert e.headers["x-canopy-encoding"] == "sparse"
         out = decode(e.body, e.headers)
         assert np.isnan(out[10]) and out[0] == 0
         np.testing.assert_allclose(out[[3, 999]], [1.5, -2.0], atol=4 / 65532)
@@ -351,14 +351,14 @@ def test_encoding_round_trips_sparse_dense_and_missing() -> None:
     full = GeneValues(400, np.arange(400), vals)
     for q in (False, True):
         e = encode(full, quantise_values=q)
-        assert e.headers["x-dbx-encoding"] == "dense"
+        assert e.headers["x-canopy-encoding"] == "dense"
         out = decode(e.body, e.headers)
         np.testing.assert_allclose(out, vals, atol=8 / 65532)
         assert np.all(out[::3] == 0)
     st = encode(GeneValues(5, np.arange(5), np.array([0.5, 1, 2, 3, 4], dtype=np.float32)), False)
-    assert float(st.headers["x-dbx-min"]) == 0.5  # all cells stored: the true minimum
+    assert float(st.headers["x-canopy-min"]) == 0.5  # all cells stored: the true minimum
     neg = encode(GeneValues(3, np.arange(3), np.array([-3, -2, -1], dtype=np.float32)), False)
-    assert float(neg.headers["x-dbx-max"]) == -1.0
+    assert float(neg.headers["x-canopy-max"]) == -1.0
 
 
 def test_csc_columns_with_repeated_rows_are_summed() -> None:

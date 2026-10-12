@@ -1,9 +1,9 @@
-# dbx data contract, version 0.2 (approved 2026-10-10)
+# Canopy data contract, version 0.2 (approved 2026-10-10)
 
-The data contract defines **dbx stores**: the converted form of a dataset that the dbx server and
+The data contract defines **Canopy stores**: the converted form of a dataset that the Canopy server and
 browser read at full speed. It also states what the **direct preview** may read from original
 files. The machine-readable part is `schema/manifest.schema.json` (generated from
-`backend/dbx/contract/models.py`); `dbx validate <store>` checks a store against both.
+`backend/canopy/contract/models.py`); `canopy validate <store>` checks a store against both.
 
 Status: **v0.2 approved** (2026-10-10, option A), replacing v0.1 before any converter wrote
 stores. The v0.1 review decisions (§11) are unchanged. What changed and why:
@@ -42,9 +42,9 @@ stores. The v0.1 review decisions (§11) are unchanged. What changed and why:
 ```
 <cache_dir>/<dataset_id>/c<contract_major>/        e.g. cache/7a88e360c210c450/c0/
   manifest.json                    the manifest (§3); written last, atomically
-  zarr.json                        root zarr group (attributes: {"dbx": {"contract_version": …}})
+  zarr.json                        root zarr group (attributes: {"canopy": {"contract_version": …}})
   tables/<table>/                  AnnData-zarr (§4)
-  tables/<table>/uns/dbx/          per-table extras: gene statistics, downsampling (§4.4–4.5)
+  tables/<table>/uns/canopy/          per-table extras: gene statistics, downsampling (§4.4–4.5)
   images/<image>/                  OME-NGFF 0.5 multiscale image (§5)
   labels/<labels>/                 OME-NGFF 0.5 multiscale labels (§6)
   aux/labels/<labels>/             label → table-row lookup (§6)
@@ -56,7 +56,7 @@ stores. The v0.1 review decisions (§11) are unchanged. What changed and why:
   size and modification time, or, for a zarr store, the newest modification time of its groups
   and metadata files. A changed source gets a new store. (Rewriting chunks of a zarr store in place
   without touching any metadata is not detected; such stores need a manual rebuild.)
-- A store is built in `<…>/c0.tmp-<random>/` and renamed to `c0/` only after `dbx validate`
+- A store is built in `<…>/c0.tmp-<random>/` and renamed to `c0/` only after `canopy validate`
   passes. A folder without `manifest.json` is incomplete and is ignored.
 - **Consolidated metadata** is written for each table group (anndata reads through it) and for
   the store root, *after* all arrays are written. Stale consolidated metadata hides arrays from
@@ -75,10 +75,10 @@ exists, which views are possible and how to place elements. Fields (full schema 
 
 | Field | Content |
 |---|---|
-| `contract`, `contract_version` | `"dbx-store"`, `"0.1.0"` |
+| `contract`, `contract_version` | `"canopy-store"`, `"0.1.0"` |
 | `dataset_id` | from the source fingerprint |
 | `source` | path, kind (`h5ad` / `anndata_zarr` / `spatialdata_zarr`), size, mtime, fingerprint version |
-| `converter` | dbx version, created (UTC), duration, peak memory, warnings |
+| `converter` | canopy version, created (UTC), duration, peak memory, warnings |
 | `coordinate_systems` | names of all coordinate systems (`global` first if present) |
 | `units` **[v0.2]** | coordinate system → unit of its `x, y`: `"micrometer"`, `"pixel"` or `"unknown"` (from SpatialData axis units; for h5ad `spatial` coordinates, a converter option, default `"unknown"`). The browser draws a scale bar only for physical units |
 | `tables` | per table: §4 fields |
@@ -133,15 +133,15 @@ A gene query reads `indptr[j:j+2]`, then one contiguous range of `data`/`indices
   (`#rrggbb`, `#rrggbbaa` or a named colour converted to hex). A colour list whose length does not
   match its column's categories is dropped with a warning.
 
-### 4.4 Gene statistics (`uns/dbx/gene_stats`)
+### 4.4 Gene statistics (`uns/canopy/gene_stats`)
 
 One float32 array per statistic, length `n_vars`: `nnz` (stored as float32 count), `mean`,
 `max`, `p99` (99th percentile of non-zero values). Used for colour scaling and to choose the
 quantisation range of gene values sent to the browser.
 
-### 4.5 Downsampling (`uns/dbx/downsample`)
+### 4.5 Downsampling (`uns/canopy/downsample`)
 
-For tables with more than 200,000 cells: `uns/dbx/downsample/<n>` holds sorted cell
+For tables with more than 200,000 cells: `uns/canopy/downsample/<n>` holds sorted cell
 indices (int32; int64 only if `n_obs ≥ 2³¹`) for `n` = 200,000 and 1,000,000 (when smaller than `n_obs`). Sampling is stratified by
 the first categorical column with colours (else uniform), with a fixed seed, so every category
 stays visible.
@@ -239,7 +239,7 @@ Full-resolution arrays (all points, sorted as below):
 | `cell` | int32 | (N,) | table row of the assigned cell, −1 if none (only when the source has an instance column) |
 | `offsets` | uint32 (uint64 if N ≥ 2³²) **[v0.2]** | (F + 1,) | points of feature `f` are `[offsets[f], offsets[f+1])` |
 | `chunk_bbox` **[v0.2]** | float32 | (C, 4) | bounding box of each 16,384-row chunk of `xy` |
-| *(attribute)* `dbx.features` | list of strings | F | feature names (genes), in the points group's `zarr.json` attributes |
+| *(attribute)* `canopy.features` | list of strings | F | feature names (genes), in the points group's `zarr.json` attributes |
 
 **[v0.2]** The v0.1 `feature` array (one gene index per point) is dropped: in a gene-sorted layout
 it repeats what `offsets` already says.
@@ -289,7 +289,7 @@ sorted the same way:
     minor version still opens, minus the new features;
   - a store whose minor version is newer than the reader's is logged once as a warning
     ("store is newer than this server; upgrade for new features").
-- **[v0.2] The validator** (`dbx validate`) is strict for stores of its own version: an unknown
+- **[v0.2] The validator** (`canopy validate`) is strict for stores of its own version: an unknown
   field is an error unless the store's minor version is newer than the validator's (then it is a
   warning). A store of an older major version is an error ("rebuild needed").
 - The server rebuilds a store automatically when its major version is older than the server's.
@@ -319,9 +319,9 @@ The catalog shows which of these apply to each file (from the fingerprint warnin
    3-D images (`c, z, y, x`) remain reserved for a later version.
 4. **Polygon holes** are dropped (confirmed).
 
-## 12. What `dbx validate` checks [v0.2]
+## 12. What `canopy validate` checks [v0.2]
 
-A store is only published (renamed from `c0.tmp-…` to `c0/`) when `dbx validate` passes. Beyond the
+A store is only published (renamed from `c0.tmp-…` to `c0/`) when `canopy validate` passes. Beyond the
 manifest schema, the validator checks every rule above that can be checked, including:
 
 - **Layout:** chunk shapes, shard shapes and codec (zstd level) of every array; dtypes; element

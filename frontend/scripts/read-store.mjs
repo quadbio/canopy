@@ -1,6 +1,6 @@
-// Read a dbx store over HTTP the way the browser will (Viv + zarrita) and assert the contract.
+// Read a canopy store over HTTP the way the browser will (Viv + zarrita) and assert the contract.
 // Usage: node scripts/read-store.mjs <store-dir>     serve the folder with a minimal Range server
-//        node scripts/read-store.mjs <store-url>     read from a running `dbx serve`
+//        node scripts/read-store.mjs <store-url>     read from a running `canopy serve`
 //                                                    (http://host:port/api/stores/<version>/c0)
 // Counts requests and bytes (by wrapping fetch) and exits non-zero on any mismatch.
 import assert from 'node:assert/strict';
@@ -105,7 +105,7 @@ try {
   }
   for (const [name, pt] of Object.entries(manifest.points)) {
     const g = await zarr.open.v3(root.resolve(pt.path), { kind: 'group' });
-    assert.equal(g.attrs.dbx.features.length, pt.n_features);
+    assert.equal(g.attrs.canopy.features.length, pt.n_features);
     const offsets = (await get(`${pt.path}/offsets`)).data;
     assert.ok(offsets instanceof Uint32Array, 'offsets must be uint32');
     // One gene: its range of the sharded xy array.

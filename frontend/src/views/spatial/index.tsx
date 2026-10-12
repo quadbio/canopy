@@ -374,7 +374,7 @@ function useFeatures(version: string | undefined, path: string | null) {
     queryKey: ['store-features', version, path],
     queryFn: async ({ signal }) => {
       const attrs = await readAttrs(version!, path!);
-      const names = ((attrs.dbx as { features?: string[] } | undefined)?.features ?? []).map(String);
+      const names = ((attrs.canopy as { features?: string[] } | undefined)?.features ?? []).map(String);
       const offsets = await readWhole(version!, `${path}/offsets`, { signal });
       const lod = await readWhole(version!, `${path}/lod/offsets`, { signal });
       return { names, offsets: offsets.data as ArrayLike<number>, lod: lod.data as ArrayLike<number> };

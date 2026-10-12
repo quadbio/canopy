@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dbx"
+name = "canopy"
 version = "0.0.1"
 description = "Lab single-cell and spatial data browser"
 requires-python = ">=3.12"
@@ -11,10 +11,10 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-dbx = "dbx.cli:app"
+canopy = "canopy.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["backend/dbx"]
+packages = ["backend/canopy"]
 
 [tool.ruff]
 line-length = 100
@@ -34,11 +34,11 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # dask ships without type hints for dask.array constructors
-module = ["dbx.synth.spatial_gen"]
+module = ["canopy.synth.spatial_gen"]
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests/backend"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["dbx"]
+known-first-party = ["canopy"]

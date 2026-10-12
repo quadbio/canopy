@@ -1,5 +1,5 @@
 // Dataset notes in plain language. The inspector reports structural facts as codes
-// (backend/dbx/inspect/core.py `_warnings`); here each code says what it means for the user and
+// (backend/canopy/inspect/core.py `_warnings`); here each code says what it means for the user and
 // whether anything needs doing.
 
 export interface Notice {
@@ -13,7 +13,7 @@ interface Explained {
   title: string;
   /** What it means for the user; `names` lists the affected parts of the dataset, if any. */
   text: (names: string) => string;
-  /** `problem`: something may not work; `info`: handled by dbx, nothing to do. */
+  /** `problem`: something may not work; `info`: handled by canopy, nothing to do. */
   level: 'info' | 'problem';
 }
 
@@ -22,7 +22,7 @@ const EXPLAIN: Record<string, Explained> = {
     title: 'Expression is stored cell by cell',
     text: (n) =>
       `The expression matrix${n ? ` of ${n}` : ''} is stored one cell after another (CSR). Colouring by a gene reads one gene ` +
-      'across all cells, so dbx loads the matrix into memory once (fast for files up to a few GB). Larger files need a ' +
+      'across all cells, so canopy loads the matrix into memory once (fast for files up to a few GB). Larger files need a ' +
       'one-time conversion: “Convert for full speed” below.',
     level: 'info',
   },
@@ -49,14 +49,14 @@ const EXPLAIN: Record<string, Explained> = {
   },
   no_spatialdata_attrs: {
     title: 'No SpatialData version recorded',
-    text: () => 'The dataset does not say which SpatialData version wrote it. dbx reads it as the current format; unusual files may fail.',
+    text: () => 'The dataset does not say which SpatialData version wrote it. canopy reads it as the current format; unusual files may fail.',
     level: 'info',
   },
   single_level: {
     title: 'Image without zoom levels',
     text: (n) =>
       `${n ? `Image ${n} has` : 'An image has'} only its full resolution (no smaller copies for zoomed-out views). ` +
-      'When images are shown, dbx makes a one-time copy with zoom levels so they stay fast.',
+      'When images are shown, canopy makes a one-time copy with zoom levels so they stay fast.',
     level: 'info',
   },
   single_chunk: {

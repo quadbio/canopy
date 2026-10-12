@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from dbx.build import build_id
-from dbx.cli import app
-from dbx.logs import log_file_name
-from dbx.synth import write_anndata
-from dbx.synth.spec import AnnDataSpec, ColumnSpec
+from canopy.build import build_id
+from canopy.cli import app
+from canopy.logs import log_file_name
+from canopy.synth import write_anndata
+from canopy.synth.spec import AnnDataSpec, ColumnSpec
 
 runner = CliRunner()
 
@@ -20,8 +20,8 @@ runner = CliRunner()
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Isolate the per-user fallback folder (logs, salt) from the real home."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    monkeypatch.delenv("DBX_CONFIG", raising=False)
-    return tmp_path / "xdg" / "dbx"
+    monkeypatch.delenv("CANOPY_CONFIG", raising=False)
+    return tmp_path / "xdg" / "canopy"
 
 
 @pytest.fixture
@@ -54,9 +54,9 @@ def test_inspect_strict(home: Path, h5ad: Path) -> None:
     assert r.exit_code == 0, r.output
     assert "patient_secret" not in r.stdout and "project_x" not in r.stdout
     assert json.loads(r.stdout)["redacted"] is True
-    assert (home / ".dbx_salt").is_file()
+    assert (home / ".canopy_salt").is_file()
     # the salt never appears in the output
-    assert (home / ".dbx_salt").read_text().strip() not in r.stdout
+    assert (home / ".canopy_salt").read_text().strip() not in r.stdout
 
 
 def test_inspect_rejects_unknown_level(home: Path, h5ad: Path) -> None:
@@ -72,7 +72,7 @@ def test_config_from_environment(home: Path, h5ad: Path, tmp_path: Path) -> None
         'cache_dir = "cache"\n[logging]\ndir = "mylogs"\n'
         '[[data_roots]]\nname = "d"\npath = "data"\n'
     )
-    r = runner.invoke(app, ["inspect", str(h5ad)], env={"DBX_CONFIG": str(conf)})
+    r = runner.invoke(app, ["inspect", str(h5ad)], env={"CANOPY_CONFIG": str(conf)})
     assert r.exit_code == 0, r.output
     assert (tmp_path / "mylogs" / log_file_name("cli")).is_file()
 
@@ -96,7 +96,7 @@ def test_contract_example_refuses_foreign_folder(home: Path, tmp_path: Path) -> 
 
 def test_version_shows_build(home: Path) -> None:
     r = runner.invoke(app, ["--version"])
-    assert r.exit_code == 0 and r.stdout.strip() == f"dbx {build_id()}"
+    assert r.exit_code == 0 and r.stdout.strip() == f"canopy {build_id()}"
 
 
 def test_catalog_scan(home: Path, h5ad: Path, tmp_path: Path) -> None:

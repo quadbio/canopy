@@ -1,4 +1,4 @@
-"""The AnnData converter (h5ad / AnnData-zarr → dbx store) and the job system that runs it."""
+"""The AnnData converter (h5ad / AnnData-zarr → canopy store) and the job system that runs it."""
 
 from __future__ import annotations
 
@@ -15,20 +15,20 @@ from fastapi.testclient import TestClient
 from scipy import sparse
 from test_datasets import client_for
 
-from dbx.catalog import entry_id
-from dbx.config import Config
-from dbx.contract import validate_store
-from dbx.convert.anndata import (
+from canopy.catalog import entry_id
+from canopy.config import Config
+from canopy.contract import validate_store
+from canopy.convert.anndata import (
     ConvertOptions,
     convert_anndata,
     downsample_indices,
     has_store,
     store_dir,
 )
-from dbx.convert.matrix import ConversionError
-from dbx.data.genes import decode
-from dbx.inspect import inspect_path
-from dbx.jobs.db import DB_FILE, JobsDB
+from canopy.convert.matrix import ConversionError
+from canopy.data.genes import decode
+from canopy.inspect import inspect_path
+from canopy.jobs.db import DB_FILE, JobsDB
 
 N, G = 500, 40
 
@@ -95,7 +95,7 @@ def test_conversion_is_valid_and_equal_to_the_source(
     assert t.categorical["cluster"].has_colors and "score" in t.numeric
     # gene statistics
     x = dense(a.X)
-    stats = b.uns["dbx"]["gene_stats"]
+    stats = b.uns["canopy"]["gene_stats"]
     finite = np.where(np.isfinite(x), x, 0)
     np.testing.assert_array_equal(stats["nnz"], (finite != 0).sum(0))
     np.testing.assert_allclose(stats["mean"], finite.sum(0) / N, rtol=1e-5)
@@ -213,7 +213,7 @@ def test_convert_job_end_to_end(cfg: Config) -> None:
 def test_queued_jobs_can_be_cancelled_and_wait_for_memory(
     cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dbx.jobs import manager
+    from canopy.jobs import manager
 
     monkeypatch.setattr(manager, "memory_headroom", lambda: 2**20)  # 1 MB free just now
     source(cfg.data_roots[0].path / "m.h5ad")
@@ -248,7 +248,7 @@ def test_a_failing_job_records_its_reason(cfg: Config) -> None:
     done = _wait(c, job["id"], c.app)
     assert (done["state"], done["error"]) == ("failed", "duplicate_entries")
     # the worker wrote its own log file, with the reason
-    worker_logs = list((cfg.logging.dir or Path()).glob("dbx-worker-*.jsonl"))
+    worker_logs = list((cfg.logging.dir or Path()).glob("canopy-worker-*.jsonl"))
     assert worker_logs
     events = [json.loads(line) for f in worker_logs for line in f.read_text().splitlines()]
     assert any(e["event"] == "job_failed" and e["code"] == "duplicate_entries" for e in events)
@@ -266,7 +266,7 @@ def test_subset_endpoint_is_stratified_cached_and_sorted(cfg: Config) -> None:
     id = entry_id("data", "s.h5ad")
     r = c.get(f"/api/datasets/{id}/subset", params={"n": 1000})
     idx = np.frombuffer(r.content, dtype="<i4")
-    assert r.headers["x-dbx-dtype"] == "int32" and len(idx) == 1000
+    assert r.headers["x-canopy-dtype"] == "int32" and len(idx) == 1000
     assert np.all(np.diff(idx) > 0) and idx[-1] < n
     assert (idx >= 4990).any()  # the 10 rare cells keep at least one
     again = c.get(
@@ -284,10 +284,10 @@ def test_subset_endpoint_is_stratified_cached_and_sorted(cfg: Config) -> None:
 def test_a_store_subset_is_read_from_the_store(tmp_path: Path) -> None:
     import zarr
 
-    from dbx.data.reader import LazySource
+    from canopy.data.reader import LazySource
 
     g = zarr.open_group(tmp_path / "t.zarr", mode="w")
-    g.require_group("uns").require_group("dbx").require_group("downsample").create_array(
+    g.require_group("uns").require_group("canopy").require_group("downsample").create_array(
         "1000", data=np.arange(0, 2000, 2, dtype=np.int32)
     )
     src = LazySource(inspect_path, g)  # type: ignore[arg-type]  # info is not used here
@@ -300,8 +300,8 @@ def test_a_store_subset_is_read_from_the_store(tmp_path: Path) -> None:
 
 
 def test_strict_job_logs_name_no_layer(cfg: Config) -> None:
-    from dbx.config import LoggingConfig
-    from dbx.logs import setup_logging
+    from canopy.config import LoggingConfig
+    from canopy.logs import setup_logging
 
     cfg.logging = LoggingConfig(dir=cfg.logging.dir, privacy="strict", memory_sample_interval=0)
     setup_logging(cfg.logging, role="test", salt="s", to_console=False)
@@ -321,8 +321,8 @@ def test_leftovers_of_dead_jobs_are_removed_and_disk_is_checked(
 ) -> None:
     import os
 
-    from dbx.convert import anndata as conv
-    from dbx.jobs.manager import JobManager
+    from canopy.convert import anndata as conv
+    from canopy.jobs.manager import JobManager
 
     stale = cfg.cache_dir / "v1" / "c0.tmp-j99-abcd"
     spill = cfg.cache_dir / "tmp" / "c0.tmp-j99-abcd"
@@ -369,12 +369,12 @@ def test_one_server_per_cache(cfg: Config) -> None:
     import subprocess
     import sys
 
-    from dbx.jobs.manager import lock_cache
+    from canopy.jobs.manager import lock_cache
 
     lock_cache(cfg.cache_dir)
     code = (
         "import sys; from pathlib import Path\n"
-        "from dbx.jobs.manager import lock_cache, CacheInUseError\n"
+        "from canopy.jobs.manager import lock_cache, CacheInUseError\n"
         "try:\n lock_cache(Path(sys.argv[1]))\nexcept CacheInUseError:\n sys.exit(7)"
     )
     r = subprocess.run([sys.executable, "-c", code, str(cfg.cache_dir)], check=False)
@@ -474,7 +474,7 @@ def test_downsampling_with_more_groups_than_cells_to_keep() -> None:
 def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
     from typer.testing import CliRunner
 
-    from dbx.cli import app as cli
+    from canopy.cli import app as cli
 
     source(cfg.data_roots[0].path / "m.h5ad")
     c = client_for(cfg)
@@ -484,7 +484,7 @@ def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
     old = cfg.cache_dir / "0123456789abcdef" / "c0"
     old.mkdir(parents=True)
     (old / "manifest.json").write_text("{}")
-    conf = cfg.cache_dir.parent / "dbx.toml"
+    conf = cfg.cache_dir.parent / "canopy.toml"
     conf.write_text(
         f'cache_dir = "{cfg.cache_dir}"\n[[data_roots]]\nname = "data"\n'
         f'path = "{cfg.data_roots[0].path}"\n[logging]\ndir = "{cfg.logging.dir}"\n'
@@ -500,7 +500,7 @@ def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
 def test_a_job_larger_than_the_host_fails_and_does_not_block_others(
     cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dbx.jobs import manager
+    from canopy.jobs import manager
 
     source(cfg.data_roots[0].path / "big.h5ad")
     source(cfg.data_roots[0].path / "small.h5ad")

@@ -5,8 +5,8 @@ from pathlib import Path
 from conftest import log_events
 from fastapi.testclient import TestClient
 
-from dbx.app import create_app
-from dbx.config import Config
+from canopy.app import create_app
+from canopy.config import Config
 
 
 def test_health_and_request_log(cfg: Config) -> None:
@@ -131,7 +131,7 @@ def test_request_log_has_dataset_id_and_slow_requests_are_reported(cfg: Config) 
     import threading
     import time
 
-    from dbx.app import InFlight
+    from canopy.app import InFlight
 
     inflight = InFlight()
     inflight.start("r1", {"method": "GET", "path_params": {"id": "abc123"}})
@@ -149,7 +149,7 @@ def test_stack_dump_on_signal(tmp_path: Path) -> None:
     import signal
     import time
 
-    from dbx.logs import install_stack_dumps
+    from canopy.logs import install_stack_dumps
 
     path = install_stack_dumps(tmp_path)
     assert path is not None
@@ -161,7 +161,7 @@ def test_stack_dump_on_signal(tmp_path: Path) -> None:
 
 
 def test_telemetry_drops_free_text_and_limits_rate(cfg: Config) -> None:
-    from dbx import telemetry
+    from canopy import telemetry
 
     with TestClient(create_app(cfg, background=False)) as client:
         client.post(

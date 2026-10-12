@@ -3,12 +3,12 @@
 Date: 2026-10-09 · Status: **accepted** 2026-10-10 (review decisions in SPEC §11); layout superseded by 0004 (v0.2)
 
 Specification: `contract/SPEC.md`. Schema: `contract/schema/manifest.schema.json`.
-Models and validator: `backend/dbx/contract/`. Reference store: `dbx contract example OUT`.
+Models and validator: `backend/canopy/contract/`. Reference store: `canopy contract example OUT`.
 
 ## Decisions
 
 1. Converted stores are a strict profile of AnnData-zarr (tables) and OME-NGFF 0.5 (images,
-   labels); only polygons, transcripts, lookups and statistics use dbx-defined zarr arrays.
+   labels); only polygons, transcripts, lookups and statistics use canopy-defined zarr arrays.
 2. X is always gene-major CSC float32 (int32 indices, int64 indptr), 1 MiB chunks, zstd 3.
 3. Images/labels: 512 px tiles, pyramids down to ≤512 px; mean for images, nearest for labels;
    labels are uint32 with an int32 label → table-row lookup.
@@ -22,7 +22,7 @@ Models and validator: `backend/dbx/contract/`. Reference store: `dbx contract ex
 
 ## Evidence (S2)
 
-- The reference store passes `dbx validate --deep`; anndata 0.13 reads its table (CSC float32,
+- The reference store passes `canopy validate --deep`; anndata 0.13 reads its table (CSC float32,
   colours, gene statistics) back unchanged.
 - `frontend/scripts/read-store.mjs` reads it over HTTP with Viv 0.23 `loadOmeZarr` and zarrita
   0.5.4: image pyramid (OME 0.5 under `attrs.ome`, zstd, 512 px tiles incl. partial edge tiles),

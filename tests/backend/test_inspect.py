@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from dbx.config import Config
-from dbx.inspect import Fingerprint, dataset_id, detect_kind, inspect_path, redact
-from dbx.synth import write_anndata
-from dbx.synth.spec import AnnDataSpec, ColumnSpec, MatrixSpec
+from canopy.config import Config
+from canopy.inspect import Fingerprint, dataset_id, detect_kind, inspect_path, redact
+from canopy.synth import write_anndata
+from canopy.synth.spec import AnnDataSpec, ColumnSpec, MatrixSpec
 
 
 def test_detect_kind_rejects_non_datasets(tmp_path: Path) -> None:
@@ -215,8 +215,8 @@ def test_size_can_be_skipped(cfg: Config, tmp_path: Path) -> None:
 def test_hdf5_locking_disabled(cfg: Config, tmp_path: Path) -> None:
     import h5py
 
-    import dbx  # noqa: F401  (sets the environment default)
-    from dbx.inspect.core import open_h5
+    import canopy  # noqa: F401  (sets the environment default)
+    from canopy.inspect.core import open_h5
 
     p = write_anndata(AnnDataSpec(n_obs=5, n_vars=3), tmp_path / "a.h5ad")
     assert os.environ["HDF5_USE_FILE_LOCKING"] == "FALSE"
@@ -235,7 +235,7 @@ def test_redact_rejects_unknown_level(cfg: Config, tmp_path: Path) -> None:
 
 
 def test_installation_salt_is_secret_and_stable(tmp_path: Path) -> None:
-    from dbx.inspect.redact import SALT_FILE, installation_salt, token
+    from canopy.inspect.redact import SALT_FILE, installation_salt, token
 
     s1 = installation_salt(tmp_path)
     assert s1 == installation_salt(tmp_path) and len(s1) == 64
@@ -243,7 +243,7 @@ def test_installation_salt_is_secret_and_stable(tmp_path: Path) -> None:
     assert installation_salt(tmp_path / "other") != s1
     # A dictionary attack with the old public salt finds nothing.
     words = ["cluster", "sample", "leiden", "batch", "donor", "cell_type"]
-    assert {token(w, s1) for w in words}.isdisjoint({token(w, "dbx") for w in words})
+    assert {token(w, s1) for w in words}.isdisjoint({token(w, "canopy") for w in words})
 
 
 def _user_names(fp: Fingerprint) -> set[str]:
@@ -287,7 +287,7 @@ def test_strict_leaves_no_user_name(cfg: Config, tmp_path: Path, example) -> Non
 
     from legacy_h5ad import write_pre07
 
-    from dbx.inspect.redact import KEEP
+    from canopy.inspect.redact import KEEP
 
     paths = [
         write_pre07(tmp_path / "o'brien lab.h5ad"),  # apostrophes once leaked through warnings

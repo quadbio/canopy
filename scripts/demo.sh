@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Start the demo on this Mac: builds the frontend, unpacks the example SpatialData archives
-# (once), and runs `dbx serve` on the example datasets. Stop with Ctrl+C.
-#   URL:   http://127.0.0.1:${DBX_DEMO_PORT:-8765}
-#   DBX_DEMO_LARGE=1 also generates synthetic 1 M and 3 M cell datasets (once; ~1.1 GB) to try speed.
+# (once), and runs `canopy serve` on the example datasets. Stop with Ctrl+C.
+#   URL:   http://127.0.0.1:${CANOPY_DEMO_PORT:-8765}
+#   CANOPY_DEMO_LARGE=1 also generates synthetic 1 M and 3 M cell datasets (once; ~1.1 GB) to try speed.
 #   Logs:  .cache/demo/logs/        Index + cache: .cache/demo/cache/
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
-port=${DBX_DEMO_PORT:-8765}
+port=${CANOPY_DEMO_PORT:-8765}
 demo="$repo/.cache/demo"
 examples="$repo/../example_datasets"
 extracted="$repo/.cache/examples"
@@ -17,7 +17,7 @@ if [ ! -d "$examples" ]; then
   exit 1
 fi
 if curl -s -o /dev/null "http://127.0.0.1:$port/api/health"; then
-  echo "Port $port is already in use (another dbx serve?). Stop it, or run: DBX_DEMO_PORT=8766 pixi run -e dev demo" >&2
+  echo "Port $port is already in use (another canopy serve?). Stop it, or run: CANOPY_DEMO_PORT=8766 pixi run -e dev demo" >&2
   exit 1
 fi
 
@@ -38,20 +38,20 @@ PY
 # A small generated example with layers (counts + normalised X) and an 80-category column.
 generated="$repo/.cache/generated"
 mkdir -p "$generated"
-if [ ! -f "$generated/example_with_layers.h5ad" ] || [ "$repo/backend/dbx/synth/demo.py" -nt "$generated/example_with_layers.h5ad" ]; then
+if [ ! -f "$generated/example_with_layers.h5ad" ] || [ "$repo/backend/canopy/synth/demo.py" -nt "$generated/example_with_layers.h5ad" ]; then
   part="$(mktemp "$generated/.example-XXXXXX")"  # own name: demo and e2e may run at once
-  dbx synth demo "$part" >/dev/null && mv "$part" "$generated/example_with_layers.h5ad"
+  canopy synth demo "$part" >/dev/null && mv "$part" "$generated/example_with_layers.h5ad"
 fi
 
 large="$repo/.cache/demo-large"
-if [ "${DBX_DEMO_LARGE:-0}" = "1" ]; then
+if [ "${CANOPY_DEMO_LARGE:-0}" = "1" ]; then
   echo "   Generating the synthetic large datasets (first run only, about a minute)…"
   mkdir -p "$large"
   for n in 1000000 3000000; do
     f="$large/synthetic_$((n / 1000000))M_cells.h5ad"
     # written outside the data root first, so an interrupted run leaves no broken dataset
     part="$repo/.cache/demo-large-part.h5ad"
-    [ -f "$f" ] || { dbx synth anndata "$part" --n-obs "$n" --n-vars 300 --density 0.02 --n-clusters 40 >/dev/null && mv "$part" "$f"; }
+    [ -f "$f" ] || { canopy synth anndata "$part" --n-obs "$n" --n-vars 300 --density 0.02 --n-clusters 40 >/dev/null && mv "$part" "$f"; }
   done
 fi
 
@@ -74,7 +74,7 @@ path = "$extracted"
 name = "generated"
 path = "$generated"
 
-$( [ "${DBX_DEMO_LARGE:-0}" = "1" ] && printf '[[data_roots]]\nname = "synthetic"\npath = "%s"\n' "$large" )
+$( [ "${CANOPY_DEMO_LARGE:-0}" = "1" ] && printf '[[data_roots]]\nname = "synthetic"\npath = "%s"\n' "$large" )
 
 [server]
 host = "127.0.0.1"
@@ -94,7 +94,7 @@ echo "3/3 Starting the server."
 echo
 echo "    Open      http://127.0.0.1:$port   (Chrome, Firefox or Safari)"
 echo "    Logs      $demo/logs/"
-echo "    Version   $(dbx --version)"
+echo "    Version   $(canopy --version)"
 echo "    Stop      Ctrl+C"
 echo
-exec dbx serve --config "$demo/config.toml"
+exec canopy serve --config "$demo/config.toml"

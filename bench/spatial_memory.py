@@ -114,13 +114,13 @@ def measure(src: Path, threads: int) -> dict[str, Any]:
 
     import psutil
 
-    from dbx.convert.anndata import ConvertOptions
-    from dbx.convert.spatialdata import convert_spatialdata, spatial_memory_estimate
-    from dbx.inspect import inspect_path
+    from canopy.convert.anndata import ConvertOptions
+    from canopy.convert.spatialdata import convert_spatialdata, spatial_memory_estimate
+    from canopy.inspect import inspect_path
 
     fp = inspect_path(src)
     base = psutil.Process().memory_info().rss
-    cache = Path(tempfile.mkdtemp(prefix="dbx-bench-spatial-"))
+    cache = Path(tempfile.mkdtemp(prefix="canopy-bench-spatial-"))
     t0 = time.monotonic()
     convert_spatialdata(src, fp, cache, ConvertOptions(threads=threads), lambda s, f: None)
     seconds = time.monotonic() - t0
@@ -153,7 +153,7 @@ def main() -> None:
     if args.write:
         write_case(args.write[0], Path(args.write[1]), args.scale)
         return
-    root = args.keep or Path(tempfile.mkdtemp(prefix="dbx-bench-spatial-src-"))
+    root = args.keep or Path(tempfile.mkdtemp(prefix="canopy-bench-spatial-src-"))
     head = (
         "| case | seconds | peak GB (above baseline) | estimate GB | estimate / peak | limit GB |"
     )

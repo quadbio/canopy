@@ -11041,5 +11041,5 @@ packages:
   size: 433687
   timestamp: 1786599629846
 - pypi: ./
-  name: dbx
+  name: canopy
   requires_python: '>=3.12'

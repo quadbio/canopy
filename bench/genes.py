@@ -19,10 +19,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dbx.app import create_app
-from dbx.catalog import entry_id
-from dbx.config import Config, DataRoot, LoggingConfig, ServerConfig
-from dbx.logs import current_log_file, setup_logging
+from canopy.app import create_app
+from canopy.catalog import entry_id
+from canopy.config import Config, DataRoot, LoggingConfig, ServerConfig
+from canopy.logs import current_log_file, setup_logging
 
 
 def main() -> None:
@@ -31,7 +31,7 @@ def main() -> None:
     ap.add_argument("--genes", type=int, default=20)
     ap.add_argument("--parallel", type=int, default=8)
     args = ap.parse_args()
-    tmp = Path(tempfile.mkdtemp(prefix="dbx-bench-"))
+    tmp = Path(tempfile.mkdtemp(prefix="canopy-bench-"))
     cfg = Config(
         data_roots=[DataRoot(name="bench", path=args.folder)],
         cache_dir=tmp / "cache",

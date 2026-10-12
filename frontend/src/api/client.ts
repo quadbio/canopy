@@ -1,4 +1,4 @@
-// Typed access to the dbx backend. Views never call fetch directly; they go through here.
+// Typed access to the canopy backend. Views never call fetch directly; they go through here.
 
 import { MISSING_VALUE } from '../colour/missing';
 import type { BinaryArray, GeneVector, TypedArray } from './types';
@@ -17,7 +17,7 @@ export class ApiError extends Error {
     readonly requestId: string | null,
     detail: unknown = null,
   ) {
-    // Server errors: {"detail": {"code", "message"}, "request_id"} (see backend/dbx/errors.py).
+    // Server errors: {"detail": {"code", "message"}, "request_id"} (see backend/canopy/errors.py).
     const d = detail as { code?: string; message?: string } | string | null;
     const message = typeof d === 'string' ? d : (d?.message ?? null);
     super(message ?? `API ${path} failed with ${status}${requestId ? ` (request ${requestId})` : ''}`);
@@ -68,35 +68,35 @@ const ARRAYS: Record<string, new (b: ArrayBuffer) => TypedArray> = {
   uint8: Uint8Array,
 };
 
-/** A binary array endpoint: little-endian data described by x-dbx-dtype / x-dbx-shape. */
+/** A binary array endpoint: little-endian data described by x-canopy-dtype / x-canopy-shape. */
 export async function getBinary(path: string, fetchImpl: typeof fetch = fetch, init?: RequestInit): Promise<BinaryArray> {
   const res = await fetchImpl(path, { ...init, headers: { accept: 'application/octet-stream', ...init?.headers } });
   if (!res.ok) return fail(res, path);
-  const dtype = res.headers.get('x-dbx-dtype') ?? '';
+  const dtype = res.headers.get('x-canopy-dtype') ?? '';
   const Ctor = ARRAYS[dtype];
   if (!Ctor) throw new ApiError(res.status, path, res.headers.get('x-request-id'), `unknown dtype ${dtype}`);
-  const shape = (res.headers.get('x-dbx-shape') ?? '').split(',').map(Number);
+  const shape = (res.headers.get('x-canopy-shape') ?? '').split(',').map(Number);
   const data = new Ctor(await res.arrayBuffer());
   if (data.length !== shape.reduce((a, b) => a * b, 1)) {
     throw new ApiError(res.status, path, res.headers.get('x-request-id'), 'array length does not match its shape');
   }
-  return { data, shape, dtype, kind: res.headers.get('x-dbx-kind') };
+  return { data, shape, dtype, kind: res.headers.get('x-canopy-kind') };
 }
 
 export const getHealth = (fetchImpl?: typeof fetch) => getJson<Health>('/api/health', fetchImpl);
 
-/** A gene reply (backend dbx/data/genes.py): sparse (uint32 cell indices, then values) or dense;
+/** A gene reply (backend canopy/data/genes.py): sparse (uint32 cell indices, then values) or dense;
  * float32, or uint16 codes with value = offset + code * scale (65535 = missing). Decoded straight
  * into the form the GPU takes: missing values as MISSING_VALUE (see colour/missing.ts). */
 export function decodeGene(buf: ArrayBuffer, header: (name: string) => string | null): GeneVector {
-  const num = (k: string) => Number(header(`x-dbx-${k}`) ?? 'NaN');
+  const num = (k: string) => Number(header(`x-canopy-${k}`) ?? 'NaN');
   const n = num('n');
   const nnz = num('nnz');
-  const sparse = header('x-dbx-encoding') === 'sparse';
+  const sparse = header('x-canopy-encoding') === 'sparse';
   const count = sparse ? nnz : n;
   const off = sparse ? nnz * 4 : 0;
   let vals: Float32Array;
-  if (header('x-dbx-dtype') === 'uint16') {
+  if (header('x-canopy-dtype') === 'uint16') {
     const codes = new Uint16Array(buf, off, count);
     const offset = num('offset');
     const scale = num('scale');

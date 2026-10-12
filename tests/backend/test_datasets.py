@@ -10,17 +10,17 @@ import pytest
 from conftest import CACHE, EXAMPLES, log_events, missing_example
 from fastapi.testclient import TestClient
 
-from dbx.app import create_app
-from dbx.catalog import entry_id
-from dbx.config import Config, DataRoot, MemoryConfig
+from canopy.app import create_app
+from canopy.catalog import entry_id
+from canopy.config import Config, DataRoot, MemoryConfig
 
 DTYPES = {"float32": "<f4", "int8": "i1", "int16": "<i2", "int32": "<i4", "uint8": "u1"}
 
 
 def decode(r: object) -> np.ndarray:
     h = r.headers  # type: ignore[attr-defined]
-    shape = tuple(int(n) for n in h["x-dbx-shape"].split(","))
-    return np.frombuffer(r.content, dtype=DTYPES[h["x-dbx-dtype"]]).reshape(shape)  # type: ignore[attr-defined]
+    shape = tuple(int(n) for n in h["x-canopy-shape"].split(","))
+    return np.frombuffer(r.content, dtype=DTYPES[h["x-canopy-dtype"]]).reshape(shape)  # type: ignore[attr-defined]
 
 
 def tiny(path: Path) -> ad.AnnData:
@@ -80,14 +80,14 @@ def test_meta_describes_columns_colors_and_embeddings(
 def test_obs_matches_anndata(tiny_ds: tuple[TestClient, str, ad.AnnData]) -> None:
     c, id, a = tiny_ds
     r = c.get(f"/api/datasets/{id}/obs", params={"column": "cluster"})
-    assert r.headers["x-dbx-kind"] == "categorical" and r.headers["x-dbx-dtype"] == "int8"
+    assert r.headers["x-canopy-kind"] == "categorical" and r.headers["x-canopy-dtype"] == "int8"
     np.testing.assert_array_equal(decode(r), a.obs["cluster"].cat.codes.to_numpy())
     score = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "score"}))
     np.testing.assert_array_equal(score, a.obs["score"].to_numpy().astype(np.float32))
     count = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "count"}))
     np.testing.assert_array_equal(count, np.arange(300, dtype=np.float32))
     r = c.get(f"/api/datasets/{id}/obs", params={"column": "flag"})
-    assert r.headers["x-dbx-kind"] == "boolean"
+    assert r.headers["x-canopy-kind"] == "boolean"
     np.testing.assert_array_equal(decode(r), a.obs["flag"].to_numpy().astype(np.uint8))
     nullable = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "nullable"}))
     assert np.isnan(nullable[1]) and nullable[2] == 3
@@ -110,7 +110,7 @@ def test_string_column_is_served_as_sorted_categories(
 def test_obsm_matches_anndata_and_selects_dims(tiny_ds: tuple[TestClient, str, ad.AnnData]) -> None:
     c, id, a = tiny_ds
     r = c.get(f"/api/datasets/{id}/obsm", params={"key": "X_umap"})
-    assert r.headers["x-dbx-dtype"] == "float32" and r.headers["x-dbx-shape"] == "300,2"
+    assert r.headers["x-canopy-dtype"] == "float32" and r.headers["x-canopy-shape"] == "300,2"
     np.testing.assert_array_equal(decode(r), a.obsm["X_umap"].astype(np.float32))
     r = c.get(f"/api/datasets/{id}/obsm", params={"key": "X_pca", "dims": "7,2"})
     np.testing.assert_array_equal(decode(r), a.obsm["X_pca"][:, [7, 2]])
@@ -151,7 +151,7 @@ def test_304_is_answered_without_reading(
     def no_read(*a: object, **k: object) -> None:
         raise AssertionError("read on revalidation")
 
-    monkeypatch.setattr("dbx.data.reader.LazySource.obs", no_read)
+    monkeypatch.setattr("canopy.data.reader.LazySource.obs", no_read)
     assert c.get(url, params=q, headers={"if-none-match": etag}).status_code == 304
 
 
@@ -301,7 +301,7 @@ def test_example_spatialdata_table_golden(cfg: Config, example: Callable[[str], 
 
 @pytest.fixture
 def store_client(cfg: Config) -> tuple[TestClient, str, Path]:
-    from dbx.contract.example import write_example_store
+    from canopy.contract.example import write_example_store
 
     base = cfg.cache_dir / "0123456789abcdef" / "c0"
     write_example_store(base)
@@ -359,7 +359,7 @@ def test_store_rejects_unsafe_keys(store_client: tuple[TestClient, str, Path], k
 def test_store_file_refuses_dot_segments(store_client: tuple[TestClient, str, Path]) -> None:
     from fastapi import HTTPException
 
-    from dbx.stores import store_file
+    from canopy.stores import store_file
 
     # HTTP clients normalise `..` away before sending; the server checks anyway.
     _, _, base = store_client
@@ -375,7 +375,7 @@ def test_store_must_be_complete(store_client: tuple[TestClient, str, Path], cfg:
 
 
 def test_spa_fallback(cfg: Config) -> None:
-    from dbx.app import FRONTEND_DIST
+    from canopy.app import FRONTEND_DIST
 
     if not (FRONTEND_DIST / "index.html").exists():
         pytest.skip("frontend not built")
@@ -392,7 +392,7 @@ def test_spa_fallback(cfg: Config) -> None:
 def test_store_range_spanning_blocks_is_streamed(
     store_client: tuple[TestClient, str, Path],
 ) -> None:
-    from dbx.stores import BLOCK
+    from canopy.stores import BLOCK
 
     c, url, base = store_client
     big = base / "big.bin"
@@ -446,7 +446,7 @@ def test_string_and_nullable_boolean_columns(cfg: Config) -> None:
     codes = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "label"}))
     assert [labels["categories"][i] for i in codes[:6]] == ["s0", "s1", "s2", "s3", "s4", "s0"]
     r = c.get(f"/api/datasets/{id}/obs", params={"column": "maybe"})
-    assert r.headers["x-dbx-kind"] == "boolean" and r.headers["x-dbx-dtype"] == "int8"
+    assert r.headers["x-canopy-kind"] == "boolean" and r.headers["x-canopy-dtype"] == "int8"
     assert decode(r)[:3].tolist() == [1, -1, 0]  # missing stays missing
     assert meta["maybe"]["categories"] == ["false", "true"]
 
@@ -500,7 +500,7 @@ def test_reader_failure_is_a_logged_500_not_a_404(
     def broken(*a: object, **k: object) -> None:
         raise KeyError("inside a library")
 
-    monkeypatch.setattr("dbx.data.reader.read_elem", broken)
+    monkeypatch.setattr("canopy.data.reader.read_elem", broken)
     r = c.get(f"/api/datasets/{id}/obs", params={"column": "score"})
     assert r.status_code == 500 and r.json()["detail"]["code"] == "internal_error"
     failed = next(e for e in log_events() if e["event"] == "request_failed")
@@ -510,7 +510,7 @@ def test_reader_failure_is_a_logged_500_not_a_404(
 def test_idle_entries_are_swept(cfg: Config) -> None:
     import time
 
-    from dbx.data.cache import DatasetCache
+    from canopy.data.cache import DatasetCache
 
     cfg.memory = MemoryConfig(idle_minutes=0.001)  # 60 ms
     cache = DatasetCache(cfg)
@@ -525,7 +525,7 @@ def test_idle_entries_are_swept(cfg: Config) -> None:
 
 
 def test_parse_colors_accepts_what_scanpy_and_matplotlib_accept() -> None:
-    from dbx.data.reader import parse_colors
+    from canopy.data.reader import parse_colors
 
     assert parse_colors(["#FF0000", "#00ff0080", "#abc"], 3) == (
         ["#ff0000", "#00ff00", "#aabbcc"],

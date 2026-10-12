@@ -1,5 +1,5 @@
 [workspace]
-name = "dbx"
+name = "canopy"
 description = "Lab single-cell and spatial data browser (backend + frontend)"
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]
@@ -19,7 +19,7 @@ scipy = ">=1.13"
 pandas = ">=2.2"
 pyarrow = ">=16"
 spatialdata = ">=0.4"
-# Used directly by dbx.synth (also pulled in by spatialdata).
+# Used directly by canopy.synth (also pulled in by spatialdata).
 dask = ">=2024.1"
 geopandas = ">=0.14"
 shapely = ">=2.0"
@@ -28,10 +28,10 @@ psutil = ">=5.9"
 typer = ">=0.12"
 
 [pypi-dependencies]
-dbx = { path = ".", editable = true }
+canopy = { path = ".", editable = true }
 
 [tasks]
-serve = "dbx serve"
+serve = "canopy serve"
 
 # ---------------------------------------------------------------- dev tools
 [feature.dev.dependencies]
@@ -43,19 +43,19 @@ mypy = ">=1.11"
 
 [feature.dev.tasks]
 lint-py = "ruff check backend tests bench && ruff format --check backend tests bench"
-types-py = "mypy backend/dbx"
+types-py = "mypy backend/canopy"
 test-py = "pytest -q tests/backend"
 # Same tests, but missing example datasets fail instead of being skipped.
-test-examples = { cmd = "pytest -q tests/backend", env = { DBX_REQUIRE_EXAMPLES = "1" } }
+test-examples = { cmd = "pytest -q tests/backend", env = { CANOPY_REQUIRE_EXAMPLES = "1" } }
 check-py = { depends-on = ["lint-py", "types-py", "test-py"] }
 fmt = "ruff format backend tests bench && ruff check --fix backend tests bench"
 install-hooks = "ln -sf ../../scripts/pre-commit .git/hooks/pre-commit"
-contract-schema = "dbx contract schema --out contract/schema/manifest.schema.json"
+contract-schema = "canopy contract schema --out contract/schema/manifest.schema.json"
 architecture = "python scripts/architecture.py"     # docs/architecture/index.html from the code
 # Benchmark fixtures (~0.5 GB each, ~1 min each) in .cache/bench; see bench/README.md
 synth-bench = """
-dbx synth anndata .cache/bench/synth_1m_csr.h5ad --n-obs 1000000 --n-vars 2000 --encoding csr &&
-dbx synth anndata .cache/bench/synth_1m_csc.h5ad --n-obs 1000000 --n-vars 2000 --encoding csc
+canopy synth anndata .cache/bench/synth_1m_csr.h5ad --n-obs 1000000 --n-vars 2000 --encoding csr &&
+canopy synth anndata .cache/bench/synth_1m_csc.h5ad --n-obs 1000000 --n-vars 2000 --encoding csc
 """
 
 # ---------------------------------------------------------------- frontend toolchain
@@ -71,13 +71,13 @@ check-fe = { cmd = "pnpm check", cwd = "frontend" }
 
 # Browser-side contract check: write the reference store, read it with Viv + zarrita over HTTP.
 [feature.dev.tasks.check-store-js]
-# Viv + zarrita read the reference store served by `dbx serve` (Range requests, sharding).
+# Viv + zarrita read the reference store served by `canopy serve` (Range requests, sharding).
 cmd = "bash scripts/check-store-served.sh"
 
 [feature.dev.tasks.check]
 depends-on = ["check-py", "check-fe", "check-store-js"]
 
-# Browser tests (Playwright, software WebGL) against `dbx serve` on the example datasets.
+# Browser tests (Playwright, software WebGL) against `canopy serve` on the example datasets.
 # Screenshots land in frontend/test-results/screens/.
 [feature.dev.tasks.e2e]
 cmd = "pnpm build && pnpm exec playwright test"

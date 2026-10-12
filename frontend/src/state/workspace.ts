@@ -49,7 +49,7 @@ export interface Workspace {
 
 export const MAX_VIEWS = 9;
 export const MAX_REMEMBERED = 200;
-export const STORAGE_KEY = 'dbx-workspace';
+export const STORAGE_KEY = 'canopy-workspace';
 const VERSION = 2;
 
 const newId = () => `v${Math.random().toString(36).slice(2, 8)}`;

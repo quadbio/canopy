@@ -6,10 +6,10 @@ import anndata as ad
 import numpy as np
 import pytest
 
-from dbx.config import Config
-from dbx.inspect import inspect_path
-from dbx.synth import SynthMatrix, structure_signature, write_anndata, write_demo, write_mock
-from dbx.synth.spec import AnnDataSpec, ColumnSpec, MatrixSpec
+from canopy.config import Config
+from canopy.inspect import inspect_path
+from canopy.synth import SynthMatrix, structure_signature, write_anndata, write_demo, write_mock
+from canopy.synth.spec import AnnDataSpec, ColumnSpec, MatrixSpec
 
 
 def test_matrix_rows_and_cols_agree() -> None:
@@ -89,7 +89,7 @@ def test_dense_matrix_larger_than_one_block(
 ) -> None:
     import anndata as ad
 
-    from dbx.synth import anndata_gen
+    from canopy.synth import anndata_gen
 
     monkeypatch.setattr(anndata_gen, "_BLOCK_VALUES", 500)  # several row blocks
     spec = AnnDataSpec(n_obs=230, n_vars=10, X=MatrixSpec(encoding="dense", density=0.3, chunk=40))

@@ -14,8 +14,8 @@ synthetic datasets. Atlas-scale tests come later on the host.
 ## How to try F3 (5 minutes)
 
 ```bash
-cd /Users/hezhi/Tools/Projects/data_browser_server/dbx
-DBX_DEMO_LARGE=1 pixi run -e dev demo        # writes the generated example on first start
+cd /Users/hezhi/Tools/Projects/data_browser_server/canopy
+CANOPY_DEMO_LARGE=1 pixi run -e dev demo        # writes the generated example on first start
 ```
 
 1. Click **example_with_layers.h5ad**. The details list *Layers: counts*. Open it.
