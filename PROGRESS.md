@@ -287,3 +287,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   26 e2e.
   - Next: rest of S7 (multi-dataset workspace and shared colours, gene search, filters) after the
     owner tries the plot view.
+- 2026-10-12 Plot redesign (owner: plot bound to the opened view): "Plot against a second feature"
+  (unticked by default) under Colour by in embedding and spatial settings opens a plot view
+  beside it; x follows the view's Colour by, y chosen there; the view's colours, hidden
+  categories and legend apply; unticking or closing the view closes the plot. Plot button
+  removed (ADR 0013 revised, S7a guide and form rewritten). 276 backend, 81 unit, 26 e2e.
+  Commit 20acd51. Cold review of 477c92f..20acd51 launched (../reviews/code_review_S7a/).
+  - Next: report reviews; owner does the S7a demo review.
