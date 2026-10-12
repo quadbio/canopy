@@ -265,3 +265,5 @@ Resume rule: read this file, then continue with the first unchecked step.
   converting before the spatial view; memory estimate recalibrated (MERSCOPE 1.62 vs 1.36 GB
   measured, was 3.0). 247 backend, 69 unit, 22 e2e.
   - Next: NOT S7 yet. The user may propose a cold review of everything built so far.
+- 2026-10-12 Hover fixed (user: still nothing on hover): demo logs showed values produced but invisible; deck.gl's tooltip sat off screen at devicePixelRatio 2. Canvas draws the hover text itself; e2e at 2x checks placement. 23 e2e.
+  - Next: NOT S7; user may propose a full cold review.

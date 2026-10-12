@@ -49,7 +49,8 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
   "Split by" returns to None; a panel's layer when splitting by the same column again). The
   canvas replaces such a returning object with a fresh copy, so it is drawn with new buffers
   (it had stayed blank).
-- **Hover:** values on hover follow each view's "Show values on hover" (on by default); deck.gl
+- **Hover:** the hover text is drawn by the canvas at the pointer (deck.gl's own tooltip was
+  placed off screen on 2× displays); values follow each view's "Show values on hover" (on by default); deck.gl
   picks within 3 px, so small cells are easier to hit. Telemetry `hover` (per 10 s: pointer
   moves, cells hit, values shown) tells from the logs whether hovering finds cells.
 - **Split by** (embedding):

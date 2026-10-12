@@ -212,7 +212,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.deck-tooltip {
+.hover-tip {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  white-space: nowrap;
   padding: 4px 8px !important;
   border-radius: var(--radius-sm);
   background: var(--surface) !important;

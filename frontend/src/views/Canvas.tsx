@@ -477,11 +477,46 @@ export function Canvas() {
     if (views.find((v) => v.id === view)?.params.hover === false) return null;
     const text = panelsOf(outputs[view]).find((p) => p.id === panel)?.tooltip?.(info.index, root);
     if (text) hovers.current.shown += 1;
-    return text ? { text, className: 'deck-tooltip' } : null;
+    return text ?? null;
+  };
+  // The hover text is drawn here at the pointer, not by deck.gl: deck.gl placed its tooltip off
+  // screen on high-density (Retina) displays (S6 feedback). Positioned without re-rendering.
+  const tipRef = useRef<HTMLDivElement>(null);
+  const pointer = useRef({ x: 0, y: 0 });
+  const placeTip = () => {
+    const el = tipRef.current;
+    const box = ref.current?.getBoundingClientRect();
+    if (!el || !box) return;
+    const { x, y } = pointer.current;
+    const right = x + 16 + el.offsetWidth > box.width; // keep it inside the canvas
+    const below = y + 16 + el.offsetHeight > box.height;
+    el.style.left = `${right ? x - 12 - el.offsetWidth : x + 14}px`;
+    el.style.top = `${below ? y - 12 - el.offsetHeight : y + 14}px`;
+  };
+  const showTip = (text: string | null) => {
+    const el = tipRef.current;
+    if (!el) return;
+    if (!text) {
+      el.style.display = 'none';
+      return;
+    }
+    if (el.textContent !== text) el.textContent = text;
+    el.style.display = 'block';
+    placeTip();
   };
 
   return (
-    <div className="canvas" ref={ref} data-testid="canvas">
+    <div
+      className="canvas"
+      ref={ref}
+      data-testid="canvas"
+      onPointerMove={(e) => {
+        const box = ref.current!.getBoundingClientRect();
+        pointer.current = { x: e.clientX - box.left, y: e.clientY - box.top };
+        placeTip();
+      }}
+      onPointerLeave={() => showTip(null)}
+    >
       {views.map((v) => (
         <ErrorBoundary key={v.id} scope="view" fallback={(e) => <RunnerFailed id={v.id} error={e} />}>
           <ViewRunner spec={v} />
@@ -512,11 +547,14 @@ export function Canvas() {
               return { ...s, ...linkedStates(l.link, viewId, { target, zoom }, mine, fits.current) };
             });
           }}
-          onInteractionStateChange={(s) => setDragging(!!s.isDragging)}
+          onInteractionStateChange={(s) => {
+            setDragging(!!s.isDragging);
+            if (s.isDragging) showTip(null);
+          }}
           layers={layers}
           // by the top-level layer's id: sub-layers (e.g. Viv's image tiles) have their own ids
           layerFilter={({ layer, viewport }) => rootOf(layer).id.startsWith(`${viewport.id}:`)}
-          getTooltip={tooltip}
+          onHover={(info) => showTip(tooltip(info))}
           // a few pixels of tolerance: cells are small when zoomed out
           pickingRadius={3}
           onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
@@ -555,6 +593,7 @@ export function Canvas() {
           </ErrorBoundary>
         ) : null,
       )}
+      <div ref={tipRef} className="hover-tip" data-testid="hover-tip" role="tooltip" style={{ display: 'none' }} />
     </div>
   );
 }

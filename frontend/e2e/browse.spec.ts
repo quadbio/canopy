@@ -77,7 +77,7 @@ test('hidden categories are neither drawn nor reported on hover', async ({ page 
   for (let gx = 0.2; gx < 0.6 && !spot; gx += 0.05) {
     for (let gy = 0.3; gy < 0.9 && !spot; gy += 0.05) {
       await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
-      if (await page.locator('.deck-tooltip').isVisible({ timeout: 150 }).catch(() => false)) {
+      if (await page.getByTestId('hover-tip').isVisible({ timeout: 150 }).catch(() => false)) {
         spot = { x: box.x + gx * box.width, y: box.y + gy * box.height };
       }
     }
@@ -88,7 +88,7 @@ test('hidden categories are neither drawn nor reported on hover', async ({ page 
   await page.mouse.move(spot!.x + 1, spot!.y + 1);
   await page.mouse.move(spot!.x, spot!.y);
   await page.waitForTimeout(300);
-  await expect(page.locator('.deck-tooltip')).toBeHidden();
+  await expect(page.getByTestId('hover-tip')).toBeHidden();
   expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeLessThan(0.002);
 });
 
@@ -359,8 +359,8 @@ test('colour by a gene: search, gradient, tooltip, values from a layer', async (
   for (let gx = 0.25; gx < 0.6 && !tip; gx += 0.05) {
     for (let gy = 0.3; gy < 0.9 && !tip; gy += 0.05) {
       await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
-      if (await page.locator('.deck-tooltip').isVisible({ timeout: 150 }).catch(() => false)) {
-        tip = await page.locator('.deck-tooltip').textContent();
+      if (await page.getByTestId('hover-tip').isVisible({ timeout: 150 }).catch(() => false)) {
+        tip = await page.getByTestId('hover-tip').textContent();
       }
     }
   }
@@ -452,8 +452,8 @@ test('level of detail: a prefix of the same buffers, more cells when zoomed in, 
   for (let gx = 0.25; gx < 0.6 && !tip; gx += 0.05) {
     for (let gy = 0.3; gy < 0.9 && !tip; gy += 0.05) {
       await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
-      if (await page.locator('.deck-tooltip').isVisible({ timeout: 150 }).catch(() => false)) {
-        tip = await page.locator('.deck-tooltip').textContent();
+      if (await page.getByTestId('hover-tip').isVisible({ timeout: 150 }).catch(() => false)) {
+        tip = await page.getByTestId('hover-tip').textContent();
       }
     }
   }
@@ -583,8 +583,8 @@ test('spatial view: convert a SpatialData store, see image, coloured cells and t
   for (let gx = 0.2; gx < 0.6 && !tip; gx += 0.03) {
     for (let gy = 0.3; gy < 0.8 && !tip; gy += 0.03) {
       await page.mouse.move(box.x + gx * box.width, box.y + gy * box.height);
-      if (await page.locator('.deck-tooltip').isVisible({ timeout: 100 }).catch(() => false)) {
-        tip = await page.locator('.deck-tooltip').textContent();
+      if (await page.getByTestId('hover-tip').isVisible({ timeout: 100 }).catch(() => false)) {
+        tip = await page.getByTestId('hover-tip').textContent();
         Object.assign(hit, { x: gx, y: gy });
       }
     }
@@ -596,7 +596,7 @@ test('spatial view: convert a SpatialData store, see image, coloured cells and t
   await page.mouse.move(box.x + 5, box.y + 5);
   await page.mouse.move(box.x + hit.x * box.width, box.y + hit.y * box.height);
   await page.waitForTimeout(300);
-  await expect(page.locator('.deck-tooltip')).toBeHidden();
+  await expect(page.getByTestId('hover-tip')).toBeHidden();
   await page.getByTestId('hover-info').locator('input').check();
 
   // without cells, the image remains (not black)
