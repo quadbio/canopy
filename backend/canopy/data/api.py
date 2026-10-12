@@ -30,6 +30,7 @@ from canopy.catalog import Catalog, PathEscapeError
 from canopy.catalog.db import Row
 from canopy.data import genes
 from canopy.data.cache import DatasetCache, MemoryBusyError, store_table, table_info
+from canopy.data.genes import quantise_columns
 from canopy.data.reader import (
     ColumnMeta,
     InvalidDimsError,
@@ -331,10 +332,11 @@ def obsm(
     key: NameQ,
     dims: Annotated[str, Query(pattern=r"^\d{1,4}(,\d{1,4}){0,2}$")] = "0,1",
     table: TableQ = None,
+    q: Annotated[int, Query(description="16: uint16 codes per column (x-canopy-q-*)")] = 0,
 ) -> Response:
     row, fp, path = _dataset(request, id)
     table, _ = _table(fp, table)
-    etag = _etag([str(row.version), str(table), "obsm", key, dims])
+    etag = _etag([str(row.version), str(table), "obsm", key, dims, str(q)])
     if (r := _not_modified(request, etag)) is not None:
         return r
     _, cache = _state(request)
@@ -353,6 +355,14 @@ def obsm(
             dataset_id=row.id,
         ),
     )
+    if q == 16:
+        codes, offsets, scales = quantise_columns(arr)
+        return _binary(
+            codes,
+            etag,
+            x_canopy_q_offset=",".join(repr(o) for o in offsets),
+            x_canopy_q_scale=",".join(repr(x) for x in scales),
+        )
     return _binary(arr, etag)
 
 

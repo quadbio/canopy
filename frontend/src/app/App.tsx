@@ -127,6 +127,31 @@ function ResetWorkspace() {
   );
 }
 
+/** Side panels (datasets, settings) shown or folded away, remembered in this browser; folded
+ * by default on narrow windows. */
+function useSidePanels() {
+  const [shown, setShown] = useState<{ datasets: boolean; settings: boolean }>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('canopy-panels') ?? 'null') as { datasets?: boolean; settings?: boolean } | null;
+      if (saved) return { datasets: saved.datasets !== false, settings: saved.settings !== false };
+    } catch {
+      // ignore
+    }
+    return { datasets: true, settings: window.innerWidth >= 1200 };
+  });
+  const toggle = (k: 'datasets' | 'settings') =>
+    setShown((s) => {
+      const next = { ...s, [k]: !s[k] };
+      try {
+        localStorage.setItem('canopy-panels', JSON.stringify(next));
+      } catch {
+        // private window: not remembered
+      }
+      return next;
+    });
+  return [shown, toggle] as const;
+}
+
 /** The server refused a request for lack of the access token (e.g. the cookie was cleared). */
 function useAuthRequired() {
   const [needed, setNeeded] = useState(false);
@@ -140,6 +165,7 @@ function useAuthRequired() {
 
 export function App() {
   const [theme, cycleTheme] = useTheme();
+  const [panels, togglePanel] = useSidePanels();
   const authRequired = useAuthRequired();
   if (authRequired) {
     return (
@@ -154,12 +180,30 @@ export function App() {
     );
   }
   return (
-    <div className="app">
+    <div className={`app${panels.datasets ? '' : ' no-sidebar'}${panels.settings ? '' : ' no-panel'}`}>
       <header className="header">
         <img className="brand-logo" src="/canopy-64.png" srcSet="/canopy-64.png 1x, /canopy-128.png 2x" alt="" width={28} height={28} />
         <span className="brand">Canopy</span>
         <span className="muted small">single-cell and spatial data browser</span>
         <div className="spacer" />
+        <button
+          className="ghost"
+          onClick={() => togglePanel('datasets')}
+          aria-pressed={panels.datasets}
+          title={panels.datasets ? 'Fold the datasets panel away' : 'Show the datasets panel'}
+          data-testid="toggle-datasets"
+        >
+          Datasets
+        </button>
+        <button
+          className="ghost"
+          onClick={() => togglePanel('settings')}
+          aria-pressed={panels.settings}
+          title={panels.settings ? 'Fold the settings panel away' : 'Show the settings panel'}
+          data-testid="toggle-settings"
+        >
+          Settings
+        </button>
         <CatalogStatus />
         <ResetWorkspace />
         <button className="ghost" onClick={cycleTheme} title="Theme: system, light or dark">

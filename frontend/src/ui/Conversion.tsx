@@ -73,6 +73,10 @@ function Progress({ job, onCancel, spatial }: { job: Job; onCancel: () => void; 
   let line: string;
   if (job.stage === 'waiting_for_memory') {
     line = `Waiting for free memory on the server (needs ${gb(job.info?.need_bytes)}, ${gb(job.info?.available_bytes)} free)`;
+    // after a few minutes: it may never fit while other programs hold the memory
+    if (job.created && Date.now() / 1000 - job.created > 180) {
+      line += '. It may not fit while other work runs: cancel and lower jobs.memory_gb, or free memory on the server.';
+    }
   } else if (job.state === 'queued') {
     line = 'Queued…';
   } else if (step >= 0) {

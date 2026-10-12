@@ -18,6 +18,11 @@ code { font-family: var(--font-mono); font-size: var(--text-sm); }
   grid-template-areas: 'header header header' 'sidebar main panel';
   height: 100vh;
 }
+.app.no-sidebar { grid-template-columns: 0 1fr var(--panel-width); }
+.app.no-panel { grid-template-columns: var(--sidebar-width) 1fr 0; }
+.app.no-sidebar.no-panel { grid-template-columns: 0 1fr 0; }
+.app.no-sidebar .sidebar, .app.no-panel .panel { display: none; }
+.header button[aria-pressed='false'] { color: var(--text-muted); }
 .header {
   grid-area: header;
   display: flex;
@@ -395,7 +400,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .conversion-row { display: flex; align-items: center; gap: var(--space-2); }
 .progress { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .progress-bar { height: 100%; background: var(--accent); transition: width 0.4s ease; }
-.view-caption { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
+.view-caption {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  /* readable over images */
+  background: var(--surface);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
 
 /* file details: open buttons */
 .open-row { display: flex; flex-wrap: wrap; gap: var(--space-1); }

@@ -613,6 +613,7 @@ export function ColourLegend({
 }) {
   const update = useWorkspace((s) => s.updateParams);
   const roving = useRoving();
+  const [showAll, setShowAll] = useState(false);
   const p = spec.params;
   const data = output.legend as ColourLegendData | undefined;
   if (!data) return null;
@@ -666,8 +667,7 @@ export function ColourLegend({
       )}
       {!collapsed && (
         <ul className="legend-list" onKeyDown={(e) => roving.onKeyDown(e)} ref={roving.ref}>
-          {data.order
-            .filter((i) => data.counts[i] > 0)
+          {shownRows(data, showAll)
             .map((i, row) => {
               const c = data.labels[i];
               return (
@@ -694,7 +694,18 @@ export function ColourLegend({
             })}
         </ul>
       )}
+      {!collapsed && !showAll && present(data).length > LEGEND_ROWS && (
+        <button className="link small" onClick={() => setShowAll(true)} data-testid="legend-more">
+          {present(data).length - LEGEND_ROWS} more categories…
+        </button>
+      )}
     </div>
   );
 }
+
+// A long legend (e.g. thousands of clusters) shows its first rows, then "N more" on request.
+const LEGEND_ROWS = 200;
+const present = (data: { order: number[]; counts: ArrayLike<number> }) => data.order.filter((i) => data.counts[i] > 0);
+const shownRows = (data: { order: number[]; counts: ArrayLike<number> }, all: boolean) =>
+  all ? present(data) : present(data).slice(0, LEGEND_ROWS);
 

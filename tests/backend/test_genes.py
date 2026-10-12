@@ -425,3 +425,18 @@ def test_example_spatialdata_table_genes_golden(
     default = c.get(f"/api/datasets/{id}/gene", params={"i": 5})
     named = c.get(f"/api/datasets/{id}/gene", params={"i": 5, "table": "table_cells"})
     assert default.headers["etag"] == named.headers["etag"]
+
+
+def test_embedding_codes_are_within_one_step_and_keep_missing(tmp_path: Path) -> None:
+    from canopy.data.genes import quantise_columns
+
+    rng = np.random.default_rng(0)
+    a = np.c_[rng.normal(0, 5, 1000), rng.uniform(-200, 9000, 1000)].astype(np.float32)
+    a[3, 0] = np.nan
+    codes, offsets, scales = quantise_columns(a)
+    back = np.asarray(offsets) + codes.astype(np.float64) * np.asarray(scales)
+    ok = np.isfinite(a)
+    assert codes.dtype == np.uint16 and codes[3, 0] == 65535
+    assert np.all(
+        np.abs(back[ok] - a[ok]) <= np.broadcast_to(np.asarray(scales), a.shape)[ok] / 2 + 1e-3
+    )

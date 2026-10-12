@@ -213,6 +213,28 @@ class Encoded:
     headers: dict[str, str]
 
 
+def quantise_columns(a: np.ndarray) -> tuple[np.ndarray, list[float], list[float]]:
+    """Positions (n × d) as uint16 codes per column: value = offset + code × scale, the range of
+    each column in 65,534 steps (finer than a screen pixel at any useful zoom); NaN and ±inf as
+    MISSING_CODE. Half the bytes of float32 over a slow link."""
+    codes = np.empty(a.shape, dtype="<u2")
+    offsets, scales = [], []
+    top = MISSING_CODE - 1
+    for j in range(a.shape[1]):
+        v = a[:, j].astype(np.float64)
+        ok = np.isfinite(v)
+        lo = float(v[ok].min()) if ok.any() else 0.0
+        hi = float(v[ok].max()) if ok.any() else 0.0
+        scale = (hi - lo) / top if hi > lo else 1.0
+        q = np.zeros(len(v))
+        q[ok] = np.rint((v[ok] - lo) / scale)
+        codes[:, j] = np.clip(q, 0, top)
+        codes[~ok, j] = MISSING_CODE
+        offsets.append(lo)
+        scales.append(scale)
+    return codes, offsets, scales
+
+
 def quantise(vals: np.ndarray) -> tuple[np.ndarray, float, float]:
     """uint16 codes, offset and scale. Integers within 65,534 of each other are exact (scale 1);
     otherwise 0 falls exactly on a code. NaN is MISSING_CODE; ±inf the end codes."""

@@ -27,8 +27,10 @@ export const datasets = {
     getJson<{ kind: string; categories: string[] | null; colors?: string[] | null }>(
       url(`/api/datasets/${encodeURIComponent(id)}/obs/labels`, { column, table }),
     ),
+  /** Embedding coordinates, sent as uint16 per column (`q=16`): half the bytes over a slow
+   * link, still finer than a screen pixel. */
   obsm: (id: string, table: string | null, key: string, dims: number[], signal?: AbortSignal) =>
-    getBinary(url(`/api/datasets/${encodeURIComponent(id)}/obsm`, { key, dims: dims.join(','), table }), fetch, {
+    getBinary(url(`/api/datasets/${encodeURIComponent(id)}/obsm`, { key, dims: dims.join(','), table, q: 16 }), fetch, {
       signal,
     }),
   subset: (id: string, table: string | null, n: number, signal?: AbortSignal) =>

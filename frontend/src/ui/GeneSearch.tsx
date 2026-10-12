@@ -98,7 +98,7 @@ export function GeneSearch({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)} // let a click on a match land first
+        onBlur={() => setOpen(false)}
         onKeyDown={(e) => {
           if (e.key === 'ArrowDown') setActive((a) => Math.min(a + 1, matches.length - 1));
           else if (e.key === 'ArrowUp') setActive((a) => Math.max(a - 1, 0));
@@ -109,7 +109,15 @@ export function GeneSearch({
         }}
       />
       {open && query.trim() && (
-        <ul className="gene-matches" id={listId} role="listbox" aria-label="Matching genes" ref={listRef}>
+        <ul
+          className="gene-matches"
+          id={listId}
+          role="listbox"
+          aria-label="Matching genes"
+          ref={listRef}
+          // the input keeps focus while a match is clicked (no timing guess on a slow desktop)
+          onMouseDown={(e) => e.preventDefault()}
+        >
           {matches.length === 0 && (
             <li className="muted small pad" role="presentation">
               <span role="status">No gene matches.</span>

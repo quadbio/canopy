@@ -91,7 +91,9 @@ function clean(fields: Record<string, Value | null | undefined>): Record<string,
 export function event(name: string, ms: number | null = null, fields: Record<string, Value | null | undefined> = {}) {
   queue.push({ name, ms: ms === null ? null : Math.round(ms * 100) / 100, fields: clean(fields) });
   performance.mark(`canopy:${name}`);
-  if (performance.getEntriesByType('mark').length > 500) performance.clearMarks();
+  // only our own marks are cleared (a test mode may set its own)
+  const ours = performance.getEntriesByType('mark').filter((m) => m.name.startsWith('canopy:'));
+  if (ours.length > 500) for (const m of ours.slice(0, ours.length - 100)) performance.clearMarks(m.name);
   if (typeof window === 'undefined') return;
   if (queue.length >= 100) flush();
   else timer ??= setTimeout(flush, FLUSH_MS);

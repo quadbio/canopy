@@ -543,7 +543,9 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
           event('transcripts_loaded', performance.now() - t0, { n: xy.length / 2, mode, chunks: parts?.length ?? 0 });
           return { gene: g, xy, n: hi - lo, mode };
         },
-        placeholderData: (prev: unknown) => prev as never,
+        // the previous read stays on screen while the next loads, but only for the same gene
+        // (after a removal, index k is another gene)
+        placeholderData: (prev: unknown) => ((prev as { gene?: string } | undefined)?.gene === g ? prev : undefined) as never,
         enabled: !!features.data && !!points,
         staleTime: Infinity,
         gcTime: 30_000,
@@ -764,6 +766,8 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' || outlinesReady ? '' : loadedBlocks ? ' (loading outlines…)' : ' (centres; zoom in for outlines)'}`
       : undefined,
     n: shapes?.n ?? 0,
+    // drawn cells count against the canvas's shared point budget (outlines or centres)
+    total: shapes?.n ?? 0,
     legend: colourCells ? colouring.legend : undefined,
   };
 }
@@ -881,7 +885,7 @@ function SpatialPanel({ spec }: { spec: ViewSpec<SpatialParams> }) {
       {img && (
         <div className="channels" data-testid="channels">
           {channels.map((c, i) => (
-            <div className="channel" key={img.channels[i].name}>
+            <div className="channel" key={i}>
               <label className="check">
                 <input type="checkbox" checked={c.on} onChange={(e) => setChannel(i, { on: e.target.checked })} />
                 <ColourInput label={`Colour of channel ${img.channels[i].name}`} value={c.colour} onChange={(hex) => setChannel(i, { colour: hex })} />

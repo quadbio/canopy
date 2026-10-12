@@ -42,6 +42,20 @@ export default defineConfig({
         launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
       },
     },
+    // The owner's setting: the Mac's GPU at 2x pixel density (pixi run -e dev e2e-gpu).
+    ...(process.env.CANOPY_E2E_GPU === '1'
+      ? [
+          {
+            name: 'gpu-2x',
+            use: {
+              ...devices['Desktop Chrome'],
+              viewport: { width: 1440, height: 900 },
+              deviceScaleFactor: 2,
+              launchOptions: { args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] },
+            },
+          },
+        ]
+      : []),
   ],
   webServer: {
     command: 'bash ../scripts/e2e-server.sh',

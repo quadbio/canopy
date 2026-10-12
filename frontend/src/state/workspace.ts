@@ -214,6 +214,8 @@ export const useWorkspace = create<Workspace>()(
       skipHydration: true,
       partialize: (s) => ({ views: s.views, selected: s.selected, remembered: s.remembered }),
       // Older saved versions: keep what can be kept; `merge` validates every view anyway.
+      // No migration step is needed: `merge` validates and normalises every saved view (per view
+      // type), which is where a format change between versions is handled.
       migrate: (persisted) => persisted as Partial<Workspace>,
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<Workspace>;

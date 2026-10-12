@@ -89,7 +89,8 @@ test('hidden categories are neither drawn nor reported on hover', async ({ page 
   await page.mouse.move(spot!.x, spot!.y);
   await page.waitForTimeout(300);
   await expect(page.getByTestId('hover-tip')).toBeHidden();
-  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeLessThan(0.002);
+  // only the view's title and frame remain (a little more of them at 2x pixel density)
+  expect(await drawnFraction(page, cell, { x0: 0, x1: 0.6 })).toBeLessThan(0.004);
 });
 
 test('a broken saved workspace does not break the app', async ({ page }) => {

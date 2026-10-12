@@ -149,7 +149,7 @@ function Details({ id }: { id: string }) {
         <dt>Type</dt>
         <dd>{d.kind ?? '–'}</dd>
         <dt>Size</dt>
-        <dd>{formatBytes(d.size_bytes)}</dd>
+        <dd>{d.size_bytes === null || d.size_bytes === undefined ? 'a folder (size not measured)' : formatBytes(d.size_bytes)}</dd>
         {s.n_obs !== undefined && (
           <>
             <dt>Cells × genes</dt>

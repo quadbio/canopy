@@ -189,8 +189,12 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     () => (ready ? { data: data!, valueColour: valueColour!, legend, tooltip, n: n! } : null),
     [ready, data, valueColour, legend, tooltip, n],
   );
+  // the last complete picture, kept on screen while the next one loads (updated after commit,
+  // so a render React throws away never leaves it pointing at data that was not shown)
   const lastGood = useRef<Shown | null>(null);
-  if (current) lastGood.current = current;
+  useEffect(() => {
+    if (current) lastGood.current = current;
+  }, [current]);
   const shown =
     current ??
     (lastGood.current && lastGood.current.n === n ? lastGood.current : null) ??
@@ -313,7 +317,9 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   // Time from choosing a colouring to its first draw, for every change (not only the first).
   const colourKey = JSON.stringify(p.colorBy);
   const asked = useRef<{ key: string; at: number } | null>(null);
-  if (asked.current?.key !== colourKey) asked.current = { key: colourKey, at: performance.now() };
+  useEffect(() => {
+    if (asked.current?.key !== colourKey) asked.current = { key: colourKey, at: performance.now() };
+  }, [colourKey]);
   useEffect(() => {
     if (current && asked.current && asked.current.at > 0) {
       event('colouring_shown', performance.now() - asked.current.at, {

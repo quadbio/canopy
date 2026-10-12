@@ -78,9 +78,23 @@ export async function getBinary(path: string, fetchImpl: typeof fetch = fetch, i
   const res = await fetchImpl(path, { ...init, headers: { accept: 'application/octet-stream', ...init?.headers } });
   if (!res.ok) return fail(res, path);
   const dtype = res.headers.get('x-canopy-dtype') ?? '';
+  const shape = (res.headers.get('x-canopy-shape') ?? '').split(',').map(Number);
+  const qOffset = res.headers.get('x-canopy-q-offset');
+  if (dtype === 'uint16' && qOffset !== null) {
+    // positions as uint16 codes per column (half the bytes): value = offset + code * scale
+    const offsets = qOffset.split(',').map(Number);
+    const scales = (res.headers.get('x-canopy-q-scale') ?? '').split(',').map(Number);
+    const codes = new Uint16Array(await res.arrayBuffer());
+    const d = shape[1] ?? 1;
+    const data = new Float32Array(codes.length);
+    for (let i = 0; i < codes.length; i += 1) {
+      const j = i % d;
+      data[i] = codes[i] === 65535 ? NaN : offsets[j] + codes[i] * scales[j];
+    }
+    return { data, shape, dtype: 'float32', kind: res.headers.get('x-canopy-kind') };
+  }
   const Ctor = ARRAYS[dtype];
   if (!Ctor) throw new ApiError(res.status, path, res.headers.get('x-request-id'), `unknown dtype ${dtype}`);
-  const shape = (res.headers.get('x-canopy-shape') ?? '').split(',').map(Number);
   const data = new Ctor(await res.arrayBuffer());
   if (data.length !== shape.reduce((a, b) => a * b, 1)) {
     throw new ApiError(res.status, path, res.headers.get('x-request-id'), 'array length does not match its shape');

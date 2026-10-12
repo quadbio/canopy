@@ -87,6 +87,12 @@ cwd = "frontend"
 [feature.dev.tasks.demo]
 cmd = "bash scripts/demo.sh"
 
+# The browser tests also on this Mac's GPU at 2x pixel density (run before a demo).
+[feature.dev.tasks.e2e-gpu]
+cmd = "pnpm build && pnpm exec playwright test --project gpu-2x"
+cwd = "frontend"
+env = { CANOPY_E2E_GPU = "1" }
+
 # A release archive for a host (built frontend included): dist-release/canopy-<v>-<commit>.tar.gz
 [feature.dev.tasks.release]
 cmd = "bash scripts/release.sh"
