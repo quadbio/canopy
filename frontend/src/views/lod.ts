@@ -40,6 +40,9 @@ interface Lod {
    * changes only every few hundred pixels of panning (views read data in view with it). */
   extent: Record<string, [number, number, number, number]>;
   setExtent: (id: string, e: [number, number, number, number]) => void;
+  /** Each view's first panel size in pixels (charts that fill their panel, e.g. a scatter). */
+  size: Record<string, [number, number]>;
+  setSize: (id: string, w: number, h: number) => void;
   /** Points on screen each view may draw (its share of CANVAS_BUDGET). */
   allowance: Record<string, number>;
   setVisible: (id: string, share: number) => void;
@@ -50,6 +53,12 @@ interface Lod {
 export const useLod = create<Lod>()((set) => ({
   visible: {},
   extent: {},
+  size: {},
+  setSize: (id, w, h) =>
+    set((s) => {
+      const old = s.size[id];
+      return old && old[0] === w && old[1] === h ? s : { size: { ...s.size, [id]: [w, h] } };
+    }),
   allowance: {},
   setExtent: (id, e) =>
     set((s) => {
@@ -73,12 +82,14 @@ export const useLod = create<Lod>()((set) => ({
       const visible = { ...s.visible };
       const allowance = { ...s.allowance };
       const extent = { ...s.extent };
+      const size = { ...s.size };
       for (const id of ids) {
         delete visible[id];
         delete allowance[id];
         delete extent[id];
+        delete size[id];
       }
-      return { visible, allowance, extent };
+      return { visible, allowance, extent, size };
     }),
 }));
 

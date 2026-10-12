@@ -3,7 +3,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { catalog, datasets, jobs } from './endpoints';
-import type { Job } from './types';
+import type { Job, SummaryQuery } from './types';
 import { timeAsync } from '../telemetry/telemetry';
 
 const MINUTE = 60_000;
@@ -112,6 +112,18 @@ export const useGene = (
     staleTime: Infinity,
     gcTime: GENE_GC_MS,
     retry: false,
+  });
+
+/** A plot's summary (computed on the server, cached there and here). */
+export const useSummary = (id: string, table: string | null, version: string | undefined, q: SummaryQuery | null) =>
+  useQuery({
+    queryKey: ['summary', id, version, table, q],
+    queryFn: ({ signal }) => timeAsync('summary_loaded', () => datasets.summary(id, table, q!, signal), (r) => ({ kind: r.kind })),
+    enabled: !!q && !!version,
+    staleTime: Infinity,
+    gcTime: GENE_GC_MS,
+    retry: false,
+    placeholderData: keepPreviousData,
   });
 
 const ACTIVE = new Set(['queued', 'running']);

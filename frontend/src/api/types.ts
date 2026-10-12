@@ -153,3 +153,46 @@ export interface Conversion {
   x_source: string | null; // which matrix the converted copy holds
   job: Job | null;
 }
+
+/** Plot summaries (backend canopy/data/summary.py): counts and statistics, never values. */
+export interface ViolinGroup {
+  n: number;
+  hist: number[];
+  q1?: number;
+  median?: number;
+  q3?: number;
+  mean?: number;
+  frac_above_zero?: number;
+}
+export type PlotSummary =
+  | {
+      kind: 'violin';
+      categories: string[];
+      range: [number, number];
+      bins: number;
+      log1p: boolean;
+      groups: ViolinGroup[];
+      n_missing_value: number;
+      n_missing_category: number;
+    }
+  | { kind: 'bars'; rows: string[]; columns: string[]; counts: number[][]; n_missing: number }
+  | {
+      kind: 'density';
+      x_range: [number, number];
+      y_range: [number, number];
+      bins: number;
+      log1p: [boolean, boolean];
+      counts: number[];
+      max: number;
+      n_missing: number;
+    };
+
+export interface SummaryQuery {
+  kind: 'violin' | 'bars' | 'density';
+  x: string; // obs:<column> | gene:<index>
+  y: string;
+  xm?: string; // matrix of a gene feature
+  ym?: string;
+  bins?: number;
+  log1p?: string; // "01": log1p of x, y
+}

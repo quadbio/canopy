@@ -9,7 +9,9 @@
 // Adding a view type touches no other view: write one module and call `registerView`.
 
 import type { Layer } from '@deck.gl/core';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
+
+import type { Cell, Insets, OrthoState } from './layout';
 
 import type { DatasetMeta } from '../api/types';
 import type { ViewSpec } from '../state/workspace';
@@ -25,6 +27,9 @@ export interface PanelOutput {
   bounds: Bounds | null;
   /** Text for item `index` of layer `layer` (the top-level layer's id). */
   tooltip?: (index: number, layer: string) => string | null;
+  /** Drawn over the panel and redrawn as it pans and zooms (e.g. a plot's axes): gets the
+   * panel's view state and its rectangle (canvas pixels). */
+  overlay?: (state: OrthoState, rect: Cell) => ReactNode;
 }
 
 /** How the panels of a view follow each other: the same zoom, or the same zoom and the same
@@ -58,6 +63,11 @@ export interface ViewOutput {
   /** Panels show the same area (the union of their data) at the same scale, so positions
    * compare (e.g. a UMAP split by condition). */
   sameCoordinates?: boolean;
+  /** A chart drawn in the page (e.g. SVG violins or bars) instead of map layers: shown in the
+   * view's cell below its title, left of an open legend; nothing is panned or zoomed. */
+  content?: ReactNode;
+  /** Room kept free inside each panel when fitting (e.g. for axes), besides the title row. */
+  margins?: Insets;
   /** What the data are (e.g. dataset and coordinate system): a view refits when it changes;
    * a change of `bounds` alone (more data arriving) refits only a view the user has not moved.
    * Without it every change of `bounds` counts as new data. */

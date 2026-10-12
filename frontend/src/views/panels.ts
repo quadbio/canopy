@@ -5,7 +5,7 @@ import type { Bounds, Link } from './registry';
 
 /** Rectangles (canvas pixels) of `n` panels in `cell`, below the title row and left of an open
  * legend. One panel fills the whole cell (the title and legend float over it). */
-export function panelRects(n: number, cell: Cell, insets: Required<Insets>, gap = 4): Cell[] {
+export function panelRects(n: number, cell: Cell, insets: { top: number; right: number }, gap = 4): Cell[] {
   if (n <= 1) return n === 1 ? [cell] : [];
   const area = {
     width: Math.max(cell.width - insets.right, 20),

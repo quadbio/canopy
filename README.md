@@ -112,6 +112,9 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   symlink) is refused. Range replies are not cached by the browser.
 - `POST /api/telemetry`: the browser's timing marks and GPU facts, logged as `client_event`.
 
+- `GET /api/datasets/{id}/summary?kind=violin|bars|density&x=obs:<col>|gene:<i>&y=…`: what the
+  Plot view draws (per-category histograms with quartiles, a count table, a 2-D histogram);
+  counts and statistics only (ADR 0013).
 - `GET /api/datasets/{id}/subset?n=1000000`: sorted int32 indices of representative cells for
   drawing large datasets zoomed out (a converted store's subset, else computed once, stratified
   by the first coloured categorical column).

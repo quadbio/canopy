@@ -13,7 +13,7 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo (awaiting user review)
 - [x] S5 Genes + AnnData converter + jobs + memory guard
 - [x] S6 Spatial ingest + spatial view + section grid → demo
-- [ ] S7 Workspace + colours + search + filters
+- [ ] S7 Workspace + colours + search + filters (started: plot view done, ADR 0013)
 - [ ] S8 Diagnostics tools → user checks bundles against the data policy
 - [ ] S9 Packaging + runbook + Linux dry run → Checkpoint A
 
@@ -280,3 +280,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   - Open: Linux run (needs Docker/Podman or a Linux machine; scripts/linux-smoke.sh).
   - Next: the owner's first host test (docs/host/host-guide.md); S7 starts with the view
     contract for plots (ADR 0012).
+- 2026-10-12 S7 started with the plot view (owner's choice; ADR 0013): server summaries
+  (/summary: violins, count tables, densities; 10 M cells 0.1-1.5 s), view contract for charts
+  (content, overlays, margins, panel sizes), Plot view (violins, composition, scatter with axes,
+  density map; shared colours; log1p axes), "Plot" button in the details. 280 backend, 79 unit,
+  26 e2e.
+  - Next: rest of S7 (multi-dataset workspace and shared colours, gene search, filters) after the
+    owner tries the plot view.

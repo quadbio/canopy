@@ -1,7 +1,18 @@
 // One function per backend endpoint.
 
 import { getBinary, getGene, getJson, postJson, url } from './client';
-import type { CatalogStatus, Conversion, DatasetEntry, DatasetMeta, FolderListing, GeneList, Job, RootEntry } from './types';
+import type {
+  CatalogStatus,
+  Conversion,
+  DatasetEntry,
+  DatasetMeta,
+  FolderListing,
+  GeneList,
+  Job,
+  PlotSummary,
+  RootEntry,
+  SummaryQuery,
+} from './types';
 
 export interface DatasetDetail extends DatasetEntry {
   fingerprint: Record<string, unknown> | null;
@@ -35,6 +46,9 @@ export const datasets = {
     }),
   subset: (id: string, table: string | null, n: number, signal?: AbortSignal) =>
     getBinary(url(`/api/datasets/${encodeURIComponent(id)}/subset`, { n, table }), fetch, { signal }),
+  /** A plot's summary: per-category histograms, a count table or a 2-D histogram. */
+  summary: (id: string, table: string | null, q: SummaryQuery, signal?: AbortSignal) =>
+    getJson<PlotSummary>(url(`/api/datasets/${encodeURIComponent(id)}/summary`, { ...q, table }), fetch, { signal }),
   genes: (id: string, table: string | null) =>
     getJson<GeneList>(url(`/api/datasets/${encodeURIComponent(id)}/genes`, { table })),
   /** Gene `i` (position in the gene list); values sent as uint16 (`q=16`): half the bytes, and

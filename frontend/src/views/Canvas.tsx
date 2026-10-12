@@ -11,13 +11,13 @@
 
 import { type Layer, OrthographicView, type PickingInfo } from '@deck.gl/core';
 import DeckGL from '@deck.gl/react';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
-import { type Cell, gridCells, type OrthoState, resizeView } from './layout';
+import { type Cell, gridCells, type Insets, type OrthoState, resizeView } from './layout';
 import { allowances, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
@@ -37,6 +37,17 @@ interface Layout extends FitLayout {
   fitKey: string | undefined;
 }
 
+/** Insets plus a view's own margins (e.g. room for axes). */
+function withMargins(base: Insets, m: Insets | undefined): Insets {
+  if (!m) return base;
+  return {
+    top: (base.top ?? 0) + (m.top ?? 0),
+    right: (base.right ?? 0) + (m.right ?? 0),
+    bottom: (base.bottom ?? 0) + (m.bottom ?? 0),
+    left: (base.left ?? 0) + (m.left ?? 0),
+  };
+}
+
 function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layout {
   const panels = panelsOf(out);
   const compact = cell.width < COMPACT_WIDTH;
@@ -47,7 +58,7 @@ function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layo
     cell,
     keys: panels.map((p) => panelKey(spec.id, p.id)),
     rects: panelRects(panels.length, cell, { top: TITLE_ROW, right }),
-    fitInsets: many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right },
+    fitInsets: withMargins(many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right }, out?.margins),
     link: out?.link ?? 'pan+zoom',
     sameScale: out?.sameScale ?? true,
     sameCoordinates: !!out?.sameCoordinates && many,
@@ -82,6 +93,9 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
       out.legend,
       out.caption,
       out.total,
+      out.content,
+      out.margins,
+      out.fitKey,
     ],
   );
   return null;
@@ -116,6 +130,7 @@ const ViewCell = memo(function ViewCell({
   selected,
   onFit,
   panels,
+  overlays,
 }: {
   spec: ViewSpec;
   cell: Cell;
@@ -123,6 +138,8 @@ const ViewCell = memo(function ViewCell({
   selected: boolean;
   onFit: (id: string) => void;
   panels: { key: string; title?: string; rect: Cell }[];
+  /** Panels drawing an overlay (axes), with their current view states. */
+  overlays?: { key: string; rect: Cell; state: OrthoState; draw: (s: OrthoState, r: Cell) => ReactNode }[];
 }) {
   const select = useWorkspace((s) => s.select);
   const remove = useWorkspace((s) => s.removeView);
@@ -156,6 +173,27 @@ const ViewCell = memo(function ViewCell({
             )}
           </div>
         ))}
+      {overlays?.map((o) => (
+        <div
+          key={o.key}
+          className="view-overlay"
+          style={{ left: o.rect.x - cell.x, top: o.rect.y - cell.y, width: o.rect.width, height: o.rect.height }}
+        >
+          {o.draw(o.state, o.rect)}
+        </div>
+      ))}
+      {output?.content && output.status !== 'error' && (
+        <div
+          className="view-content"
+          data-testid="view-content"
+          style={{
+            top: TITLE_ROW,
+            right: !!output.legend && !((spec.params.legendCollapsed as boolean | undefined) ?? compact) ? LEGEND_SPACE : 0,
+          }}
+        >
+          {output.content}
+        </div>
+      )}
       <div className="view-header">
         <button className="view-title" onClick={() => select(spec.id)} title={spec.title}>
           {spec.title}
@@ -266,6 +304,18 @@ function panelsFor(l: Layout | null) {
   let out = panelCache.get(l);
   if (!out) panelCache.set(l, (out = l.keys.map((key, j) => ({ key, title: l.titles[j], rect: l.rects[j] }))));
   return out;
+}
+
+/** Panels with an overlay (axes) and their current view states (others: none, so their cells do
+ * not re-render while panning). */
+function overlaysFor(out: ViewOutput | undefined, l: Layout | null, states: Record<string, OrthoState>) {
+  if (!out || !l) return undefined;
+  const panels = panelsOf(out);
+  if (!panels.some((p) => p.overlay)) return undefined;
+  return panels.flatMap((p, j) => {
+    const st = states[l.keys[j]];
+    return p.overlay && st ? [{ key: l.keys[j], rect: l.rects[j], state: st, draw: p.overlay }] : [];
+  });
 }
 
 export function Canvas() {
@@ -435,6 +485,13 @@ export function Canvas() {
       if (l && st) setExtent(v.id, snappedExtent(st.target, st.zoom, l.rects[0].width, l.rects[0].height));
     });
   }, [views, layouts, viewStates, setExtent]);
+  const setSize = useLod((s) => s.setSize);
+  useEffect(() => {
+    views.forEach((v, i) => {
+      const r = layouts[i]?.rects[0];
+      if (r) setSize(v.id, r.width, r.height);
+    });
+  }, [views, layouts, setSize]);
   // One point budget for the whole canvas, shared by the views in proportion to their cells.
   const totalsKey = views.map((v) => `${v.id}:${outputs[v.id]?.total ?? 0}`).join(',');
   useEffect(() => {
@@ -592,6 +649,7 @@ export function Canvas() {
               selected={v.id === selected}
               onFit={fit}
               panels={panelsFor(layouts[i])}
+              overlays={overlaysFor(outputs[v.id], layouts[i], viewStates)}
             />
           </ErrorBoundary>
         ) : null,

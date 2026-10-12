@@ -30,6 +30,8 @@ export interface OrthoState {
 export interface Insets {
   top?: number;
   right?: number;
+  bottom?: number;
+  left?: number;
 }
 
 /** Orthographic view state that fits `bounds` into a cell with a margin, leaving `insets` pixels
@@ -42,17 +44,17 @@ export function fitBounds(
   insets: Insets | number = 0,
   flipY = false,
 ): OrthoState {
-  const { top = 0, right = 0 } = typeof insets === 'number' ? { top: insets } : insets;
+  const { top = 0, right = 0, bottom = 0, left = 0 } = typeof insets === 'number' ? { top: insets } : insets;
   const [x0, y0, x1, y1] = bounds;
   const dx = Math.max(x1 - x0, 1e-9);
   const dy = Math.max(y1 - y0, 1e-9);
-  const w = Math.max(cell.width - right, 1);
-  const h = Math.max(cell.height - top, 1);
+  const w = Math.max(cell.width - right - left, 1);
+  const h = Math.max(cell.height - top - bottom, 1);
   const scale = Math.min(w / dx, h / dy) * (1 - 2 * margin);
   // Centre the data in the free area: move the view centre towards the insets by half of them.
-  const up = top / 2 / scale;
+  const up = (top - bottom) / 2 / scale;
   return {
-    target: [(x0 + x1) / 2 + right / 2 / scale, (y0 + y1) / 2 + (flipY ? -up : up), 0],
+    target: [(x0 + x1) / 2 + (right - left) / 2 / scale, (y0 + y1) / 2 + (flipY ? -up : up), 0],
     zoom: Math.log2(scale),
   };
 }

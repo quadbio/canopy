@@ -431,3 +431,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .auth-required { max-width: 34rem; margin: 15vh auto; padding: 0 var(--space-4); color: var(--text); }
 .auth-required h1 { font-size: var(--text-lg); margin: var(--space-3) 0 var(--space-2); }
 .auth-required code { background: var(--surface); padding: 0 0.3em; border-radius: var(--radius-sm); }
+
+/* charts drawn in the page (plot view) and overlays over panels (axes) */
+.view-content { position: absolute; left: 0; bottom: 0; pointer-events: auto; overflow: auto; }
+.view-overlay { position: absolute; pointer-events: none; }
+.view-overlay svg, .view-content svg { display: block; }
+.axis text { fill: var(--text-muted); font-size: 11px; font-family: var(--font-sans); }
+.axis line, .axis path { stroke: var(--border-strong, var(--text-muted)); stroke-width: 1; fill: none; }
+.axis .label { fill: var(--text); font-size: 12px; }
+.chart { position: relative; width: 100%; height: 100%; min-height: 120px; }
+.axis-note { fill: var(--text-muted); font-size: 10px; }
