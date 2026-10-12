@@ -159,7 +159,12 @@ def prune_logs(log_dir: Path, retention_days: float) -> int:
         return 0
     cutoff = time.time() - retention_days * 86400
     removed = 0
-    for f in log_dir.glob(f"{LOG_PREFIX}*.jsonl*"):
+    old = [
+        *log_dir.glob(f"{LOG_PREFIX}*.jsonl*"),
+        *log_dir.glob("stacks-*.txt"),  # stack dumps (empty unless a crash or kill -USR1)
+        *log_dir.glob(f"{LOG_PREFIX}*.stderr.txt"),  # worker error output
+    ]
+    for f in old:
         try:
             if f.stat().st_mtime < cutoff:
                 f.unlink()

@@ -176,6 +176,16 @@ def _with_source[T](
         except FileNotFoundError as e:
             catalog.refresh()
             raise ApiError(410, "vanished", "The dataset no longer exists.") from e
+        except OSError as e:
+            # e.g. ESTALE on network storage after the file was replaced: drop the open file and
+            # try once more with a fresh one (the index is refreshed for a new version)
+            if attempt:
+                raise
+            get_logger("canopy.api").warning(
+                "source_os_error", dataset_id=row.id, errno=e.errno, retry=True
+            )
+            cache.drop_version(version)
+            catalog.refresh()
     raise AssertionError("unreachable")
 
 
@@ -228,8 +238,18 @@ def meta(request: Request, id: str, table: TableQ = None) -> DatasetMeta:
     source_info = info
     info = _effective(request, fp, info, name)
 
+    _, cache = _state(request)
+
     def describe(src: Source) -> tuple[str, list[ColumnMeta]]:
-        return src.mode, [src.column_meta(c.name) for c in info.obs.columns]
+        # cached per version and table: every categorical column's categories and colours are
+        # small reads, many of them on network storage (dropped with the version)
+        return cache.array(
+            (str(row.version), str(name), "meta", src.mode),
+            lambda: (src.mode, [src.column_meta(c.name) for c in info.obs.columns]),
+            lambda v: 2048 + sum(64 * len(c.categories or []) for c in v[1]),
+            what="meta",
+            dataset_id=row.id,
+        )
 
     mode, columns = _with_source(request, row, fp, path, name, describe)
     return DatasetMeta(
@@ -253,20 +273,29 @@ def _obs_values(
     request: Request, row: Row, fp: Fingerprint, path: Path, table: str | None, column: str
 ) -> ObsValues:
     _, cache = _state(request)
-    return _with_source(
-        request,
-        row,
-        fp,
-        path,
-        table,
-        lambda src: cache.array(
-            (str(row.version), str(table), "obs", column),
-            lambda: src.obs(column),
-            lambda v: int(v.values.nbytes),
-            what="obs",
-            dataset_id=row.id,
-        ),
-    )
+    key = (str(row.version), str(table), "obs", column)
+    refused = cache.refused.get(key)
+    if refused is not None:  # e.g. a barcode column: refused before, not read again
+        raise ApiError(409, f"needs_conversion:{refused}", "Convert the dataset to view this.")
+    try:
+        return _with_source(
+            request,
+            row,
+            fp,
+            path,
+            table,
+            lambda src: cache.array(
+                key,
+                lambda: src.obs(column),
+                lambda v: int(v.values.nbytes),
+                what="obs",
+                dataset_id=row.id,
+            ),
+        )
+    except ApiError as e:
+        if e.code.startswith("needs_conversion:"):
+            cache.refused[key] = e.code.split(":", 1)[1]
+        raise
 
 
 @router.get("/{id}/obs")

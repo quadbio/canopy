@@ -15,6 +15,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
+import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { type Cell, gridCells, type OrthoState, resizeView } from './layout';
 import { allowances, snappedExtent, useLod, visibleShare } from './lod';
@@ -75,6 +76,7 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
       out.flipY,
       out.status,
       out.error,
+      out.needsConversion,
       out.notice,
       out.problem?.message,
       out.legend,
@@ -174,8 +176,9 @@ const ViewCell = memo(function ViewCell({
         </span>
       </div>
       {output?.status === 'error' && (
-        <div className="view-error" role="alert">
+        <div className="view-error" role="alert" data-testid="view-error">
           {output.error}
+          {output.needsConversion && <Conversion datasetId={output.needsConversion} compact />}
         </div>
       )}
       {output?.problem && (

@@ -120,7 +120,7 @@ export interface DatasetMeta {
   warnings: string[];
 }
 
-export type TypedArray = Float32Array | Int8Array | Int16Array | Int32Array | Uint8Array;
+export type TypedArray = Float32Array | Float64Array | Int8Array | Int16Array | Int32Array | Uint8Array;
 
 export interface BinaryArray<T extends TypedArray = TypedArray> {
   data: T;

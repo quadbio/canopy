@@ -313,7 +313,7 @@ def test_store_ranges(store_client: tuple[TestClient, str, Path]) -> None:
     data = (base / "manifest.json").read_bytes()
     full = c.get(f"{url}/manifest.json")
     assert full.status_code == 200 and full.content == data
-    assert full.headers["accept-ranges"] == "bytes" and "immutable" in full.headers["cache-control"]
+    assert full.headers["accept-ranges"] == "bytes" and full.headers["cache-control"] == "no-cache"
     assert (
         "content-encoding"
         not in c.get(f"{url}/manifest.json", headers={"accept-encoding": "gzip"}).headers
@@ -567,3 +567,36 @@ def test_dataset_colours_are_the_default_whenever_usable(cfg: Config) -> None:
     assert labels["categories"] == ["alpha", "beta"] and labels["colors"] == ["#0000ff", "#ff0000"]
     ignored = [e for e in log_events() if e["event"] == "uns_colors_ignored"]
     assert any(e["column"] == "short" and e["reason"] == "too_few" for e in ignored)
+
+
+def test_a_barcode_column_is_refused_from_a_sample_and_not_read_again(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from canopy.data import reader
+
+    n = reader.TEXT_SAMPLE + 10
+    a = ad.AnnData(X=np.zeros((n, 1), np.float32))
+    a.obs["barcode"] = [f"BC{i:07d}" for i in range(n)]  # all distinct
+    a.write_h5ad(cfg.data_roots[0].path / "bc.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "bc.h5ad")
+    reads = []
+    real = reader.read_elem
+    monkeypatch.setattr(reader, "read_elem", lambda node: reads.append(1) or real(node))
+    for _ in range(2):
+        r = c.get(f"/api/datasets/{id}/obs", params={"column": "barcode"})
+        assert (
+            r.status_code == 409
+            and r.json()["detail"]["code"] == "needs_conversion:too_many_values"
+        )
+    assert reads == []  # refused from the sample; the whole column was never read
+
+
+def test_large_whole_numbers_keep_their_value(cfg: Config) -> None:
+    a = ad.AnnData(X=np.zeros((3, 1), np.float32))
+    a.obs["cell_number"] = np.array([2**40 + 1, 2**40 + 2, 5], np.int64)
+    a.write_h5ad(cfg.data_roots[0].path / "ids.h5ad")
+    c = client_for(cfg)
+    r = c.get(f"/api/datasets/{entry_id('data', 'ids.h5ad')}/obs", params={"column": "cell_number"})
+    assert r.headers["x-canopy-dtype"] == "float64"
+    assert np.frombuffer(r.content, "<f8").tolist() == [2**40 + 1, 2**40 + 2, 5]

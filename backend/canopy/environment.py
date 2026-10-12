@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
+import canopy
 from canopy.build import build_info
 
 if TYPE_CHECKING:
@@ -130,6 +131,8 @@ def environment_snapshot(cfg: Config | None = None) -> dict[str, Any]:
         "memory_available_gb": round(vm.available / 2**30, 1),
         "hdf5": hdf5_version(),
         "hdf5_file_locking": os.environ.get("HDF5_USE_FILE_LOCKING"),
+        # what the environment set before canopy forced FALSE (None: not set)
+        "hdf5_file_locking_was": canopy.HDF5_LOCKING_WAS,
         "packages": package_versions(),
     }
     if cfg is not None:

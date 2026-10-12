@@ -30,6 +30,7 @@ from canopy.logs import get_logger
 
 # Categories beyond this are not sent (and the column cannot be coloured by category).
 MAX_CATEGORIES = 10_000
+TEXT_SAMPLE = 100_000  # values sampled before a text column is read whole
 _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")
 
 ObsKind = Literal["categorical", "numeric", "boolean", "string", "other"]
@@ -108,6 +109,10 @@ def to_obs_values(raw: Any) -> ObsValues:
     arr = np.asarray(raw)
     if arr.dtype.kind == "b":
         return ObsValues("boolean", arr.astype(np.int8), ["false", "true"])
+    if arr.dtype.kind in "iu" and arr.size and int(np.abs(arr).max()) >= 2**24:
+        # whole numbers beyond float32's exact range (ids, counts): sent as float64, so a hover
+        # shows the right number
+        return ObsValues("numeric", arr.astype("<f8"))
     if arr.dtype.kind in "iuf":
         return ObsValues("numeric", arr.astype("<f4"))
     if arr.dtype.kind in "OSUT":
@@ -211,6 +216,7 @@ class Source:
 
     def __init__(self, info: AnnDataInfo) -> None:
         self.info = info
+        self.store_build: str | None = None  # a converted store's build key
         self.lock = threading.Lock()
         self.closed = False
 
@@ -335,6 +341,20 @@ class LazySource(Source):
         return self.group["obs"][name]
 
     def obs(self, name: str) -> ObsValues:
+        col = next((c for c in self.info.obs.columns if c.name == name), None)
+        if col is not None and col.kind == "string" and self.info.n_obs > TEXT_SAMPLE:
+            # a text column with many distinct values (barcodes, ids) is refused from a sample,
+            # before the whole column is read
+            def sample() -> int:
+                node = self._column_group(name)
+                if not hasattr(node, "shape") and "values" in node:
+                    node = node["values"]  # nullable-string-array: values + mask
+                if not hasattr(node, "shape"):
+                    return 0
+                return len(set(np.asarray(node[:TEXT_SAMPLE]).tolist()))
+
+            if self._read(sample) > MAX_CATEGORIES:
+                raise NeedsConversionError("too_many_values")
         return to_obs_values(self._read(lambda: read_elem(self._column_group(name))))
 
     def obsm(self, key: str, dims: list[int]) -> np.ndarray:

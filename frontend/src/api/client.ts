@@ -66,6 +66,7 @@ export async function postJson<T>(path: string, body?: unknown, fetchImpl: typeo
 
 const ARRAYS: Record<string, new (b: ArrayBuffer) => TypedArray> = {
   float32: Float32Array,
+  float64: Float64Array, // whole numbers beyond float32's exact range (ids)
   int8: Int8Array,
   int16: Int16Array,
   int32: Int32Array,

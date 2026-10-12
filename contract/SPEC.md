@@ -14,7 +14,8 @@ stores. The v0.1 review decisions (§11) are unchanged. What changed and why:
 ## 1. Principles
 
 1. **A strict profile of standard formats.** Tables are AnnData-zarr; images and labels are
-   OME-NGFF 0.5. Stock tools (anndata, Vitessce, napari-ome-zarr) can open those parts directly.
+   OME-NGFF 0.5, so stock tools (anndata, Vitessce, napari-ome-zarr) are intended to open those
+   parts directly (tested: anndata, Viv and zarrita; Vitessce and napari not yet checked).
    Only the parts with no standard (cell polygons, transcript partitions, lookups, statistics)
    use plain zarr arrays defined here.
 2. **Values are never changed, only re-laid-out.** Expression values, coordinates, categories,

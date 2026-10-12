@@ -528,8 +528,9 @@ export function ColourFields({ spec }: { spec: ViewSpec<ColourParams> }) {
           help={
             <>
               <p>
-                Colours follow the category <em>name</em>: a cell type keeps its colour in every view and dataset that uses
-                the same palette.
+                Colours follow the category <em>name</em>: within a column, and between columns with a similar number of
+                categories, a name keeps its colour. Columns of very different sizes can give a name different colours
+                (shared colours across datasets come later).
               </p>
               <p>
                 “From the dataset” (the automatic choice when the data brings colours, e.g. from scanpy) uses the

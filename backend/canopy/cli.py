@@ -351,6 +351,12 @@ def inspect(
 
     cfg = _cli_logging(config)
     fp = inspect_path(path)
+    if level is Level.strict and cfg is None:
+        typer.echo(
+            "note: without --config the tokens use this user's own salt; they will not match "
+            "the server's logs (pass the server's --config)",
+            err=True,
+        )
     fp = redact(fp, level.value, _salt(cfg) if level is Level.strict else "")
     typer.echo(fp.model_dump_json(indent=2))
 

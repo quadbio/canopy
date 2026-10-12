@@ -734,3 +734,26 @@ test('without the access link nothing is shown; the link opens the app', async (
   await expect(page.getByTestId('auth-required')).toBeVisible();
   await ctx.close();
 });
+
+test('a spatial view whose converted copy is missing says so and offers the conversion', async ({ page }) => {
+  // e.g. a saved workspace restored after the cache was cleared, or a changed source file
+  const { createHash } = await import('node:crypto');
+  const id = createHash('sha256').update('extracted\u0000202302171205_region_3_scwf.zarr').digest('hex').slice(0, 16);
+  await page.goto('/');
+  await page.evaluate(
+    (id) =>
+      localStorage.setItem(
+        'canopy-workspace',
+        JSON.stringify({
+          state: { views: [{ id: 'sv', type: 'spatial', datasetId: id, table: 'table_cells', title: 'region 3', params: {} }], selected: 'sv' },
+          version: 1,
+        }),
+      ),
+    id,
+  );
+  await page.reload();
+  const cell = page.getByTestId('view-cell').first();
+  await expect(cell).toHaveAttribute('data-status', 'error');
+  await expect(cell.getByTestId('view-error')).toContainText('needs the converted copy');
+  await expect(cell.getByTestId('convert')).toBeVisible();
+});

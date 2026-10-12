@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import anndata as ad
-import h5py
 import numpy as np
 import pandas as pd
 import zarr
@@ -44,7 +43,7 @@ from canopy.contract.write import ANNDATA_ARRAY, anndata_dict_group, array, code
 from canopy.convert.matrix import ConversionError, CscWriter, GeneStats
 from canopy.data.genes import gene_list
 from canopy.data.reader import embedding_dims, parse_colors
-from canopy.inspect.core import dataset_id, version_stamp
+from canopy.inspect.core import dataset_id, open_h5, version_stamp
 from canopy.inspect.models import AnnDataInfo, Fingerprint, MatrixInfo
 from canopy.logs import get_logger, timed
 
@@ -130,7 +129,7 @@ class StageProgress:
 def _open(path: Path, kind: str) -> tuple[Any, Any]:
     """The AnnData root group and the handle to close."""
     if kind == "h5ad":
-        f = h5py.File(path, "r")
+        f = open_h5(path)  # lock and truncation errors with recognisable codes
         return f, f
     return zarr.open_group(path, mode="r"), None
 

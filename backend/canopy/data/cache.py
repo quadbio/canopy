@@ -164,6 +164,8 @@ class DatasetCache:
         self.total_budget = int(cfg.memory.budget_gb * 2**30)
         # memory reserved by running conversion jobs (set by the app): one account for both
         self.jobs_reserved: Callable[[], int] = lambda: 0
+        # requests refused for good per (version, table, kind, name): not read again
+        self.refused: dict[tuple[str, ...], str] = {}
         self.small_file = int(cfg.memory.small_file_gb * 2**30)
         self.cache_dir = cfg.cache_dir
         self._inflight: dict[tuple[Any, ...], Future[Any]] = {}
@@ -215,8 +217,10 @@ class DatasetCache:
             if original:
                 return hit  # type: ignore[no-any-return]
             st = store_table(self.cache_dir, fp, table)
+            # the same store build (compared by its key: the description may have been
+            # re-read after leaving the lookup cache, which must not close the open dataset)
             if (hit.mode == "converted") == (st is not None) and (
-                st is None or hit.info is st.info
+                st is None or getattr(hit, "store_build", None) == st.built
             ):
                 return hit  # type: ignore[no-any-return]
             # converted, re-converted or deleted since it was opened: open it again
@@ -236,6 +240,9 @@ class DatasetCache:
             src = open_source(
                 fp, path, table, self.small_file, None if original else self.cache_dir
             )
+            if src.mode == "converted":
+                st_now = store_table(self.cache_dir, fp, table)
+                src.store_build = st_now.built if st_now else None
             nbytes = estimate_memory_bytes(src.info) if src.mode == "memory" else 0
             extra.update(mode=src.mode, nbytes=nbytes)
         return self._put(key, src, nbytes, is_source=True)  # type: ignore[no-any-return]

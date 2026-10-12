@@ -66,6 +66,8 @@ export interface ViewOutput {
   flipY?: boolean;
   status: 'loading' | 'ready' | 'error';
   error?: string;
+  /** The view needs this dataset converted: the cell offers the conversion with its error. */
+  needsConversion?: string;
   /** A short note shown on the view, e.g. that a saved setting no longer applies. */
   notice?: string;
   /** A part of the view failed (e.g. its colouring), the rest is still shown; with a retry. */

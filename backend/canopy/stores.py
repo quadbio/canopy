@@ -7,8 +7,8 @@ zarrita, with HTTP Range requests (contract SPEC §1.7).
 - Replies are streamed in 1 MB blocks, so a large range never sits in memory as a whole.
 - Paths are relative keys inside one complete store (one with `manifest.json`); hidden or
   `.`/`..` segments are refused and the resolved path must stay inside the store.
-- A store URL contains the dataset version, so its files never change: whole files are
-  cacheable forever (`immutable`, with an ETag). Range replies are not cached by the browser
+- Whole files are revalidated by their ETag (`no-cache`): a forced re-conversion rebuilds a
+  store at the same URL. Range replies are not cached by the browser
   (`no-store`) and never answered with 304: browsers that combine cached parts of a shard file
   with many concurrent ranges returned empty bodies (review S6, B-B2). The app keeps its own
   caches of what it decoded.
@@ -37,7 +37,9 @@ VERSION = re.compile(r"[0-9a-f]{16}")
 CONTRACT = re.compile(r"c\d{1,3}")
 RANGE = re.compile(r"bytes=(\d*)-(\d*)")
 BLOCK = 1 << 20
-CACHE_FOREVER = "public, max-age=31536000, immutable"
+# Whole files: revalidated by ETag (a forced re-conversion rebuilds a store at the same URL; the
+# app itself reads with no-store, so this matters for other readers).
+CACHE_FOREVER = "no-cache"
 NO_STORE = "no-store"
 FLUSH_S = 60.0
 SLOW_MS = 1000.0

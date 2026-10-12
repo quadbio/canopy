@@ -724,7 +724,10 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     for (const q of [...failedParts, ...blocks, ...geneReads]) if (q.error) void q.refetch();
     colouring.retry();
   };
-  const status: ViewOutput['status'] = fatal ? 'error' : bounds && !loading ? 'ready' : 'loading';
+  // without its converted copy (changed source, pruned cache, a fresh install) the view cannot
+  // load: it says so and offers the conversion, instead of waiting forever
+  const unconverted = !!meta.data && meta.data.mode !== 'converted';
+  const status: ViewOutput['status'] = fatal || unconverted ? 'error' : bounds && !loading ? 'ready' : 'loading';
   const t0 = useRef(performance.now());
   const reported = useRef(false);
   useEffect(() => {
@@ -750,9 +753,10 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     status,
     error: fatal
       ? String((fatal as Error).message)
-      : meta.data && meta.data.mode !== 'converted'
-        ? 'The spatial view needs the converted copy of this dataset.'
+      : unconverted
+        ? 'The spatial view needs the converted copy of this dataset (the source changed, or it was never converted here).'
         : undefined,
+    needsConversion: unconverted ? spec.datasetId : undefined,
     notice,
     problem: problem ? { message: `Part of the view failed: ${(problem as Error).message}.`, retry } : undefined,
     tooltip,

@@ -130,7 +130,9 @@ def open_h5(path: Path) -> h5py.File:
     still being written, disk full) get recognisable messages: `hdf5_lock: …`,
     `hdf5_truncated: …`."""
     try:
-        return h5py.File(path, "r", locking=False)
+        # no locking flag here: HDF5_USE_FILE_LOCKING=FALSE (canopy/__init__.py) applies to
+        # this and to libraries' own opens (anndata) alike
+        return h5py.File(path, "r")
     except OSError as e:
         msg = str(e).lower()
         if "truncated file" in msg:
