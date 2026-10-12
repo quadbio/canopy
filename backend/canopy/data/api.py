@@ -51,8 +51,12 @@ from canopy.logs import get_logger, timed
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
-# Bump when the encoding of any binary reply changes, so cached browser copies are not reused.
-API_FORMAT = "2"
+# Bump when the encoding of any reply changes, so cached browser copies are not reused. The
+# header prefix is part of every ETag too: the rename from dbx to Canopy changed the headers
+# (x-dbx-dtype -> x-canopy-dtype) but not the ETags, so browsers kept answers whose headers the
+# new app could not read ("unknown dtype", S7a demo).
+API_FORMAT = "3"
+HEADER_PREFIX = "x-canopy-"
 
 
 class Embedding(BaseModel):
@@ -192,7 +196,8 @@ def _with_source[T](
 
 
 def _etag(parts: list[str]) -> str:
-    return 'W/"' + hashlib.sha256("|".join([API_FORMAT, *parts]).encode()).hexdigest()[:20] + '"'
+    key = "|".join([API_FORMAT, HEADER_PREFIX, *parts])
+    return 'W/"' + hashlib.sha256(key.encode()).hexdigest()[:20] + '"'
 
 
 def _not_modified(request: Request, etag: str) -> Response | None:

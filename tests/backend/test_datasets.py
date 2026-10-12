@@ -600,3 +600,29 @@ def test_large_whole_numbers_keep_their_value(cfg: Config) -> None:
     r = c.get(f"/api/datasets/{entry_id('data', 'ids.h5ad')}/obs", params={"column": "cell_number"})
     assert r.headers["x-canopy-dtype"] == "float64"
     assert np.frombuffer(r.content, "<f8").tolist() == [2**40 + 1, 2**40 + 2, 5]
+
+
+def test_answers_cached_before_a_format_change_are_not_reused(cfg: Config) -> None:
+    """ETags carry the format and the header names: a browser's copy from before the rename
+    (headers x-dbx-*) is not confirmed with 304."""
+    import hashlib
+
+    a = tiny(cfg.data_roots[0].path / "f.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "f.h5ad")
+    r = c.get(f"/api/datasets/{id}/obs", params={"column": a.obs.columns[0]})
+    row = c.app.state.catalog.get(id)  # type: ignore[attr-defined]
+    old = (
+        'W/"'
+        + hashlib.sha256(
+            "|".join(["2", str(row.version), "None", "obs", a.obs.columns[0]]).encode()
+        ).hexdigest()[:20]
+        + '"'
+    )
+    assert r.headers["etag"] != old
+    again = c.get(
+        f"/api/datasets/{id}/obs",
+        params={"column": a.obs.columns[0]},
+        headers={"if-none-match": old},
+    )
+    assert again.status_code == 200 and again.headers["x-canopy-dtype"]

@@ -74,8 +74,18 @@ const ARRAYS: Record<string, new (b: ArrayBuffer) => TypedArray> = {
 };
 
 /** A binary array endpoint: little-endian data described by x-canopy-dtype / x-canopy-shape. */
+/** A binary reply; a copy from the browser cache without our headers (kept from an older
+ * version of the server) is fetched again, bypassing the cache. */
+async function binaryResponse(path: string, fetchImpl: typeof fetch, init?: RequestInit): Promise<Response> {
+  const get = (cache?: RequestCache) =>
+    fetchImpl(path, { ...init, ...(cache ? { cache } : {}), headers: { accept: 'application/octet-stream', ...init?.headers } });
+  const res = await get();
+  if (res.ok && res.headers.get('x-canopy-dtype') === null) return get('reload');
+  return res;
+}
+
 export async function getBinary(path: string, fetchImpl: typeof fetch = fetch, init?: RequestInit): Promise<BinaryArray> {
-  const res = await fetchImpl(path, { ...init, headers: { accept: 'application/octet-stream', ...init?.headers } });
+  const res = await binaryResponse(path, fetchImpl, init);
   if (!res.ok) return fail(res, path);
   const dtype = res.headers.get('x-canopy-dtype') ?? '';
   const shape = (res.headers.get('x-canopy-shape') ?? '').split(',').map(Number);
@@ -135,7 +145,7 @@ export function decodeGene(buf: ArrayBuffer, header: (name: string) => string | 
 }
 
 export async function getGene(path: string, init?: RequestInit): Promise<GeneVector> {
-  const res = await fetch(path, { ...init, headers: { accept: 'application/octet-stream', ...init?.headers } });
+  const res = await binaryResponse(path, fetch, init);
   if (!res.ok) return fail(res, path);
   return decodeGene(await res.arrayBuffer(), (k) => res.headers.get(k));
 }
