@@ -267,3 +267,16 @@ Resume rule: read this file, then continue with the first unchecked step.
   - Next: NOT S7 yet. The user may propose a cold review of everything built so far.
 - 2026-10-12 Hover fixed (user: still nothing on hover): demo logs showed values produced but invisible; deck.gl's tooltip sat off screen at devicePixelRatio 2. Canvas draws the hover text itself; e2e at 2x checks placement. 23 e2e.
   - Next: NOT S7; user may propose a full cold review.
+- 2026-10-12 Full cold review (../reviews/code_review_full_1/): A backend 7.5/7/5.5/7/7, B frontend
+  7.5/7/8/6.5/5.5/7, C host readiness 3/3/7/6/4/4; 2 blockers, 21 major. Owner: token+cookie, keep
+  default colours, host readiness before S7, rename to Canopy (logo). Batch R7 DONE (table:
+  ../reviews/code_review_full_1/R7-fixes.md; ADR 0012): rename; access token + private files +
+  state_dir; strict leaks closed, ids linked, browser error details; canopy bundle, start-up
+  records, token find; cgroup v1/hybrid/parent limits, OOM labels; one memory budget, adopted and
+  silent workers, per-block final check, queue and store caps; release archive + host guide +
+  host config; robustness (barcode columns, HDF5 locking, ESTALE retry, meta cache); frontend
+  (spatial view without copy, uint16 embeddings, foldable panels, long legends, GPU 2x e2e).
+  270 backend, 72 unit, 25 e2e (also 25 on GPU at 2x).
+  - Open: Linux run (needs Docker/Podman or a Linux machine; scripts/linux-smoke.sh).
+  - Next: the owner's first host test (docs/host/host-guide.md); S7 starts with the view
+    contract for plots (ADR 0012).

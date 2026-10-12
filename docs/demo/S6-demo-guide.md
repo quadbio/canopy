@@ -6,7 +6,7 @@ built:
 
 ```bash
 cd /Users/hezhi/Tools/Projects/data_browser_server/canopy
-pixi run -e dev demo        # then open http://127.0.0.1:8765
+pixi run -e dev demo        # then open the link it prints (http://127.0.0.1:8765/?token=…)
 ```
 
 The large synthetic datasets are optional this time (`CANOPY_DEMO_LARGE=1` as before). Report in
