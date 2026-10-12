@@ -11,8 +11,8 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] Contract v0.2 APPROVED (option A) and implemented in the contract code (2026-10-10)
 - [x] S3 Crawler + catalog API (+ review batch 3: logging for several processes)
 - [x] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo (awaiting user review)
-- [ ] S5 Genes + AnnData converter + jobs + memory guard
-- [ ] S6 Spatial ingest + spatial view + section grid → demo
+- [x] S5 Genes + AnnData converter + jobs + memory guard
+- [x] S6 Spatial ingest + spatial view + section grid → demo
 - [ ] S7 Workspace + colours + search + filters
 - [ ] S8 Diagnostics tools → user checks bundles against the data policy
 - [ ] S9 Packaging + runbook + Linux dry run → Checkpoint A
