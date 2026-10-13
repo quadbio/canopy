@@ -345,3 +345,6 @@ Resume rule: read this file, then continue with the first unchecked step.
   for concurrent requests; expected refusals log `stage_refused` (info); plain client codes
   (`c_code`, `c_kind`) kept at strict. Host guide: state_dir local (NFS stall explained), job
   settings for a large host.
+- 2026-10-13 Owner: host retest first (release a530caa640, state_dir local), meanwhile the S7
+  design note: docs/design/S7-workspace-note.md (A workspace across datasets, B colours, C search
+  and filters; 7 questions). Waiting for the owner's answers before building.
