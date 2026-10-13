@@ -139,8 +139,13 @@ cookie; an old link's cookie never blocks a new link.
    `strict` privacy whatever privacy the server ran with (names as tokens; free text, also
    libraries' own messages, dropped), crash locations, the environment and summaries of jobs and
    the index. It refuses to write if it finds a file, folder, column or element name known on
-   the host. Gene names and names shorter than 4 characters are not searched for: read it.
-   **Open it and read `MANIFEST.md` before copying it out.**
+   the host. Gene names, version numbers and names shorter than 4 characters are not searched
+   for: read it. **Open it and read `MANIFEST.md` before copying it out.**
+
+   If it refuses ("not written: a name known on this host was found …"), add `--show-names`
+   to see which names matched, on your terminal only. Do not send the names. Tell the developer
+   what kind of value matched (a version number, a column name, a word like `gene`) and in
+   which file of the bundle.
 3. A page that hangs: `kill -USR1 $(cat <state_dir>/server.lock)` writes the server's stacks to
    the log folder; then make the bundle.
 4. The developer may name tokens like `h_fb26d42600`. On the host,

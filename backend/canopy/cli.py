@@ -295,18 +295,32 @@ def bundle(
     config: ConfigOpt = None,
     since_days: Annotated[float, typer.Option("--since-days", help="Logs of the last N days")] = 3,
     out: Annotated[Path | None, typer.Option("--out", help="Archive to write")] = None,
+    show_names: Annotated[
+        bool,
+        typer.Option("--show-names", help="If refused, print the names found (to you only)"),
+    ] = False,
 ) -> None:
     """Collect logs, environment, jobs and index summaries for the developer, at strict privacy,
     into one archive (checked for names known on this host before it is written)."""
-    from canopy.bundle import build_bundle
+    from canopy.bundle import BundleRefusedError, build_bundle
 
     cfg = _load(config)
     stamp = time.strftime("%Y%m%d-%H%M")
     target = out or Path.cwd() / f"canopy-bundle-{stamp}.tar.gz"
     try:
         path, notes = build_bundle(cfg, target, since_days)
-    except RuntimeError as e:
+    except BundleRefusedError as e:
         typer.echo(f"not written: {e}", err=True)
+        if show_names:
+            for f, name in sorted(e.hits):
+                typer.echo(f"  {f}: {name}", err=True)
+            typer.echo(
+                "These are for you: do not send them. Tell the developer which kind of value "
+                "matched (e.g. a version number, a column name) and in which file.",
+                err=True,
+            )
+        else:
+            typer.echo("To see the names found (on this terminal only): add --show-names", err=True)
         raise typer.Exit(1) from e
     for n in notes:
         typer.echo(f"note: {n}")

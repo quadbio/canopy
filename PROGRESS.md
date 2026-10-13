@@ -320,3 +320,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   SIGUSR1 stacks, bundle, clean stop). New: start-up warning memory_budget_above_limit.
   linux-smoke.sh removed (replaced). Results in .cache/linux-trial/<time>/.
   - Next: the owner's first host test, or the rest of S7.
+- 2026-10-13 First host test (owner): the server runs; new files appear after Refresh;
+  .zarr.tar.gz archives must be unpacked (the demo pre-extracts them into .cache/examples).
+  `canopy bundle` refused on the host: false matches. A SpatialData store's `software_version`
+  was taken as a name and matched the installed spatialdata version (host.json, start-up line);
+  locally also a var index "gene" matched the log field `what`. Version numbers are no longer
+  names, `what` is a program field, and `--show-names` prints the matched names to the owner's
+  terminal only (host guide section 8).

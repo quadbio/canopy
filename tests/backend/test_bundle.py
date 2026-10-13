@@ -13,8 +13,10 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+import canopy.bundle as bundle_mod
+import canopy.cli as cli_mod
 from canopy.app import create_app
-from canopy.bundle import build_bundle
+from canopy.bundle import build_bundle, known_names, self_check
 from canopy.cli import app
 from canopy.config import Config
 from canopy.logs import get_logger, setup_logging
@@ -73,6 +75,41 @@ def test_bundle_refuses_when_a_known_name_slips_through(cfg: Config, tmp_path: P
     cfg.data_roots[0].name = "LEAKEDROOT"
     with pytest.raises(RuntimeError, match="not written"):
         build_bundle(cfg, tmp_path / "b.tar.gz", since_days=1)
+    assert not (tmp_path / "b.tar.gz").exists()
+
+
+def test_version_numbers_and_program_fields_are_not_taken_for_names(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SpatialData store records the spatialdata version that wrote it; the start-up line
+    lists the installed one. A var index called "gene" meets the log field `what: gene`. Neither
+    is a name: found on the first host test."""
+    fp = {"software_version": "0.8.0", "index_name": "gene", "columns": {"cohort_x": {}}}
+    monkeypatch.setattr(
+        bundle_mod, "_sql", lambda db, q: [{"relpath": "a/b.zarr", "fingerprint": json.dumps(fp)}]
+    )
+    names = known_names(cfg)
+    assert "0.8.0" not in names and "cohort_x" in names
+    line = {"event": "startup", "packages": {"spatialdata": "0.8.0"}, "what": "gene"}
+    assert self_check({"logs/s.jsonl": json.dumps(line).encode()}, names) == []
+    leak = {"event": "odd", "unknown_field": "cohort_x"}
+    assert self_check({"logs/s.jsonl": json.dumps(leak).encode()}, names) == [
+        ("logs/s.jsonl", "cohort_x")
+    ]
+
+
+def test_refused_bundle_shows_names_only_when_asked(
+    cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_logging(cfg.logging, role="server", salt="x", to_console=False)
+    get_logger("canopy.test").info("odd", unknown_field="LEAKEDROOT")
+    cfg.data_roots[0].name = "LEAKEDROOT"
+    monkeypatch.setattr(cli_mod, "_load", lambda config, **kw: cfg)
+    out = str(tmp_path / "b.tar.gz")
+    r = CliRunner().invoke(app, ["bundle", "--since-days", "1", "--out", out])
+    assert r.exit_code == 1 and "LEAKEDROOT" not in r.output and "--show-names" in r.output
+    r = CliRunner().invoke(app, ["bundle", "--since-days", "1", "--out", out, "--show-names"])
+    assert r.exit_code == 1 and "LEAKEDROOT" in r.output
     assert not (tmp_path / "b.tar.gz").exists()
 
 

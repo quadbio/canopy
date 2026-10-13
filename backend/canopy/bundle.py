@@ -209,6 +209,9 @@ _NAMED_KEYS = frozenset(
     }
 )
 _HASH = re.compile(r"^[0-9a-f]{12,}$")
+# Version numbers (a store's `software_version`, package versions): not names, and they match the
+# installed versions in every start-up line.
+_VERSION = re.compile(r"v?\d+(\.\d+)+([.+-]?[A-Za-z0-9]+)*")
 # Fingerprint fields that hold format facts, not names (their values are not searched for).
 _FACT_KEYS = frozenset(
     {"kind", "encoding", "dtype", "layout", "dataset_id", "compression", "code", "error_type"}
@@ -251,7 +254,11 @@ def known_names(cfg: Config) -> set[str]:
     # very short or format-defined names would match everywhere: not names of the user's
     from canopy.privacy import KEEP
 
-    return {n for n in names if len(n) >= 4 and n not in KEEP and not n.isdigit()}
+    return {
+        n
+        for n in names
+        if len(n) >= 4 and n not in KEEP and not n.isdigit() and not _VERSION.fullmatch(n)
+    }
 
 
 GENERIC = frozenset(
@@ -337,6 +344,7 @@ CODE_FIELDS = frozenset(
         "warnings",
         "build",
         "timestamp",
+        "what",
     }
 )
 
@@ -386,9 +394,22 @@ def self_check(files: dict[str, bytes], names: set[str]) -> list[tuple[str, str]
     return hits
 
 
+class BundleRefusedError(RuntimeError):
+    """The self-check found known names; `hits` are (file, name) pairs, for the owner's terminal
+    only (the message names the files, never the names)."""
+
+    def __init__(self, hits: list[tuple[str, str]]) -> None:
+        where = sorted({f for f, _ in hits})
+        super().__init__(
+            f"a name known on this host was found in {len(hits)} place(s) in: "
+            f"{', '.join(where)}; the bundle was not written"
+        )
+        self.hits = hits
+
+
 def build_bundle(cfg: Config, out: Path, since_days: float) -> tuple[Path, list[str]]:
-    """Write the archive; returns (path, notes). Raises RuntimeError naming the files (not the
-    names) when the self-check finds a known name."""
+    """Write the archive; returns (path, notes). Raises BundleRefusedError when the self-check
+    finds a known name."""
     salt = installation_salt(cfg.state)
     cutoff = time.time() - since_days * 86400
     log_dirs = [d for d in (cfg.logging.dir, default_log_dir()) if d.is_dir()]
@@ -434,11 +455,7 @@ def build_bundle(cfg: Config, out: Path, since_days: float) -> tuple[Path, list[
     files["MANIFEST.md"] = ("\n".join(manifest) + "\n").encode()
     hits = self_check(files, known_names(cfg))
     if hits:
-        where = sorted({f for f, _ in hits})
-        raise RuntimeError(
-            f"a name known on this host was found in {len(hits)} place(s) in: {', '.join(where)}; "
-            "the bundle was not written"
-        )
+        raise BundleRefusedError(hits)
     out.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out, "w:gz") as tar:
         for name, data in files.items():
