@@ -20,9 +20,9 @@ Restart the demo (Ctrl+C, then `pixi run -e dev demo`) and open the link it prin
 | 13 | In *extracted* (after **Close all**), **tick all** (both regions; convert region_3 first if needed) → **Open linked spatial views** | Both regions side by side at one scale, moved together, one legend. Their own `leiden_1.0` colours disagree, so the title says *colours regenerated* and palette colours are used for both. |
 
 What I would like your judgement on: is ticking and *Open linked* the right way in? Is one
-legend beside the views right for 10–20 datasets (each view's title is its dataset)? Should
-the views keep their own fitted scale instead of one scale? Anything else that should stay per
-dataset besides the embedding?
+legend beside the views right for 10–20 datasets (each view's title is its dataset)? Is one
+scale per embedding (step 9) right? Anything else that should stay per dataset besides the
+embedding?
 
 ## S7c: lasso selection (about 5 minutes)
 
