@@ -68,7 +68,15 @@ The roots are scanned at start and every hour; after adding files, click **Refre
 file browser.
 
 A config problem is explained in one line (and recorded in the log folder). Put `state_dir` on a
-**local** disk (`df -T <folder>` should not say nfs, gpfs, lustre, cifs).
+**local** disk (`df -T <folder>` should not say nfs, gpfs, lustre, cifs). It is small (the index
+and the job table); on a network disk, its writes wait behind conversions reading from the same
+disk (first host test: the job list stalled 1–2 s while a conversion started). The data and the
+cache can stay on the network disk.
+
+**Conversions.** On a large host, more can run at once and each can use more memory, so a short
+conversion does not wait behind a long one (first host test: a 17 s conversion waited 48 min):
+`[jobs] max_running = 3` and `memory_gb = 16` need 3 × 1.5 × 16 = 72 GB free, within
+`budget_gb`.
 
 **Memory.** Your account may have a memory limit below the machine's memory (Linux "cgroups",
 often set for all your sessions together). Look it up:

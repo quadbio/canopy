@@ -623,3 +623,42 @@ def test_answers_cached_before_a_format_change_are_not_reused(cfg: Config) -> No
         headers={"if-none-match": old},
     )
     assert again.status_code == 200 and again.headers["x-canopy-dtype"]
+
+
+def test_a_new_store_is_described_once_by_requests_arriving_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First host test: meta and genes requests for a just-converted store each inspected it
+    (1 s each on a network disk)."""
+    import functools
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from canopy.contract import MANIFEST
+    from canopy.convert.anndata import store_dir
+    from canopy.data import cache as cache_mod
+
+    calls = []
+
+    @functools.lru_cache(maxsize=8)
+    def slow(manifest: str, mtime: int, table: str) -> str:
+        calls.append(manifest)
+        time.sleep(0.2)
+        return "described"
+
+    monkeypatch.setattr(cache_mod, "_store_table", slow)
+    fp = SimpleNamespace(dataset_id="d1")
+    m = store_dir(tmp_path, "d1") / MANIFEST
+    m.parent.mkdir(parents=True)
+    m.write_text("{}")
+    out: list[object] = []
+    threads = [
+        threading.Thread(target=lambda: out.append(cache_mod.store_table(tmp_path, fp, None)))  # type: ignore[arg-type]
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert out == ["described"] * 4 and len(calls) == 1

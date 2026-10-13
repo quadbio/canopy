@@ -425,7 +425,9 @@ def timed(stage: str, **fields: Any) -> Iterator[dict[str, Any]]:
     Stages nest: inside `timed("convert")`, `timed("x_csc")` is logged as `convert/x_csc`.
     Logged: `ms`, `rss_mb` (at exit), `rss_delta_mb`, `rss_peak_mb` (sampled every 50 ms while
     the stage is open) and `rss_peak_process_mb`. Yields a dict the block can add fields to
-    (e.g. bytes read); they are logged on exit. Failures are logged and re-raised.
+    (e.g. bytes read); they are logged on exit. Failures are logged and re-raised: faults as
+    `stage_failed` (error, with code locations), refusals (exceptions marked `expected`, answered
+    with a code such as `too_many_values`) as `stage_refused` (info).
     """
     log = get_logger("canopy.timing")
     path = (*_STAGES.get(), stage)
@@ -437,11 +439,26 @@ def timed(stage: str, **fields: Any) -> Iterator[dict[str, Any]]:
     holder = _PEAK.open()
     try:
         yield extra
-    except Exception:
+    except Exception as e:
         peak = _PEAK.close(holder)
-        log.exception(
-            "stage_failed", stage=name, ms=_ms(t0), rss_peak_mb=round(peak, 1), **fields, **extra
-        )
+        if getattr(e, "expected", False):
+            log.info(
+                "stage_refused",
+                stage=name,
+                ms=_ms(t0),
+                exc_type=type(e).__name__,
+                **fields,
+                **extra,
+            )
+        else:
+            log.exception(
+                "stage_failed",
+                stage=name,
+                ms=_ms(t0),
+                rss_peak_mb=round(peak, 1),
+                **fields,
+                **extra,
+            )
         raise
     finally:
         _STAGES.reset(reset)

@@ -10,6 +10,9 @@
 //   visible, but never more than VERTEX_FACTOR × its share (every drawn point costs some work
 //   even off screen).
 // - Hidden categories count as not on screen, so isolating one population draws all of it.
+// - The budget adapts to the machine: when moving the canvas runs below ~40 frames per second
+//   while it draws its full budget, the budget is lowered (BudgetTuner), and the browser keeps
+//   the lower one (first host test: ~110 ms frames at 1.7 M cells on an M2 at 2560 × 1440).
 // The canvas publishes each view's visible share in powers of two, so zooming re-renders views
 // rarely.
 
@@ -24,9 +27,21 @@ function override(): number | null {
   }
 }
 
-// Points on screen for the whole canvas at once (measured on an M2: ~1 M points at 60 fps).
-// `?lod=<n>` in the page address changes it (tests, slow machines).
+// Points on screen for the whole canvas at once, at most (an M2 draws 1 M points in ~20 ms at a
+// 2× pixel density). `?lod=<n>` in the page address fixes it (tests, slow machines).
 export const CANVAS_BUDGET = override() ?? 1_000_000;
+export const MIN_BUDGET = 200_000;
+const BUDGET_KEY = 'canopy.lod.budget';
+
+function rememberedBudget(): number {
+  if (override() !== null) return CANVAS_BUDGET;
+  try {
+    const v = Number(localStorage.getItem(BUDGET_KEY));
+    return Number.isFinite(v) && v >= MIN_BUDGET && v < CANVAS_BUDGET ? v : CANVAS_BUDGET;
+  } catch {
+    return CANVAS_BUDGET;
+  }
+}
 export const VERTEX_FACTOR = 1.5;
 // Datasets above this get the representative order (it costs one subset request and a copy).
 export const REORDER_ABOVE = Math.min(200_000, Math.max(1_000, Math.floor(CANVAS_BUDGET / 4)));
@@ -34,6 +49,9 @@ export const REORDER_ABOVE = Math.min(200_000, Math.max(1_000, Math.floor(CANVAS
 export const SUBSET_SIZE = 1_000_000;
 
 interface Lod {
+  /** Points on screen for the whole canvas (CANVAS_BUDGET, lowered on a slow machine). */
+  budget: number;
+  setBudget: (n: number) => void;
   /** Share of the data's extent visible in each view (0..1], in steps of powers of two. */
   visible: Record<string, number>;
   /** The area each view shows (view coordinates), snapped outwards to a coarse grid so it
@@ -52,6 +70,15 @@ interface Lod {
 }
 
 export const useLod = create<Lod>()((set) => ({
+  budget: rememberedBudget(),
+  setBudget: (n) => {
+    try {
+      if (override() === null) localStorage.setItem(BUDGET_KEY, String(n));
+    } catch {
+      /* private window: this session only */
+    }
+    set((s) => (s.budget === n ? s : { budget: n }));
+  },
   visible: {},
   extent: {},
   size: {},
@@ -175,4 +202,34 @@ export function representativeOrder(subset: Int32Array, n: number): Int32Array {
   order.set(shuffle(Int32Array.from(subset), 1));
   order.set(shuffle(rest, 2), subset.length);
   return order;
+}
+
+/** Lowers (or raises again) the canvas budget from frame intervals measured while the canvas
+ * moves at its full budget. Every SAMPLE frames: below ~40 fps (median over SLOW_MS) the budget
+ * shrinks in proportion, down to MIN_BUDGET; at a steady 60 fps (median and 95th percentile
+ * within FAST_MS) it grows by a quarter, up to CANVAS_BUDGET. Returns the new budget, or null. */
+export class BudgetTuner {
+  static SAMPLE = 30;
+  static SLOW_MS = 25;
+  static FAST_MS = 18;
+  private gaps: number[] = [];
+
+  frame(gap: number, budget: number): number | null {
+    if (!(gap > 0 && gap <= 250) || override() !== null) return null;
+    this.gaps.push(gap);
+    if (this.gaps.length < BudgetTuner.SAMPLE) return null;
+    const g = this.gaps.sort((a, b) => a - b);
+    this.gaps = [];
+    const median = g[Math.floor(g.length / 2)];
+    const p95 = g[Math.floor(g.length * 0.95)];
+    let next = budget;
+    if (median > BudgetTuner.SLOW_MS) next = Math.max(MIN_BUDGET, budget * Math.max(0.5, Math.min(0.8, 16.7 / median)));
+    else if (median <= BudgetTuner.FAST_MS && p95 <= BudgetTuner.FAST_MS * 1.5) next = Math.min(CANVAS_BUDGET, budget * 1.25);
+    next = Math.round(next / 50_000) * 50_000;
+    return next !== budget ? next : null;
+  }
+
+  reset() {
+    this.gaps = [];
+  }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { allowances, drawCount, representativeOrder, useLod, visibleShare, VERTEX_FACTOR, snappedExtent } from './lod';
+import { allowances, BudgetTuner, CANVAS_BUDGET, MIN_BUDGET, drawCount, representativeOrder, useLod, visibleShare, VERTEX_FACTOR, snappedExtent } from './lod';
 
 describe('level of detail', () => {
   it('measures the share of the data on screen', () => {
@@ -54,5 +54,33 @@ describe('snappedExtent', () => {
     expect(a[0]).toBeLessThanOrEqual(-100);
     expect(a[2]).toBeGreaterThanOrEqual(300);
     expect(snappedExtent([110, 105, 0], 0, 400, 300)).toEqual(a);
+  });
+});
+
+describe('BudgetTuner', () => {
+  const run = (t: BudgetTuner, gap: number, budget: number) => {
+    let out: number | null = null;
+    for (let i = 0; i < BudgetTuner.SAMPLE; i += 1) out = t.frame(gap, budget) ?? out;
+    return out;
+  };
+
+  it('lowers the budget in proportion when moving runs below ~40 fps, not below the minimum', () => {
+    const t = new BudgetTuner();
+    expect(run(t, 110, 1_000_000)).toBe(500_000); // first host test: ~110 ms frames → at most halved
+    expect(run(t, 30, 1_000_000)).toBe(550_000); // 16.7 / 30
+    expect(run(t, 110, 250_000)).toBe(MIN_BUDGET);
+    expect(run(t, 110, MIN_BUDGET)).toBeNull();
+  });
+
+  it('keeps a budget that holds 60 fps and raises a lowered one back by a quarter', () => {
+    const t = new BudgetTuner();
+    expect(run(t, 16.7, CANVAS_BUDGET)).toBeNull();
+    expect(run(t, 20, 600_000)).toBeNull(); // between: unchanged
+    expect(run(t, 16.7, 600_000)).toBe(750_000);
+  });
+
+  it('ignores pauses', () => {
+    const t = new BudgetTuner();
+    expect(run(t, 400, 1_000_000)).toBeNull();
   });
 });

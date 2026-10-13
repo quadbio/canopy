@@ -32,6 +32,8 @@ STATUS_CODES = {
 class ApiError(Exception):
     """An expected failure with a stable code (e.g. `needs_conversion:legacy_layout`)."""
 
+    expected = True  # logs.timed logs it as a refusal, not a fault
+
     def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(code)
         self.status = status

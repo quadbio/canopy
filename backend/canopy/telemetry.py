@@ -7,7 +7,9 @@ Events carry numbers and short codes only, never names or values. The server enf
   classes, code locations in the app bundle, GPU and browser facts) and `TEXT_FIELDS` (short
   messages, already stripped of quoted parts and parenthesised ids by the browser);
 - at `strict` privacy the text fields are dropped (only their presence is kept): a message can
-  hold a name; the code location (`where`) and the build still identify the failure;
+  hold a name; the code location (`where`) and the build still identify the failure. `code` and
+  `kind` are kept when they are plain codes (`too_many_values`, `needs_conversion:legacy_layout`);
+
 - any other string is dropped and counted.
 Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client address and
 `GLOBAL_PER_MINUTE` in all, so one client cannot flood the log; the rest are dropped and counted
@@ -16,6 +18,7 @@ Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client ad
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Annotated
@@ -48,6 +51,9 @@ CODE_FIELDS = frozenset(
     }
 )
 TEXT_FIELDS = frozenset({"message", "code", "kind"})
+# At strict, `code` and `kind` survive when they look like this (lower-case words, `_`, `:`).
+PLAIN_CODE = re.compile(r"[a-z][a-z0-9_]*(:[a-z0-9_]+)*")
+CODE_LIKE_FIELDS = frozenset({"code", "kind"})
 STRING_FIELDS = CODE_FIELDS | TEXT_FIELDS  # the frontend's list must match (test)
 RATE_PER_MINUTE = 600
 ADDRESS_PER_MINUTE = 1_500
@@ -109,7 +115,8 @@ def telemetry(batch: ClientBatch, request: Request) -> None:
             if isinstance(v, str) and k not in STRING_FIELDS:
                 dropped_fields += 1
                 continue
-            if isinstance(v, str) and strict and k in TEXT_FIELDS:
+            plain = k in CODE_LIKE_FIELDS and isinstance(v, str) and PLAIN_CODE.fullmatch(v)
+            if isinstance(v, str) and strict and k in TEXT_FIELDS and not plain:
                 fields[f"c_{k}"] = "(text dropped at strict)"
                 continue
             fields[f"c_{k}"] = v

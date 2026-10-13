@@ -94,7 +94,17 @@ def store_table(cache_dir: Path, fp: Fingerprint, table: str | None = None) -> S
         mtime = manifest.stat().st_mtime_ns
     except OSError:
         return None
-    return _store_table(str(manifest), mtime, table or "")
+    key = (str(manifest), mtime, table or "")
+    # Requests arriving together for a new store (the page asks for meta, genes and embedding at
+    # once) describe it once: the others wait for the first (host test: inspected twice, 1 s each).
+    with _STORE_LOCKS_GUARD:
+        lock = _STORE_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        return _store_table(*key)
+
+
+_STORE_LOCKS: dict[tuple[str, int, str], threading.Lock] = {}
+_STORE_LOCKS_GUARD = threading.Lock()
 
 
 @lru_cache(maxsize=256)

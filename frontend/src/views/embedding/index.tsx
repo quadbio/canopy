@@ -26,7 +26,7 @@ import {
   normaliseColourParams,
   useColouring,
 } from '../colouring';
-import { CANVAS_BUDGET, drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
+import { drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
 import { PlotCompanionField } from '../plot';
 import { type Bounds, MAIN_PANEL, type PanelOutput, panelLayerId, registerView, type ViewOutput } from '../registry';
 
@@ -464,6 +464,7 @@ const BASE_COLOURING = constantColouring(BASE_RGB);
 function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
   const meta = useMeta(spec.datasetId, spec.table);
   const update = useWorkspace((s) => s.updateParams);
+  const budget = useLod((s) => s.budget);
   const p = spec.params;
   if (!meta.data) return <p className="muted">{meta.error ? String(meta.error.message) : 'Loading…'}</p>;
   const m = meta.data;
@@ -620,7 +621,8 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
           Show all cells
           <Help label="About “Show all cells”">
             <p>
-              To stay smooth, the canvas draws about {formatCount(CANVAS_BUDGET)} cells on screen at a time, shared by
+              To stay smooth, the canvas draws about {formatCount(budget)} cells on screen at a time (fewer on a slower
+              computer), shared by
               the open views. A large dataset then shows representative cells (every category of its main annotation
               included) when you look at all of it, more as you zoom in, and all of them when only a part is in view or
               when you hide other categories. The note next to the title says how many are drawn. Tick this to always

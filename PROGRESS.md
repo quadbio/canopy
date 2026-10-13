@@ -335,3 +335,13 @@ Resume rule: read this file, then continue with the first unchecked step.
   twice at once (1.07 s each); the server's start-up line says nfs4 for cache and root, the
   bundle run says xfs; the browser's error code is dropped from client events at strict; a
   second job waited 48 min behind the 45 min one (max_running 1).
+- 2026-10-13 Fixes from the first host bundle (owner: go ahead with items 1 and 3; NFS data and
+  cache accepted). Frame benchmark `frontend/e2e/frames.spec.ts` (CANOPY_BENCH=1, synthetic 1 M /
+  3 M, GPU 2×): on this M2 panning holds 60 fps; a full-view draw of 1 M points costs ~22 ms and
+  a hover pick ~10 ms; the host's ~110 ms was not reproduced. Done: hover picks at most every
+  100 ms while moving (plus one at rest); the canvas budget adapts (lowered when moving at its
+  full budget runs below ~40 fps, kept per browser, `lod_budget` events); `frames` reports
+  moving frames, views, cells, budget and device pixels. Backend: a new store is described once
+  for concurrent requests; expected refusals log `stage_refused` (info); plain client codes
+  (`c_code`, `c_kind`) kept at strict. Host guide: state_dir local (NFS stall explained), job
+  settings for a large host.

@@ -70,6 +70,19 @@ def test_timed_logs_failure_and_reraises(cfg: Config) -> None:
     assert any("test_logs.py" in f for f in ev["exc_frames"])
 
 
+def test_timed_logs_an_expected_refusal_as_info(cfg: Config) -> None:
+    """A refusal answered with a code (too many values, needs conversion) is not a fault."""
+    from canopy.data.reader import NeedsConversionError
+
+    with pytest.raises(NeedsConversionError), timed("load_array", what="obs"):
+        raise NeedsConversionError("too_many_values")
+    events = log_events()
+    ev = next(e for e in events if e["event"] == "stage_refused")
+    assert ev["level"] == "info" and ev["exc_type"] == "NeedsConversionError"
+    assert "exc_frames" not in ev
+    assert not any(e["event"] == "stage_failed" for e in events)
+
+
 def test_every_line_has_pid_role_build(cfg: Config) -> None:
     get_logger("x").info("hello")
     f = current_log_file()

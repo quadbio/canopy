@@ -41,9 +41,13 @@ class UnknownElementError(LookupError):
     """The request names a table, column or embedding the dataset does not have. Raised only by
     canopy's own membership checks, so a KeyError from inside a library is never mistaken for it."""
 
+    expected = True  # a refusal answered with a code, not a fault (logs.timed)
+
 
 class InvalidDimsError(ValueError):
     """The requested embedding columns are not distinct columns of that embedding."""
+
+    expected = True
 
 
 class SourceClosedError(Exception):
@@ -52,6 +56,8 @@ class SourceClosedError(Exception):
 
 class NeedsConversionError(Exception):
     """The dataset cannot be previewed directly; the reason is a short code."""
+
+    expected = True
 
     def __init__(self, code: str) -> None:
         super().__init__(code)

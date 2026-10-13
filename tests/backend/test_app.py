@@ -188,6 +188,25 @@ def test_telemetry_drops_free_text_and_limits_rate(cfg: Config) -> None:
     assert {d["client_session"] for d in dropped} == {"s-2", "s-3"}
 
 
+def test_strict_keeps_plain_codes_and_drops_text(cfg: Config) -> None:
+    """First host test: the browser's error code (`too_many_values`) was dropped at strict."""
+    cfg.logging.privacy = "strict"
+    with TestClient(create_app(cfg, background=False)) as client:
+        client.post(
+            "/api/telemetry",
+            json={
+                "session": "s-4",
+                "events": [
+                    {"name": "a", "fields": {"code": "too_many_values", "kind": "gene"}},
+                    {"name": "b", "fields": {"code": "Patient 7 (cohort)", "message": "boom"}},
+                ],
+            },
+        )
+    events = {e.get("client_event"): e for e in log_events()}
+    assert events["a"]["c_code"] == "too_many_values" and events["a"]["c_kind"] == "gene"
+    assert "Patient" not in str(events["b"]) and "boom" not in str(events["b"])
+
+
 def test_the_host_config_template_is_a_valid_config() -> None:
     import tomllib
     from pathlib import Path

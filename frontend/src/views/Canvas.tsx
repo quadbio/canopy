@@ -18,7 +18,7 @@ import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetr
 import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { type Cell, type Insets, type OrthoState, resizeView, viewCells } from './layout';
-import { allowances, snappedExtent, useLod, visibleShare } from './lod';
+import { allowances, BudgetTuner, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
 import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
@@ -268,31 +268,60 @@ function reportDeckError(e: Error | null | undefined) {
   event('deck_error', null, { ...f, repeats: seen?.n ?? 0 });
 }
 
+/** What the canvas showed while frames were counted (for the `frames` event). */
+interface FrameContext {
+  views: number;
+  cells: number; // cells of the open views, in all
+  budget: number;
+  mpx: number; // drawing buffer, million device pixels
+}
+
 /** Frame times while the canvas redraws (interaction, loading): one `frames` event per 10 s
- * with frames, median and 95th percentile intervals and the long ones (> 50 ms). Intervals over
- * 250 ms are pauses, not frames. */
+ * with frames, median and 95th percentile intervals and the long ones (> 50 ms), and the same
+ * for the frames drawn while the canvas moved (pan, zoom), with what it showed. Intervals over
+ * 250 ms are pauses, not frames. Returns each interval, for the budget tuner. */
 class FrameStats {
   private last = 0;
   private gaps: number[] = [];
+  private moving: number[] = [];
   private since = performance.now();
 
-  frame() {
+  frame(moving: boolean, context: () => FrameContext): number {
     const now = performance.now();
     const gap = now - this.last;
     this.last = now;
-    if (gap > 0 && gap <= 250) this.gaps.push(gap);
-    if (now - this.since >= 10_000) this.flush(now);
+    if (gap > 0 && gap <= 250) {
+      this.gaps.push(gap);
+      if (moving) this.moving.push(gap);
+    }
+    if (now - this.since >= 10_000) this.flush(now, context);
+    return gap;
   }
 
-  private flush(now: number) {
+  private flush(now: number, context: () => FrameContext) {
     this.since = now;
     const g = this.gaps.sort((a, b) => a - b);
+    const m = this.moving.sort((a, b) => a - b);
     this.gaps = [];
+    this.moving = [];
     if (g.length < 10 && !g.some((x) => x > 50)) return; // a stall is reported however few frames
-    const q = (f: number) => g[Math.min(g.length - 1, Math.floor(f * g.length))];
-    event('frames', null, { n: g.length, median_ms: Math.round(q(0.5) * 10) / 10, p95_ms: Math.round(q(0.95) * 10) / 10, over_50ms: g.filter((x) => x > 50).length });
+    const q = (a: number[], f: number) => (a.length ? Math.round(a[Math.min(a.length - 1, Math.floor(f * a.length))] * 10) / 10 : 0);
+    event('frames', null, {
+      n: g.length,
+      median_ms: q(g, 0.5),
+      p95_ms: q(g, 0.95),
+      over_50ms: g.filter((x) => x > 50).length,
+      n_moving: m.length,
+      moving_median_ms: q(m, 0.5),
+      moving_p95_ms: q(m, 0.95),
+      ...context(),
+    });
   }
 }
+
+// Hover picking draws every point once more, off screen (~10 ms at 1 M points on an M2): while
+// the pointer moves, at most one pick per HOVER_PICK_MS, and one where it stops.
+const HOVER_PICK_MS = 100;
 
 /** The top-level layer a (sub-)layer belongs to. */
 function rootOf(layer: Layer): Layer {
@@ -362,6 +391,11 @@ export function Canvas() {
   const [dragging, setDragging] = useState(false);
   const drawn = useRef<Set<string>>(new Set());
   const frames = useRef(new FrameStats());
+  const tuner = useRef(new BudgetTuner());
+  const moving = useRef(0); // until when the canvas counts as moving (pan, zoom)
+  const draggingNow = useRef(false);
+  const deckRef = useRef<{ deck?: { pickObject: (o: { x: number; y: number; radius: number }) => PickingInfo | null } } | null>(null);
+  const hoverGate = useRef<{ open: boolean; last: number; timer: ReturnType<typeof setTimeout> | null }>({ open: true, last: 0, timer: null });
   // panels per view, reported when they change (e.g. Split by)
   const panelCounts = layouts.map((l) => l?.keys.length ?? 0).join(',');
   useEffect(() => {
@@ -519,10 +553,13 @@ export function Canvas() {
     });
   }, [views, layouts, setSize]);
   // One point budget for the whole canvas, shared by the views in proportion to their cells.
+  const budget = useLod((s) => s.budget);
+  const setBudget = useLod((s) => s.setBudget);
   const totalsKey = views.map((v) => `${v.id}:${outputs[v.id]?.total ?? 0}`).join(',');
+  const totalCells = views.reduce((a, v) => a + (outputs[v.id]?.total ?? 0), 0);
   useEffect(() => {
-    setAllowance(allowances(Object.fromEntries(views.map((v) => [v.id, outputs[v.id]?.total ?? 0]))));
-  }, [totalsKey, setAllowance]); // eslint-disable-line react-hooks/exhaustive-deps
+    setAllowance(allowances(Object.fromEntries(views.map((v) => [v.id, outputs[v.id]?.total ?? 0])), budget));
+  }, [totalsKey, budget, setAllowance]); // eslint-disable-line react-hooks/exhaustive-deps
   // Forget the views that were closed (only those).
   const openIds = useRef<string[]>([]);
   useEffect(() => {
@@ -591,6 +628,20 @@ export function Canvas() {
     placeTip();
   };
 
+  // The pick deck.gl was kept from making while the pointer moved (HOVER_PICK_MS), made where
+  // the pointer is now.
+  const pickNow = () => {
+    const g = hoverGate.current;
+    g.timer = null;
+    g.last = performance.now();
+    g.open = true;
+    const deck = deckRef.current?.deck;
+    if (!deck || draggingNow.current) return;
+    const { x, y } = pointer.current;
+    const info = deck.pickObject({ x, y, radius: 3 });
+    showTip(info ? tooltip(info) : null);
+  };
+
   return (
     <div
       className="canvas"
@@ -600,8 +651,25 @@ export function Canvas() {
         const box = ref.current!.getBoundingClientRect();
         pointer.current = { x: e.clientX - box.left, y: e.clientY - box.top };
         placeTip();
+        // deck.gl picks on its next frame: let that pick through, or keep it out and pick once
+        // the pointer has rested (or HOVER_PICK_MS after the last pick)
+        const g = hoverGate.current;
+        const now = performance.now();
+        if (now - g.last >= HOVER_PICK_MS) {
+          g.open = true;
+          g.last = now;
+        } else {
+          g.open = false;
+          if (g.timer === null) g.timer = setTimeout(pickNow, HOVER_PICK_MS - (now - g.last));
+        }
       }}
-      onPointerLeave={() => showTip(null)}
+      onPointerLeave={() => {
+        const g = hoverGate.current;
+        if (g.timer !== null) clearTimeout(g.timer);
+        g.timer = null;
+        g.open = true;
+        showTip(null);
+      }}
     >
       {views.map((v) => (
         <ErrorBoundary key={v.id} scope="view" fallback={(e) => <RunnerFailed id={v.id} error={e} />}>
@@ -617,6 +685,7 @@ export function Canvas() {
       {views.length > 0 && size.width > 0 && (
         <DeckGL
           ref={(r) => {
+            deckRef.current = r as typeof deckRef.current;
             // For tests and debugging in the browser console (`__canopyDeck.deck`).
             (window as unknown as { __canopyDeck?: unknown }).__canopyDeck = r ?? undefined;
           }}
@@ -625,7 +694,10 @@ export function Canvas() {
           onViewStateChange={({ viewId, viewState: vs, interactionState }) => {
             const { target, zoom } = vs as unknown as OrthoState;
             const owner = ownerOf(viewId).view;
-            if (interactionState && Object.values(interactionState).some(Boolean)) touched.current.add(owner);
+            if (interactionState && Object.values(interactionState).some(Boolean)) {
+              touched.current.add(owner);
+              moving.current = performance.now() + 300; // the frames of this move (and its end)
+            }
             const l = layouts[views.findIndex((v) => v.id === owner)];
             setViewStates((s) => {
               if (!l || l.keys.length < 2) return { ...s, [viewId]: { target, zoom } };
@@ -634,18 +706,38 @@ export function Canvas() {
             });
           }}
           onInteractionStateChange={(s) => {
+            draggingNow.current = !!s.isDragging;
             setDragging(!!s.isDragging);
             if (s.isDragging) showTip(null);
           }}
           layers={layers}
           // by the top-level layer's id: sub-layers (e.g. Viv's image tiles) have their own ids
-          layerFilter={({ layer, viewport }) => rootOf(layer).id.startsWith(`${viewport.id}:`)}
-          onHover={(info) => showTip(tooltip(info))}
+          // (hover picks are kept out while the pointer moves fast: HOVER_PICK_MS)
+          layerFilter={({ layer, viewport, renderPass }) =>
+            (renderPass !== 'picking:hover' || hoverGate.current.open) && rootOf(layer).id.startsWith(`${viewport.id}:`)
+          }
+          onHover={(info) => {
+            if (hoverGate.current.open) showTip(tooltip(info));
+          }}
           // a few pixels of tolerance: cells are small when zoomed out
           pickingRadius={3}
           onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
           onAfterRender={() => {
-            frames.current.frame();
+            const isMoving = performance.now() < moving.current;
+            const gap = frames.current.frame(isMoving, () => ({
+              views: views.length,
+              cells: totalCells,
+              budget,
+              mpx: Math.round((size.width * size.height * window.devicePixelRatio ** 2) / 1e5) / 10,
+            }));
+            // only while it moves with the whole budget on screen: then points are the cost
+            if (isMoving && totalCells > budget) {
+              const next = tuner.current.frame(gap, budget);
+              if (next !== null) {
+                event('lod_budget', null, { from: budget, to: next, cells: totalCells, views: views.length });
+                setBudget(next);
+              }
+            }
             for (const v of views) {
               const t0 = readyAt.current[v.id];
               if (t0 !== undefined && !drawn.current.has(v.id)) {

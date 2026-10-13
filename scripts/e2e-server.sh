@@ -25,6 +25,7 @@ path = "$repo/.cache/examples"
 [[data_roots]]
 name = "generated"
 path = "$generated"
+$( [ "${CANOPY_E2E_LARGE:-0}" = "1" ] && printf '[[data_roots]]\nname = "synthetic"\npath = "%s"\n' "$repo/.cache/demo-large" )
 [server]
 port = $port
 [logging]

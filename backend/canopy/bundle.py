@@ -33,6 +33,7 @@ from typing import Any
 from canopy.config import Config
 from canopy.logs import NAME_FIELDS, default_log_dir
 from canopy.privacy import code_location, installation_salt, token
+from canopy.telemetry import PLAIN_CODE
 
 # Fields holding free text in log lines: dropped at strict.
 TEXT_FIELDS = frozenset({"exc_message", "exception", "message", "c_message", "c_code", "c_kind"})
@@ -46,6 +47,8 @@ _STACK_LINE = re.compile(
 
 def _strictify(value: Any, salt: str, key: str = "") -> Any:
     """A log value at strict: name fields tokenised (nested), free text dropped."""
+    if key in ("c_code", "c_kind") and isinstance(value, str) and PLAIN_CODE.fullmatch(value):
+        return value  # as the server keeps them at strict (telemetry.py)
     if key in TEXT_FIELDS:
         return "(dropped)"
     if key in NAME_FIELDS:
