@@ -237,3 +237,22 @@ Keep the old folder until the new one works; going back is starting the old one 
 holds while the new release has not converted anything in a newer format: a release note says
 so when a release changes the format of converted copies (then the old release ignores them and
 converts again).
+
+## 12. Third test: checklist (linked views, lasso, bundle)
+
+Install the new release as in section 11 (check the absolute paths first). Note the times of
+what you do, then make the bundle (section 8) and send it with this list.
+
+- [ ] Upgrade: the access link stayed the same; datasets listed as before (no new indexing)
+- [ ] A dataset already in the index (e.g. a MERSCOPE region) converts (*Convert for full
+      speed*); a conversion that fails: the message ___
+- [ ] Linked spatial views: tick ___ regions (as many as you would use, up to 20) → *Open
+      linked spatial views*; time until all show cells: ___ s; panning smooth? ___
+- [ ] The same group with an image shown in each region vs without (Image: none): difference? ___
+- [ ] Frames on the large external display (2560 × 1440): pan and zoom the 1.7 M-cell dataset
+      for a minute: smooth? ___
+- [ ] Lasso on the 1.7 M-cell dataset: draw around a cluster; *Plot against: Lasso selection*;
+      time until the plot shows: ___ s
+- [ ] `canopy bundle` written without `--accept-name`? If not: what kind of value matched, in
+      which file (not the name): ___
+- [ ] Anything that looked wrong or was slow (time, what, what was on screen): ___

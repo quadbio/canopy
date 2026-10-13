@@ -390,3 +390,6 @@ Resume rule: read this file, then continue with the first unchecked step.
   whose file times had not changed). Fixed: a rescan compares the id (real path) too; the same
   would have hit a host whose root moved. Also: in a group only views showing the same
   coordinates pan and zoom together; ticking replaces the dataset details; lasso icon.
+- 2026-10-13 Owner: local demo issues fixed; next the third host test. Host guide §12 checklist
+  (upgrade, conversion of indexed datasets, linked spatial views at 10–20 regions, frames on the
+  external display, lasso at 1.7 M cells, bundle). Release built for it.
