@@ -348,3 +348,9 @@ Resume rule: read this file, then continue with the first unchecked step.
 - 2026-10-13 Owner: host retest first (release a530caa640, state_dir local), meanwhile the S7
   design note: docs/design/S7-workspace-note.md (A workspace across datasets, B colours, C search
   and filters; 7 questions). Waiting for the owner's answers before building.
+- 2026-10-13 Second host bundle (release a530caa640, run on the storage host: data, cache and
+  state on local xfs; 10 min, M2 laptop screen 1440×778 at 2×). Healthy: no errors, RSS ≤ 0.5 GB,
+  API max 0.4 s (obsm of 1.77 M cells), gene max 57 ms (NFS run: 225 ms), /api/jobs max 14 ms
+  (no conversion ran, so the NFS stall was not re-tested). Frames: moving median 16.6 ms (60 fps)
+  with 2 and 4 views, 3.4 M cells, budget 1 M; no `lod_budget` change (none needed); hover throttled
+  (picked ≤ moves). Open: the first test's ~110 ms was on a 2560×1440 display; re-check there.
