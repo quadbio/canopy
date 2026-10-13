@@ -35,7 +35,7 @@ from canopy.environment import environment_snapshot
 from canopy.errors import error_response, install_error_handlers
 from canopy.jobs.api import router as jobs_router
 from canopy.jobs.manager import JobManager
-from canopy.logs import MemorySampler, get_logger, memory_snapshot, set_rollover_hook
+from canopy.logs import MemorySampler, get_logger, memory_snapshot, memory_total, set_rollover_hook
 from canopy.stores import SLOW_MS
 from canopy.stores import router as stores_router
 from canopy.stores import stats as store_stats
@@ -258,6 +258,15 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         if open_to_others:
             # created before file_access applied, or by hand: other users may read them
             log.warning("folders_readable_by_others", folders=open_to_others)
+        # a budget above what this process may ever have (the machine's memory, or a cgroup
+        # limit, e.g. per user): loads would be admitted that the kernel then kills
+        total_gb = memory_total() / 2**30
+        if cfg.memory.budget_gb > total_gb * 0.9:
+            log.warning(
+                "memory_budget_above_limit",
+                budget_gb=cfg.memory.budget_gb,
+                limit_gb=round(total_gb, 2),
+            )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

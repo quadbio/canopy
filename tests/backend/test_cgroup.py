@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from canopy.config import Config
 from canopy.logs import cgroup_memory_limit
 
 
@@ -71,3 +74,19 @@ def test_headroom_is_read_where_the_limit_is_and_leaves_out_file_cache(tmp_path:
     _write(v1 / "memory.usage_in_bytes", f"{8 * gib}\n")
     _write(v1 / "memory.stat", f"cache {5 * gib}\ntotal_inactive_file {4 * gib}\n")
     assert cgroup_memory_limit(proc, sys)["headroom_bytes"] == 4 * gib
+
+
+def test_a_budget_above_the_limit_is_warned_about_at_start(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A memory budget larger than the process may have (e.g. a per-user cgroup limit): said at
+    start, with both numbers, so a bundle shows it."""
+    from fastapi.testclient import TestClient
+
+    from canopy import app as app_module
+
+    monkeypatch.setattr(app_module, "memory_total", lambda: 4 * 2**30)
+    cfg.memory.budget_gb = 8
+    with TestClient(app_module.create_app(cfg, background=False)):
+        pass
+    assert "memory_budget_above_limit" in caplog.text and "'limit_gb': 4.0" in caplog.text
