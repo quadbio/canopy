@@ -15,3 +15,6 @@ frontend/playwright-report/
 .cache/
 dist-release/
 backend/canopy/_build.json
+
+# diagnostics bundles copied from the host: never committed
+bundles/

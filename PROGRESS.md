@@ -327,3 +327,11 @@ Resume rule: read this file, then continue with the first unchecked step.
   locally also a var index "gene" matched the log field `what`. Version numbers are no longer
   names, `what` is a program field, and `--show-names` prints the matched names to the owner's
   terminal only (host guide section 8).
+- 2026-10-13 First host bundle (bundles/, git-ignored) read. Healthy: no crashes, 1 error line
+  (an expected too_many_values refusal logged at error level), 5 conversions done (largest:
+  47 GB h5ad, 1.77 M cells, 45 min, X stage 45 min, peak 11.4 GB), server RSS ≤ 0.6 GB, API p95
+  < 0.5 s. Found: interaction at ~1.7 M cells runs at ~9 fps (median frame 100–115 ms, M2);
+  /api/jobs stalled 1–2.4 s four times while a conversion started; a new store was inspected
+  twice at once (1.07 s each); the server's start-up line says nfs4 for cache and root, the
+  bundle run says xfs; the browser's error code is dropped from client events at strict; a
+  second job waited 48 min behind the 45 min one (max_running 1).
