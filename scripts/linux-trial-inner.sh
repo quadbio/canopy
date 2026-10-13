@@ -90,10 +90,10 @@ check "no budget warning with budget 3 GB under a 4 GB limit" bash -c "! grep -q
 
 # --- the data: the catalogue finds the examples; a dataset opens; a plot summary is computed
 ids=$(curl -s "${auth[@]}" "http://127.0.0.1:8765/api/catalog/search?q=dissociated")
-id=$(echo "$ids" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])' 2>/dev/null)
+id=$(echo "$ids" | pixi run --frozen python -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])' 2>/dev/null)
 check "catalogue lists dissociated.h5ad" test -n "$id"
 check "dataset meta" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/meta")" = 200
-col=$(curl -s "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/meta" | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(c["name"] for c in m["obs"] if c["kind"]=="categorical" and c["categories"] and len(c["categories"])<=100))' 2>/dev/null)
+col=$(curl -s "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/meta" | pixi run --frozen python -c 'import json,sys; m=json.load(sys.stdin); print(next(c["name"] for c in m["obs"] if c["kind"]=="categorical" and c["categories"] and len(c["categories"])<=100))' 2>/dev/null)
 check "a categorical column ($col)" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/obs?column=$col")" = 200
 check "an embedding (X_umap)" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/obsm?key=X_umap")" = 200
 check "a gene (index 0)" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/gene?i=0")" = 200
