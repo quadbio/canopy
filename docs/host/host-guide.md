@@ -8,9 +8,10 @@ data roots, with *your* Unix rights. Keep the link private, and keep the server 
 (reached through an SSH tunnel). Files Canopy writes (converted copies, index, logs) are
 readable only by you (`file_access = "private"`).
 
-> Not yet tried on Linux by the developer: the steps follow the tools' documentation. If a step
-> fails, run `canopy bundle` (section 8) if you can, and send the bundle plus the exact command
-> and its last lines of output.
+> Tried by the developer on a fresh Ubuntu 24.04 (x86-64) as a normal user with a memory limit,
+> following these steps (`scripts/linux-trial.sh`); a real shared host can still differ (proxy,
+> network disks, limits on your user slice). If a step fails, run `canopy bundle` (section 8) if
+> you can, and send the bundle plus the exact command and its last lines of output.
 
 ## 1. What you need
 

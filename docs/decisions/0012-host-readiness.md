@@ -58,5 +58,9 @@ access.
   hand shared across views (S6 review B-m2).
 - **View contract for plots** (B-M6): overlays for axes and non-zoomable panels are the first
   task of S7.
-- **Linux**: not yet run (no container tool on the development Mac). `scripts/linux-smoke.sh` is
-  prepared; the host guide says the steps are untested on Linux.
+- **Linux**: tried 2026-10-13 with `scripts/linux-trial.sh` (Colima + Docker on the Mac): the
+  release in a fresh Ubuntu 24.04 container, x86-64 (Rosetta), 4 GB memory limit, a normal user,
+  through the host guide's steps; 33 checks, all passed (environment from the lock file, backend
+  tests with the examples, access token, private files under umask 022, cgroup v2 limit and
+  headroom, data API, hang dump, bundle, clean stop, the budget-above-limit warning). Not
+  covered: the real host's limits on a parent slice, network file systems, its size.

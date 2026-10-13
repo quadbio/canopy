@@ -313,3 +313,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   the scatter's axes cover points panned beyond them (title row kept above). Also: the store
   check waits for its server before cleanup. 283 backend, 87 unit, 26 e2e (also 26 on GPU at 2x).
   - Next: the owner's first host test (docs/host/host-guide.md), or the rest of S7.
+- 2026-10-13 Linux trial (owner approved Colima + Docker on the Mac): scripts/linux-trial.sh runs
+  a release in a fresh Ubuntu 24.04 container (x86-64 via Rosetta, 4 GB limit, normal user)
+  through the host guide; 33 checks all pass (lock file on linux-64, backend tests with examples,
+  token and 401, private files under umask 022, cgroup v2 limit 4.0 GB and headroom, data API,
+  SIGUSR1 stacks, bundle, clean stop). New: start-up warning memory_budget_above_limit.
+  linux-smoke.sh removed (replaced). Results in .cache/linux-trial/<time>/.
+  - Next: the owner's first host test, or the rest of S7.
