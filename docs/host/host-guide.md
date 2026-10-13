@@ -62,6 +62,11 @@ nano config.toml               # edit the lines marked EDIT
 pixi run --frozen canopy link --config config.toml   # checks the config; prints the link
 ```
 
+**What is listed.** `.h5ad` files and unpacked `.zarr` folders in the data roots. A
+`.zarr.tar.gz` archive is not read: unpack it next to itself first (`tar -xzf x.zarr.tar.gz`).
+The roots are scanned at start and every hour; after adding files, click **Refresh** in the
+file browser.
+
 A config problem is explained in one line (and recorded in the log folder). Put `state_dir` on a
 **local** disk (`df -T <folder>` should not say nfs, gpfs, lustre, cifs).
 
@@ -181,3 +186,21 @@ Use `canopy …` directly instead of `pixi run --frozen canopy …` in the steps
 - [ ] Browsing a real share folder lists datasets (no data opened yet, unless the policy allows)
 - [ ] `canopy bundle` written, `MANIFEST.md` read, no names seen in it
 - [ ] Problems seen (time, what, what was on screen): ___
+
+## 11. Moving to a new release
+
+The state (access token, index), cache and logs live in the folders named in `config.toml`, not
+in the release folder, so a new release keeps them, and the link stays the same.
+
+```bash
+cd /scratch/$USER/canopy
+sha256sum -c canopy-<new>.tar.gz.sha256          # must say OK
+tar -xzf canopy-<new>.tar.gz
+cp canopy-<old>/config.toml canopy-<new>/        # relative paths in it resolve against its folder
+cd canopy-<new>/ && chmod 700 .
+pixi install --locked
+pixi run --frozen canopy --version               # shows the new commit
+```
+
+Stop the old server (`Ctrl-C` in its tmux window), then start the new one there, as in section
+6. Keep the old folder until the new one works; going back is starting the old one again.
