@@ -384,3 +384,9 @@ Resume rule: read this file, then continue with the first unchecked step.
   scale classes and refits keeping the user's zoom; tuner on drags only, display-relative,
   per session; group colours once per group; parallel *Open linked*; most-shared default
   column and an NA line; group reset; restore caps; stale hover text. Linux trial not re-run.
+- 2026-10-13 S7b–c demo feedback (docs/demo/feedback-S7b.md, triage S7b-feedback-triage.md): all
+  steps work except converting the two regions, which failed with "the file changed": the
+  index kept dataset ids from before the project folder was renamed (a rescan skipped datasets
+  whose file times had not changed). Fixed: a rescan compares the id (real path) too; the same
+  would have hit a host whose root moved. Also: in a group only views showing the same
+  coordinates pan and zoom together; ticking replaces the dataset details; lasso icon.

@@ -25,7 +25,7 @@ from typing import Any
 
 from canopy.catalog.db import CatalogDB
 from canopy.config import CatalogConfig, DataRoot
-from canopy.inspect.core import ZARR_META, detect_kind, inspect_path, version_stamp
+from canopy.inspect.core import ZARR_META, dataset_id, detect_kind, inspect_path, version_stamp
 from canopy.inspect.models import Fingerprint
 from canopy.logs import get_logger, timed
 
@@ -254,7 +254,7 @@ class ScanCounts:
 
 def _check(
     c: Candidate,
-    known: dict[str, tuple[str, str]],
+    known: dict[str, tuple[str, str, str | None]],
     full: bool,
     cfg: CatalogConfig,
     progress: Progress | None = None,
@@ -270,7 +270,7 @@ def _check(
 
 
 def _check_one(
-    c: Candidate, known: dict[str, tuple[str, str]], full: bool, cfg: CatalogConfig
+    c: Candidate, known: dict[str, tuple[str, str, str | None]], full: bool, cfg: CatalogConfig
 ) -> dict[str, Any] | None:
     log = get_logger("canopy.catalog")
     try:
@@ -278,7 +278,15 @@ def _check_one(
     except OSError as e:
         stamp = f"error:{type(e).__name__}"
     prev = known.get(c.relpath)
-    if prev is not None and prev[0] == stamp and not full:
+    # unchanged: the same stamp, and the same version id. The id also holds the real path, which
+    # changes when a root moves (a renamed folder, a new mount point) while its files' times stay:
+    # the old id would make every conversion refuse ("the file changed", S7b demo).
+    if (
+        prev is not None
+        and prev[0] == stamp
+        and not full
+        and (prev[2] is None or prev[2] == dataset_id(c.path, stamp))
+    ):
         return None
     row: dict[str, Any] = {
         "id": entry_id(c.root, c.relpath),

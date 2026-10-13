@@ -126,6 +126,31 @@ def test_rescans_are_incremental(cfg: Config, data: Path) -> None:
     assert _scan(cfg, full=True)["changed"] == 6
 
 
+def test_a_moved_root_is_inspected_again(cfg: Config, data: Path, tmp_path: Path) -> None:
+    """Moving a root's folder keeps its files' times, but the dataset ids hold the real path: the
+    next scan must inspect again, or every conversion refuses the stale id (S7b demo: the project
+    folder was renamed)."""
+    store = data / "s.zarr"
+    ad.AnnData(X=np.ones((4, 2), np.float32)).write_zarr(store)
+    tiny_h5ad(data / "a.h5ad")
+    _scan(cfg)
+    moved = tmp_path / "moved_root"
+    shutil.move(str(data), moved)
+    cfg.data_roots[0].path = moved
+    r = _scan(cfg)
+    assert r["changed"] == 2
+    with _db(cfg).connect() as con:
+        rows = {
+            x["relpath"]: x["version"] for x in con.execute("SELECT relpath, version FROM datasets")
+        }
+    from canopy.inspect.core import dataset_id
+
+    assert rows["s.zarr"] == dataset_id(moved / "s.zarr") and rows["a.h5ad"] == dataset_id(
+        moved / "a.h5ad"
+    )
+    assert _scan(cfg)["unchanged"] == 2  # and then it is settled
+
+
 def test_unavailable_root_keeps_its_entries(cfg: Config, data: Path, tmp_path: Path) -> None:
     tiny_h5ad(data / "a.h5ad")
     _scan(cfg)

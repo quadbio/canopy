@@ -13,8 +13,11 @@ async function tickRow(page: Page, name: string) {
 test('two datasets opened linked share settings, legend, zoom; the embedding stays per dataset', async ({ page }) => {
   const errors = collectErrors(page);
   await freshPage(page);
+  await page.getByTestId('dataset-row').filter({ hasText: 'example_with_layers' }).click();
+  await expect(page.getByTestId('details')).toBeVisible();
   await tickRow(page, 'spatial.h5ad');
   await expect(page.getByTestId('linked-open')).toContainText('1 dataset ticked');
+  await expect(page.getByTestId('details')).toHaveCount(0); // ticking replaces the details
   await expect(page.getByTestId('open-linked')).toBeDisabled();
   await tickRow(page, 'dissociated.h5ad');
   await page.getByTestId('open-linked').click();
@@ -58,6 +61,11 @@ test('two datasets opened linked share settings, legend, zoom; the embedding sta
   await expect(cells.nth(0)).toHaveAttribute('data-status', 'ready');
   await cells.nth(1).getByRole('button', { name: 'dissociated.h5ad' }).click();
   await expect(page.getByTestId('embedding-select')).toContainText('X_umap');
+  // back to the UMAP in both: they show the same coordinates, so they move together
+  await cells.nth(0).getByRole('button', { name: 'spatial.h5ad' }).click();
+  await page.getByTestId('embedding-select').click();
+  await page.getByRole('option', { name: /^X_umap\b/ }).first().click();
+  await expect(cells.nth(0)).toHaveAttribute('data-status', 'ready');
 
   // zooming one view zooms the other
   await page.getByTestId('group-tile').getByRole('button', { name: 'Fit to data' }).click();
@@ -84,6 +92,20 @@ test('two datasets opened linked share settings, legend, zoom; the embedding sta
   await page.waitForTimeout(300);
   expect(await z(1)).toBeCloseTo(zb, 3);
   expect(await drawnFraction(page, cells.nth(0))).toBeGreaterThan(0.01);
+  // different coordinates move on their own (owner, S7b demo)
+  const a1 = (await cells.nth(0).boundingBox())!;
+  await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height / 2);
+  await page.mouse.wheel(0, -300);
+  await page.waitForTimeout(300);
+  expect(await z(1)).toBeCloseTo(zb, 3);
+  // back to the same embedding: the same scale as the other again, and linked
+  await page.getByTestId('embedding-select').click();
+  await page.getByRole('option', { name: /^X_umap\b/ }).first().click();
+  await expect(cells.nth(0)).toHaveAttribute('data-status', 'ready');
+  await expect.poll(async () => (await z(0)) - (await z(1))).toBeCloseTo(0, 2);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -200);
+  await expect.poll(async () => (await z(0)) - (await z(1))).toBeCloseTo(0, 2);
 
   // removing one leaves an independent view
   await cells.nth(1).getByRole('button', { name: 'Remove from the linked views' }).click();

@@ -277,7 +277,7 @@ const ViewCell = memo(function ViewCell({
               title="Lasso: draw around cells to select them (Shift: add to the selection; Esc: stop)"
               data-testid="lasso"
             >
-              lasso
+              <LassoIcon />
             </button>
           )}
           {!spec.group && (
@@ -334,6 +334,16 @@ const ViewCell = memo(function ViewCell({
     </div>
   );
 });
+
+/** A lasso: a loop of rope with its tail (owner: the usual lasso icon). */
+function LassoIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
+      <ellipse cx="8.5" cy="6" rx="6" ry="4" strokeDasharray="2.2 1.6" />
+      <path d="M4.5 9.2c-.9.9-1 2.1-.2 2.8.9.7 2.2.3 2.4-.8.2-1-.9-1.6-1.6-.9-.8.8-.9 2.4-.4 3.7" />
+    </svg>
+  );
+}
 
 /** Drawing a lasso over a view's cell: the pointer's path (canvas pixels, from the canvas's own
  * corner: `origin`) until it is released. `onDone` says whether the lasso was used (false: it
@@ -727,26 +737,30 @@ export function Canvas() {
       }
       if (needs.size) {
         const needKeys = new Set([...needs].flatMap((l) => l.keys));
-        const ref = user && members.length > 1 ? whole.keys.find((k) => !needKeys.has(k) && viewStates[k] && fits.current[k]) : undefined;
-        if (!ref) {
+        if (!user || members.length === 1) {
           // not moved by the user (or a single view): fit, with the others of its scale
           const fresh = members.length === 1 ? fitLayout(whole) : fitGroup(members, needs);
           Object.assign(fits.current, fresh);
           for (const [k, st] of Object.entries(fresh)) if (!user || needKeys.has(k)) updates[k] = st;
         } else {
-          // the group was moved: each refitted view gets its own fit at the scale of the
-          // others showing the same coordinates (their fits stay, so linking stays smooth), then
-          // joins them where they are
-          const mine: Record<string, OrthoState> = {};
+          // the group was moved: a refitted view takes the scale of the others showing the same
+          // coordinates (their fits stay, so linking stays smooth) and joins them where they are;
+          // with none, it is fitted on its own
           for (const l of needs) {
             const own = fitLayout(l);
-            const peer = members.find((m) => m.scaleKey === l.scaleKey && !needs.has(m) && fits.current[m.keys[0]]);
-            const zoom = peer ? fits.current[peer.keys[0]].zoom : undefined;
-            for (const [k, st] of Object.entries(own)) mine[k] = zoom === undefined ? st : { ...st, zoom };
+            const peer = members.find((m) => m.scaleKey === l.scaleKey && !needs.has(m) && fits.current[m.keys[0]] && viewStates[m.keys[0]]);
+            if (!peer) {
+              Object.assign(fits.current, own);
+              Object.assign(updates, own);
+              continue;
+            }
+            const zoom = fits.current[peer.keys[0]].zoom;
+            const mine = Object.fromEntries(Object.entries(own).map(([k, st]) => [k, { ...st, zoom }]));
+            Object.assign(fits.current, mine);
+            const ref = peer.keys[0];
+            const joined = linkedStates('pan+zoom', ref, viewStates[ref], mine, fits.current);
+            for (const k of Object.keys(mine)) updates[k] = joined[k];
           }
-          Object.assign(fits.current, mine);
-          const joined = linkedStates('pan+zoom', ref, viewStates[ref], mine, fits.current);
-          for (const k of Object.keys(mine)) updates[k] = joined[k];
         }
         for (const l of needs) {
           l.keys.forEach((key, j) => {
@@ -1074,7 +1088,11 @@ export function Canvas() {
               touched.current.add(unit);
               moving.current = performance.now() + 300; // the frames of this move (and its end)
             }
-            const l = units.find((u) => u.unit === unit)?.l;
+            // in a linked group, only the views showing the same coordinates move together: a
+            // UMAP and spatial coordinates have nothing in common (and y points the other way)
+            const u = units.find((x) => x.unit === unit);
+            const mineL = u?.members.find((m) => m.keys.includes(viewId));
+            const l = u && mineL && u.members.length > 1 ? combined(u.members.filter((m) => m.scaleKey === mineL.scaleKey)) : u?.l;
             setViewStates((s) => {
               if (!l || l.keys.length < 2) return { ...s, [viewId]: { target, zoom } };
               const mine = Object.fromEntries(l.keys.filter((k) => s[k]).map((k) => [k, s[k]]));

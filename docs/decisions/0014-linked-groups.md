@@ -52,8 +52,9 @@ colours are used only when they agree across the datasets.
   below its view takes no tile.
 - **Scale per coordinates** (owner: option 2): views showing the same coordinates (`scaleKey`:
   the embedding and its dimensions, or spatial coordinates) are fitted at one scale; a view
-  showing other coordinates fills its own space. Pan and zoom stay linked for all (relative to
-  each view's fit). When one view gets new data (e.g. its embedding changes) only it is refitted:
+  showing other coordinates fills its own space. Only views showing the same coordinates pan and
+  zoom together (owner, S7b demo: a UMAP and spatial coordinates moved together, and in
+  opposite directions on y); a view switched back joins their scale and moves with them again. When one view gets new data (e.g. its embedding changes) only it is refitted:
   at the scale of its peers, then joined to where the user moved the group (no one's zoom is
   lost).
 - **Default colour:** the column most of the datasets have (ties: as the first dataset would

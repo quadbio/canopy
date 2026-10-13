@@ -472,7 +472,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .lasso-overlay { position: absolute; z-index: 2; cursor: crosshair; pointer-events: auto; touch-action: none; }
 .lasso-overlay svg { display: block; }
 .lasso-path { fill: color-mix(in srgb, #e65014 12%, transparent); stroke: #e65014; stroke-width: 1.5; }
-.icon-button[data-testid='lasso'] { width: auto; padding: 0 6px; font-size: var(--text-xs); }
 .icon-button.on { background: var(--accent-soft); color: var(--accent); }
 .selection-chip {
   display: inline-flex;

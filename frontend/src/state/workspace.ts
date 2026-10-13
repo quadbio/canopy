@@ -260,7 +260,9 @@ export const useWorkspace = create<Workspace>()(
             if (on) t.add(id);
             else t.delete(id);
           }
-          return { ticked: [...t] };
+          // ticking starts a linked opening: the details of a dataset clicked before would show
+          // one dataset beside the ticked ones (S7b demo)
+          return { ticked: [...t], ...(on ? { browserSelection: null } : {}) };
         }),
       addView: (v, after) => {
         // nothing opens next to a linked group (owner)

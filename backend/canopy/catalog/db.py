@@ -190,11 +190,13 @@ class CatalogDB:
         return d
 
     # ------------------------------------------------------------ datasets
-    def stamps(self, root: str) -> dict[str, tuple[str, str]]:
-        """relpath -> (stamp, state) of a root's indexed datasets."""
+    def stamps(self, root: str) -> dict[str, tuple[str, str, str | None]]:
+        """relpath -> (stamp, state, version) of a root's indexed datasets."""
         with self.connect() as con:
-            rows = con.execute("SELECT relpath, stamp, state FROM datasets WHERE root=?", (root,))
-            return {r["relpath"]: (r["stamp"], r["state"]) for r in rows}
+            rows = con.execute(
+                "SELECT relpath, stamp, state, version FROM datasets WHERE root=?", (root,)
+            )
+            return {r["relpath"]: (r["stamp"], r["state"], r["version"]) for r in rows}
 
     def upsert(self, rows: Iterable[dict[str, Any]], scan: int) -> None:
         now = time.time()
