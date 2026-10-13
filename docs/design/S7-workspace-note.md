@@ -1,6 +1,6 @@
 # S7 rest: workspace, colours, search, filters (design note)
 
-Date: 2026-10-13 · Status: **proposal, waiting for the owner's answers** (section 5)
+Date: 2026-10-13 · Status: **answered** (section 7: the owner's answers and the resulting plan)
 
 The plan's S7 covers R3 (several datasets per session), R5 (palettes) and the search and filter
 part of R4. The plot view (S7a) is done. This note lists what already exists, proposes the rest
@@ -87,3 +87,30 @@ Recommended order, each part with tests and a short demo guide:
 | S7d | C1, C3, C4 as chosen | 2–4 |
 
 The plan had 4–6 days for S7 without the plot view; the answers above can shrink or grow this.
+
+## 7. The owner's answers (2026-10-13) and the plan
+
+Answers, in short:
+
+1. Usually 1–3 datasets, as independent views (as now). Linked: up to 10–20 (spatial) datasets.
+2. Views opened as now stay independent. **Linked** views are opened in one step: several
+   datasets ticked in the dataset list, then "Open linked". Linked views share all settings;
+   only the embedding (its name can differ between datasets) is per dataset.
+3. In a linked group every change (colour, palette, …) applies to all of its views.
+4. Later, the data folder will be open to everyone, to add data and share views: saved
+   workspaces belong on the server, shared (a later stage).
+5. Colours as 2 and 3: shared within a linked group. A column missing in a dataset colours its
+   cells as NA. Preset colours (`uns`) of any linked dataset are checked first: if the same
+   colour is given to different categories, or different colours to the same category, the
+   colours are regenerated for the whole group; else they are used.
+6. Gene sets, finding datasets by gene and filters are not crucial now. Lasso selection is
+   wanted now, with the two-feature plot: the second feature becomes "in the selection or not".
+7. Image export is needed, later.
+
+What follows (replacing section 6):
+
+| Part | Content |
+|---|---|
+| S7b | Linked groups: tick datasets, "Open linked"; one tile with a view per dataset, linked pan and zoom at one scale, one title and one legend; shared settings (per dataset: the embedding, and the spatial elements, whose names are per dataset too); colours over the group's categories with the preset-colour check, NA for a missing column, one number range for the group; up to 24 views per group, a group counts as one of the 9 tiles. |
+| S7c | Lasso: draw around cells in a view; "Plot against: the selection" makes the plot's second feature "selected / not selected" (bars or violins, computed in the browser from what the view already holds). |
+| later | Image export (B4); saved workspaces on the server, shared (A4); palettes library (B2); number range and zero in grey (B3); gene sets, datasets by gene, filters (C1, C3, C4); next/previous dataset (A3). |
