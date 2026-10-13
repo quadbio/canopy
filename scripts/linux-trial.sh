@@ -11,7 +11,8 @@
 # access to conda-forge and PyPI. MEMORY (default 4g) is the container's memory limit.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
-archive=${1:-$(ls -t "$repo"/dist-release/canopy-*.tar.gz | head -1)}
+archive=${1:-$(ls -t "$repo"/dist-release/canopy-*.tar.gz 2>/dev/null | head -1)}
+[ -n "$archive" ] && [ -f "$archive" ] || { echo "linux-trial: no release archive (pixi run -e dev release)" >&2; exit 1; }
 archive=$(cd "$(dirname "$archive")" && pwd)/$(basename "$archive")
 [ -f "$archive.sha256" ] || { echo "linux-trial: $archive.sha256 is missing" >&2; exit 1; }
 examples="$repo/../example_datasets"
@@ -21,6 +22,8 @@ mkdir -p "$out"
 echo "linux-trial: $(basename "$archive") -> $out"
 
 # A volume keeps pixi's download cache between trials (the environment itself is new each time).
+# (no -e here: a failed check must still print the summary below)
+set +e
 docker run --rm --platform linux/amd64 --memory "${MEMORY:-4g}" --cpus 4 \
   -v "$archive:/release/$(basename "$archive"):ro" \
   -v "$archive.sha256:/release/$(basename "$archive").sha256:ro" \

@@ -199,12 +199,15 @@ def test_strict_keeps_plain_codes_and_drops_text(cfg: Config) -> None:
                 "events": [
                     {"name": "a", "fields": {"code": "too_many_values", "kind": "gene"}},
                     {"name": "b", "fields": {"code": "Patient 7 (cohort)", "message": "boom"}},
+                    {"name": "c", "fields": {"code": "patient_07", "kind": "cohort_b"}},
                 ],
             },
         )
     events = {e.get("client_event"): e for e in log_events()}
     assert events["a"]["c_code"] == "too_many_values" and events["a"]["c_kind"] == "gene"
     assert "Patient" not in str(events["b"]) and "boom" not in str(events["b"])
+    # a name that merely looks like a code is not the program's: dropped (review A-M2)
+    assert "patient_07" not in str(events["c"]) and "cohort_b" not in str(events["c"])
 
 
 def test_the_host_config_template_is_a_valid_config() -> None:

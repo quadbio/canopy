@@ -125,3 +125,52 @@ def test_startup_failures_reach_the_log_folder(tmp_path: Path) -> None:
         for x in f.read_text().splitlines()
     ]
     assert records and records[0]["code"] == "config_syntax" and records[0]["line"] == 3
+
+
+def test_common_words_as_names_do_not_refuse_the_bundle(
+    cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Columns called like words of Canopy's own text (the manifest, host.json, a function in a
+    crash file) are names, but that text is the program's: the bundle is written (review A-H1)."""
+    cols = {c: {} for c in ("index", "memory", "error", "sizes", "states", "tokens", "summary")}
+    fp = {"columns": cols}
+    rows = [{"relpath": "a/b.h5ad", "fingerprint": json.dumps(fp)}]
+    monkeypatch.setattr(bundle_mod, "_sql", lambda db, q: rows if "fingerprint" in q else [])
+    setup_logging(cfg.logging, role="server", salt="x", to_console=False)
+    (cfg.logging.dir / "stacks-1.txt").write_text(
+        'Thread 0x01 (most recent call first):\n  File "/x/site-packages/canopy/data/api.py", '
+        "line 805 in summary\n"
+    )
+    out, _ = build_bundle(cfg, tmp_path / "b.tar.gz", since_days=1)
+    assert out.exists()
+
+
+def test_dated_and_versioned_names_stay_names(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a bare version number is not a name; a dated folder is (review A-H2)."""
+    rows = [{"relpath": "2024.03.12-patient07/v2.1-lab/0.8.0/x.h5ad", "fingerprint": None}]
+    monkeypatch.setattr(bundle_mod, "_sql", lambda db, q: rows)
+    names = known_names(cfg)
+    assert {"2024.03.12-patient07", "v2.1-lab"} <= names and "0.8.0" not in names
+    leak = {"event": "odd", "detail_path": "2024.03.12-patient07"}
+    assert self_check({"logs/s.jsonl": json.dumps(leak).encode()}, names)
+    # a vocabulary field holding something other than a plain code is searched too (A-L5)
+    odd = {"event": "odd", "kind": "2024.03.12-patient07"}
+    assert self_check({"logs/s.jsonl": json.dumps(odd).encode()}, names)
+
+
+def test_owner_can_let_a_harmless_name_through(
+    cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_logging(cfg.logging, role="server", salt="x", to_console=False)
+    get_logger("canopy.test").info("odd", unknown_field="LEAKEDROOT")
+    cfg.data_roots[0].name = "LEAKEDROOT"
+    monkeypatch.setattr(cli_mod, "_load", lambda config, **kw: cfg)
+    out = tmp_path / "b.tar.gz"
+    r = CliRunner().invoke(
+        app, ["bundle", "--since-days", "1", "--out", str(out), "--accept-name", "LEAKEDROOT"]
+    )
+    assert r.exit_code == 0, r.output
+    with tarfile.open(out) as tar:
+        manifest = tar.extractfile("canopy-bundle/MANIFEST.md").read().decode()  # type: ignore[union-attr]
+    assert "1 name(s) known on the host were let through" in manifest
+    assert "LEAKEDROOT" not in manifest

@@ -41,6 +41,7 @@ const ZOOM_LIMITS = { minZoom: -20, maxZoom: 40 };
 interface Layout extends FitLayout {
   cell: Cell; // keys: panel keys (deck.gl view ids); fitInsets: per panel
   unit: string; // what is fitted, moved and linked together: the view, or its linked group
+  scaleKey: string; // views of a group with the same key are fitted at one scale
   link: Link;
   titles: (string | undefined)[];
   fitKey: string | undefined;
@@ -67,6 +68,7 @@ function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layo
   return {
     cell,
     unit: spec.group ?? spec.id,
+    scaleKey: out?.scaleKey ?? spec.id,
     keys: panels.map((p) => panelKey(spec.id, p.id)),
     rects: panelRects(panels.length, cell, { top: TITLE_ROW, right }),
     fitInsets: withMargins(many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right }, out?.margins),
@@ -80,8 +82,8 @@ function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layo
   };
 }
 
-/** The layouts of a linked group's views as one: their panels fitted together at one scale and
- * linked (pan and zoom). */
+/** The layouts of a linked group's views as one: their panels linked (pan and zoom), and fitted
+ * together at one scale. */
 function combined(ls: Layout[]): Layout {
   if (ls.length === 1) return ls[0];
   const keys = ls.map((l) => l.fitKey ?? '');
@@ -96,6 +98,20 @@ function combined(ls: Layout[]): Layout {
     sameCoordinates: false,
     fitKey: keys.some(Boolean) ? keys.join('|') : undefined,
   };
+}
+
+/** Fitted view states of a linked group's views: at one scale among the views showing the same
+ * coordinates (`scaleKey`: the same embedding, or spatial coordinates), each on its own
+ * otherwise (owner, S7b review option 2). Only the classes of `only` (all if absent). */
+function fitGroup(members: Layout[], only?: Set<Layout>): Record<string, OrthoState> {
+  const classes = new Map<string, Layout[]>();
+  for (const m of members) classes.set(m.scaleKey, [...(classes.get(m.scaleKey) ?? []), m]);
+  const out: Record<string, OrthoState> = {};
+  for (const ls of classes.values()) {
+    if (only && !ls.some((m) => only.has(m))) continue;
+    Object.assign(out, fitLayout(combined(ls)));
+  }
+  return out;
 }
 
 const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
@@ -126,6 +142,8 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
       out.margins,
       out.fitKey,
       out.lasso,
+      out.scaleKey,
+      out.naCells,
     ],
   );
   return null;
@@ -317,48 +335,73 @@ const ViewCell = memo(function ViewCell({
   );
 });
 
-/** Drawing a lasso over a view's cell: the pointer's path (canvas pixels) until it is released. */
-function LassoOverlay({ cell, onDone, onCancel }: { cell: Cell; onDone: (points: Polygon, add: boolean) => void; onCancel: () => void }) {
+/** Drawing a lasso over a view's cell: the pointer's path (canvas pixels, from the canvas's own
+ * corner: `origin`) until it is released. `onDone` says whether the lasso was used (false: it
+ * started outside every panel, and lasso mode stays on with a hint). */
+function LassoOverlay({
+  cell,
+  origin,
+  onDone,
+  onCancel,
+}: {
+  cell: Cell;
+  origin: () => DOMRect | undefined;
+  onDone: (points: Polygon, add: boolean) => Promise<boolean>;
+  onCancel: () => void;
+}) {
   const [points, setPoints] = useState<Polygon>([]);
+  const path = useRef<Polygon>([]); // the stroke as it is drawn (state may lag behind, B-L1)
+  const [missed, setMissed] = useState(false);
   const drawing = useRef(false);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && onCancel();
+    const key = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // Esc in a field or list (e.g. a Select) is theirs (B-L2)
+      if (e.key === 'Escape' && !(t && t.closest('input, select, textarea, [role="listbox"], [role="combobox"]'))) onCancel();
+    };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, [onCancel]);
+  // canvas pixels: the overlay starts below the view's title row, so positions are taken from
+  // the canvas's corner, not the overlay's (B-H1: they were 30 px too high)
   const at = (e: React.PointerEvent) => {
-    const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    return [e.clientX - box.left + cell.x, e.clientY - box.top + cell.y] as [number, number];
+    const box = origin();
+    return [e.clientX - (box?.left ?? 0), e.clientY - (box?.top ?? 0)] as [number, number];
   };
+  const top = cell.y + TITLE_ROW;
   return (
     <div
       className="lasso-overlay"
       data-testid="lasso-overlay"
-      style={{ left: cell.x, top: cell.y + TITLE_ROW, width: cell.width, height: cell.height - TITLE_ROW }}
+      role="application"
+      aria-label="Lasso: drag around cells to select them (Shift: add; Esc: stop)"
+      style={{ left: cell.x, top, width: cell.width, height: cell.height - TITLE_ROW }}
       onPointerDown={(e) => {
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         drawing.current = true;
-        setPoints([at(e)]);
+        setMissed(false);
+        path.current = [at(e)];
+        setPoints(path.current);
       }}
       onPointerMove={(e) => {
         if (!drawing.current) return;
         const p = at(e);
-        setPoints((ps) => {
-          const last = ps[ps.length - 1];
-          return last && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3 ? ps : [...ps, p];
-        });
+        const last = path.current[path.current.length - 1];
+        if (last && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3) return;
+        path.current = [...path.current, p];
+        setPoints(path.current);
       }}
       onPointerUp={(e) => {
         drawing.current = false;
-        if (points.length >= 3) onDone(points, e.shiftKey);
+        const done = path.current;
+        path.current = [];
         setPoints([]);
+        if (done.length >= 3) void onDone(done, e.shiftKey).then((used) => setMissed(!used));
       }}
     >
+      {missed && <p className="lasso-hint" data-testid="lasso-hint">Start the lasso inside a panel.</p>}
       <svg width="100%" height="100%">
-        <polyline
-          points={points.map(([x, y]) => `${x - cell.x},${y - cell.y - TITLE_ROW}`).join(' ')}
-          className="lasso-path"
-        />
+        <polyline points={points.map(([x, y]) => `${x - cell.x},${y - top}`).join(' ')} className="lasso-path" data-testid="lasso-path" />
       </svg>
     </div>
   );
@@ -502,6 +545,8 @@ function rootOf(layer: Layer): Layer {
 }
 
 const NO_PANELS: { key: string; title?: string; rect: Cell }[] = [];
+// a selection's outline layers, made once (B-L4)
+const outlineCache = new WeakMap<object, Layer[]>();
 const panelCache = new WeakMap<Layout, { key: string; title?: string; rect: Cell }[]>();
 /** Stable per layout, so the memoised cell re-renders only when its panels change. */
 function panelsFor(l: Layout | null) {
@@ -536,9 +581,21 @@ export function Canvas() {
   const [ref, size] = useSize<HTMLDivElement>();
   // linked groups: their legends merged, and room for them when open
   const groupLegends = useMemo(() => {
+    // each view's last legend, also while it reloads (counts stay, B-L8); the datasets without
+    // the column as one NA line (B-M5)
     const by: Record<string, (ColourLegendData | undefined)[]> = {};
-    for (const v of views) if (v.group) (by[v.group] ??= []).push(outputs[v.id]?.status === 'ready' ? (outputs[v.id]?.legend as ColourLegendData | undefined) : undefined);
-    return Object.fromEntries(Object.entries(by).map(([g, ls]) => [g, mergeLegends(ls)]));
+    const na: Record<string, { cells: number; datasets: number }> = {};
+    for (const v of views) {
+      if (!v.group) continue;
+      const out = outputs[v.id];
+      (by[v.group] ??= []).push(out?.status === 'error' ? undefined : (out?.legend as ColourLegendData | undefined));
+      if (out?.naCells !== undefined) {
+        const m = (na[v.group] ??= { cells: 0, datasets: 0 });
+        m.cells += out.naCells;
+        m.datasets += 1;
+      }
+    }
+    return Object.fromEntries(Object.entries(by).map(([g, ls]) => [g, mergeLegends(ls, na[g])]));
   }, [views, outputs]);
   const firstOfGroup = useMemo(() => {
     const m: Record<string, ViewSpec> = {};
@@ -594,6 +651,21 @@ export function Canvas() {
   const drawn = useRef<Set<string>>(new Set());
   const frames = useRef(new FrameStats());
   const tuner = useRef(new BudgetTuner());
+  // the display's frame interval, measured once while nothing moves (judges slow and fast)
+  useEffect(() => {
+    const ts: number[] = [];
+    let id = 0;
+    const step = (t: number) => {
+      ts.push(t);
+      if (ts.length < 21) id = requestAnimationFrame(step);
+      else {
+        const gaps = ts.slice(1).map((x, i) => x - ts[i]).sort((a, b) => a - b);
+        tuner.current.setPeriod(gaps[10]);
+      }
+    };
+    id = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(id);
+  }, []);
   const moving = useRef(0); // until when the canvas counts as moving (pan, zoom)
   const draggingNow = useRef(false);
   const deckRef = useRef<{ deck?: { pickObject: (o: { x: number; y: number; radius: number }) => PickingInfo | null } } | null>(null);
@@ -624,57 +696,82 @@ export function Canvas() {
   const units = useMemo(() => {
     const by = new Map<string, Layout[]>();
     for (const l of layouts) if (l) by.set(l.unit, [...(by.get(l.unit) ?? []), l]);
-    return [...by.entries()].map(([unit, ls]) => ({ unit, l: combined(ls) }));
+    return [...by.entries()].map(([unit, ls]) => ({ unit, members: ls, l: combined(ls) }));
   }, [layouts]);
 
-  // Fit when a view's data first arrives or changes; follow size changes otherwise.
+  // Fit when a view's data first arrives or changes; follow size changes otherwise. A linked
+  // group is looked at view by view: only views with new data (or a new cell, not yet moved) are
+  // refitted, with the others of their scale; after the user has moved the group, a refitted
+  // view joins it where the others are (the same steps from its fit), so nobody's zoom is lost.
   useEffect(() => {
     const updates: Record<string, OrthoState> = {};
-    units.forEach(({ unit, l }) => {
-      if (l.cell.width < 10) return;
-      const insets = `${JSON.stringify(l.fitInsets)}|${l.sameScale}|${l.sameCoordinates}`;
-      let refit = false;
-      const resized: string[] = [];
+    units.forEach(({ unit, members, l: whole }) => {
       const user = touched.current.has(unit);
-      l.keys.forEach((key, j) => {
-        const b = l.bounds[j];
-        const prev = placed.current[key];
-        const moved = prev && (prev.rect.width !== l.rects[j].width || prev.rect.height !== l.rects[j].height || prev.insets !== insets);
-        // new data: a new fit key, or (without a key) new bounds; more of the same data
-        // (new bounds, same key) refits only a view the user has not moved
-        const keyed = l.fitKey !== undefined && fittedKey.current[key] !== undefined;
-        const newData = keyed ? fittedKey.current[key] !== l.fitKey || (fitted.current[key] !== b && !user) : fitted.current[key] !== b;
-        if (b && (newData || (moved && !user))) refit = true;
-        else if (moved && viewStates[key]) resized.push(key);
-      });
-      if (refit) {
-        for (const [key, st] of Object.entries(fitLayout(l))) {
-          updates[key] = st;
-          fits.current[key] = st;
-        }
+      const needs = new Set<Layout>();
+      const resized: { key: string; rect: Cell }[] = [];
+      const insetsOf = (l: Layout) => `${JSON.stringify(l.fitInsets)}|${l.sameScale}|${l.sameCoordinates}`;
+      for (const l of members) {
+        if (l.cell.width < 10) continue;
+        const insets = insetsOf(l);
         l.keys.forEach((key, j) => {
-          if (l.bounds[j]) {
-            fitted.current[key] = l.bounds[j]!;
-            fittedKey.current[key] = l.fitKey;
-          }
+          const b = l.bounds[j];
+          const prev = placed.current[key];
+          const moved = prev && (prev.rect.width !== l.rects[j].width || prev.rect.height !== l.rects[j].height || prev.insets !== insets);
+          // new data: a new fit key, or (without a key) new bounds; more of the same data
+          // (new bounds, same key) refits only a view the user has not moved
+          const keyed = l.fitKey !== undefined && fittedKey.current[key] !== undefined;
+          const newData = keyed ? fittedKey.current[key] !== l.fitKey || (fitted.current[key] !== b && !user) : fitted.current[key] !== b;
+          if (b && (newData || (moved && !user))) needs.add(l);
+          else if (moved && viewStates[key]) resized.push({ key, rect: l.rects[j] });
         });
-      } else {
-        for (const key of resized) {
-          const j = l.keys.indexOf(key);
-          updates[key] = resizeView(viewStates[key], placed.current[key].rect, l.rects[j]);
-          if (fits.current[key]) fits.current[key] = resizeView(fits.current[key], placed.current[key].rect, l.rects[j]);
+      }
+      if (needs.size) {
+        const needKeys = new Set([...needs].flatMap((l) => l.keys));
+        const ref = user && members.length > 1 ? whole.keys.find((k) => !needKeys.has(k) && viewStates[k] && fits.current[k]) : undefined;
+        if (!ref) {
+          // not moved by the user (or a single view): fit, with the others of its scale
+          const fresh = members.length === 1 ? fitLayout(whole) : fitGroup(members, needs);
+          Object.assign(fits.current, fresh);
+          for (const [k, st] of Object.entries(fresh)) if (!user || needKeys.has(k)) updates[k] = st;
+        } else {
+          // the group was moved: each refitted view gets its own fit at the scale of the
+          // others showing the same coordinates (their fits stay, so linking stays smooth), then
+          // joins them where they are
+          const mine: Record<string, OrthoState> = {};
+          for (const l of needs) {
+            const own = fitLayout(l);
+            const peer = members.find((m) => m.scaleKey === l.scaleKey && !needs.has(m) && fits.current[m.keys[0]]);
+            const zoom = peer ? fits.current[peer.keys[0]].zoom : undefined;
+            for (const [k, st] of Object.entries(own)) mine[k] = zoom === undefined ? st : { ...st, zoom };
+          }
+          Object.assign(fits.current, mine);
+          const joined = linkedStates('pan+zoom', ref, viewStates[ref], mine, fits.current);
+          for (const k of Object.keys(mine)) updates[k] = joined[k];
+        }
+        for (const l of needs) {
+          l.keys.forEach((key, j) => {
+            if (l.bounds[j]) {
+              fitted.current[key] = l.bounds[j]!;
+              fittedKey.current[key] = l.fitKey;
+            }
+          });
         }
       }
-      l.keys.forEach((key, j) => (placed.current[key] = { rect: l.rects[j], insets }));
+      for (const { key, rect } of resized) {
+        if (updates[key]) continue;
+        updates[key] = resizeView(viewStates[key], placed.current[key].rect, rect);
+        if (fits.current[key]) fits.current[key] = resizeView(fits.current[key], placed.current[key].rect, rect);
+      }
+      for (const l of members) l.keys.forEach((key, j) => (placed.current[key] = { rect: l.rects[j], insets: insetsOf(l) }));
     });
     if (Object.keys(updates).length) setViewStates((s) => ({ ...s, ...updates }));
   }, [units]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fit = (unit: string) => {
-    const l = units.find((u) => u.unit === unit)?.l;
-    if (!l) return;
+    const u = units.find((x) => x.unit === unit);
+    if (!u) return;
     touched.current.delete(unit);
-    const states = fitLayout(l);
+    const states = u.members.length === 1 ? fitLayout(u.l) : fitGroup(u.members);
     Object.assign(fits.current, states);
     setViewStates((s) => ({ ...s, ...states }));
   };
@@ -713,8 +810,8 @@ export function Canvas() {
     for (const v of views) {
       const sel = selections[v.id];
       if (!sel || outputs[v.id]?.lasso?.key !== sel.key) continue;
-      sel.polygons.forEach((pg, k) => {
-        all.push(
+      let outlines = outlineCache.get(sel);
+      if (!outlines) outlineCache.set(sel, (outlines = sel.polygons.map((pg, k) =>
           new PathLayer({
             id: `${panelKey(v.id, pg.panel)}:lasso-${k}`,
             data: [{ path: [...pg.points, pg.points[0]] }],
@@ -724,8 +821,8 @@ export function Canvas() {
             widthUnits: 'pixels',
             pickable: false,
           }) as unknown as Layer,
-        );
-      });
+      )));
+      all.push(...outlines);
     }
     const fresh = all.map((l) => (shown.current.has(l) || !l.internalState ? l : l.clone({})));
     shown.current = new Set(fresh);
@@ -834,6 +931,15 @@ export function Canvas() {
   // screen on high-density (Retina) displays (S6 feedback). Positioned without re-rendering.
   const tipRef = useRef<HTMLDivElement>(null);
   const pointer = useRef({ x: 0, y: 0 });
+  const tipAt = useRef({ x: 0, y: 0 }); // where the shown text was picked
+  // the trailing pick does not outlive the canvas
+  useEffect(
+    () => () => {
+      const t = hoverGate.current.timer;
+      if (t !== null) clearTimeout(t);
+    },
+    [],
+  );
   const placeTip = () => {
     const el = tipRef.current;
     const box = ref.current?.getBoundingClientRect();
@@ -853,6 +959,7 @@ export function Canvas() {
     }
     if (el.textContent !== text) el.textContent = text;
     el.style.display = 'block';
+    tipAt.current = { ...pointer.current };
     placeTip();
   };
 
@@ -871,19 +978,22 @@ export function Canvas() {
   };
 
   // A lasso drawn over view `id`: its points in the coordinates of the panel it started in, the
-  // cells inside selected (Shift: added to the selection).
-  const lassoDone = async (id: string, screen: Polygon, add: boolean) => {
-    setLassoing(null);
+  // cells inside selected (Shift: added to the selection). False: it started outside every
+  // panel (lasso mode stays on).
+  const lassoDone = async (id: string, screen: Polygon, add: boolean): Promise<boolean> => {
     const out = outputs[id];
     const deck = deckRef.current?.deck as unknown as {
       getViewports: () => { id: string; x: number; y: number; width: number; height: number; unproject: (p: number[]) => number[] }[];
     } | undefined;
-    if (!out?.lasso || !deck) return;
+    if (!out?.lasso || !deck) {
+      setLassoing(null);
+      return true;
+    }
     const [sx, sy] = screen[0];
     const vp = deck
       .getViewports()
       .find((p) => p.id.startsWith(`${id}/`) && sx >= p.x && sx <= p.x + p.width && sy >= p.y && sy <= p.y + p.height);
-    if (!vp) return;
+    if (!vp) return false;
     const poly = screen.map(([x, y]) => vp.unproject([x - vp.x, y - vp.y]).slice(0, 2) as [number, number]);
     const panel = ownerOf(vp.id).panel;
     const old = useSelection.getState().selections[id];
@@ -891,10 +1001,18 @@ export function Canvas() {
     const mask = keep ? old.mask.slice() : new Uint8Array(out.lasso.n);
     const t0 = performance.now();
     const added = await out.lasso.select(panel, poly, mask);
+    setLassoing(null);
+    // the view may have closed while the cells were read (spatial: their centres, B-L3)
+    if (!useWorkspace.getState().views.some((v) => v.id === id)) return true;
     const count = (keep ? old.count : 0) + added;
     event('lasso', performance.now() - t0, { n: out.lasso.n, selected: count, added: keep ? 1 : 0 });
     setSelection(id, { mask, count, key: out.lasso.key, polygons: [...(keep ? old.polygons : []), { panel, points: poly }] });
+    return true;
   };
+  // lasso mode ends with its view (closed, or no longer able to select, B-L2)
+  useEffect(() => {
+    if (lassoing && !outputs[lassoing]?.lasso) setLassoing(null);
+  }, [lassoing, outputs]);
 
   return (
     <div
@@ -915,6 +1033,9 @@ export function Canvas() {
         } else {
           g.open = false;
           if (g.timer === null) g.timer = setTimeout(pickNow, HOVER_PICK_MS - (now - g.last));
+          // until the next pick, the old text would follow the pointer onto other cells (B-L11)
+          const { x, y } = pointer.current;
+          if (Math.hypot(x - tipAt.current.x, y - tipAt.current.y) > 4) showTip(null);
         }
       }}
       onPointerLeave={() => {
@@ -985,8 +1106,9 @@ export function Canvas() {
               budget,
               mpx: Math.round((size.width * size.height * window.devicePixelRatio ** 2) / 1e5) / 10,
             }));
-            // only while it moves with the whole budget on screen: then points are the cost
-            if (isMoving && totalCells > budget) {
+            // only while it is dragged with the whole budget on screen: then points are the
+            // cost (a wheel's frames come at the wheel's pace, B-M2)
+            if (isMoving && draggingNow.current && totalCells > budget) {
               const next = tuner.current.frame(gap, budget);
               if (next !== null) {
                 event('lod_budget', null, { from: budget, to: next, cells: totalCells, views: views.length });
@@ -1044,7 +1166,8 @@ export function Canvas() {
       {lassoing && cells[views.findIndex((v) => v.id === lassoing)] && (
         <LassoOverlay
           cell={cells[views.findIndex((v) => v.id === lassoing)]}
-          onDone={(pts, add) => void lassoDone(lassoing, pts, add)}
+          origin={() => ref.current?.getBoundingClientRect()}
+          onDone={(pts, add) => lassoDone(lassoing, pts, add)}
           onCancel={() => setLassoing(null)}
         />
       )}

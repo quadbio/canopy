@@ -44,10 +44,34 @@ colours are used only when they agree across the datasets.
 - **Not in groups yet:** the plot companion (a note says so); saving a group (saved workspaces
   are later, on the server).
 
+## Revised after the cold review (R9, 2026-10-13)
+- **A group and independent views never share the canvas** (owner): *Open linked* needs an
+  empty canvas, and while a group is open no dataset opens on its own. Both places say so and
+  offer **Close all** (which keeps the ticks). The group fills the canvas; restoring an older
+  save with both keeps the group alone; independent views are restored up to 9 tiles. A plot
+  below its view takes no tile.
+- **Scale per coordinates** (owner: option 2): views showing the same coordinates (`scaleKey`:
+  the embedding and its dimensions, or spatial coordinates) are fitted at one scale; a view
+  showing other coordinates fills its own space. Pan and zoom stay linked for all (relative to
+  each view's fit). When one view gets new data (e.g. its embedding changes) only it is refitted:
+  at the scale of its peers, then joined to where the user moved the group (no one's zoom is
+  lost).
+- **Default colour:** the column most of the datasets have (ties: as the first dataset would
+  choose). The group legend ends with *NA: N cells (k datasets without …)*; its counts stay
+  while a view reloads. **Reset to defaults** in a group gives the group's shared defaults.
+- **Opening:** details and meta of the ticked datasets are read six at a time; one that fails
+  (or cannot be shown) is left out and named, the others open.
+- **Colours** are worked out once per group and colouring (`groupScheme`), and the same object is
+  handed out while nothing changed, so views do not rebuild colour tables when another view
+  reports the same facts.
+
 ## Evidence
-- `src/views/linked.test.ts`: shared settings and own keys, tiles, restore of groups beyond 9
-  views, a group of one, preset colours agreeing, conflicting (both kinds), union palettes,
-  one range, merged legend.
+- `src/views/linked.test.ts`: shared settings and own keys, a group only on an empty canvas and
+  nothing beside it, plots take no tile, restore (a group alone, 9 tiles), a group of one,
+  preset colours agreeing, conflicting (both kinds), union palettes, one range, merged legend.
+- e2e `linked.spec.ts` (R9): opening blocked beside a group; a view switched to other
+  coordinates while the other keeps the user's zoom; three datasets coloured by the column two
+  have, the third NA with the legend's NA line; *Open linked* after **Close all** (ticks kept).
 - e2e `linked.spec.ts`: spatial.h5ad + dissociated.h5ad linked (one tile, one legend with the
   29 categories of both and added counts, preset colours kept, point size and hidden categories
   shared, the embedding per dataset, linked zoom, removing one); a dataset without the column

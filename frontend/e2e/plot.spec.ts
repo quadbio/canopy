@@ -151,13 +151,27 @@ test('lasso: select cells, plot them against the others', async ({ page }) => {
     if (shift) await page.keyboard.up('Shift');
     await expect(page.getByTestId('lasso-overlay')).toHaveCount(0);
   };
+  // the path is drawn under the pointer (review B-H1: it was 30 px above)
+  await view.getByTestId('lasso').click();
+  const overlay = page.getByTestId('lasso-overlay');
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 40, cy + 10);
+  const ob = (await overlay.boundingBox())!;
+  const first = ((await page.getByTestId('lasso-path').getAttribute('points')) ?? '').split(' ')[0].split(',').map(Number);
+  expect(Math.abs(first[0] - (cx - ob.x))).toBeLessThan(2);
+  expect(Math.abs(first[1] - (cy - ob.y))).toBeLessThan(2);
+  await page.mouse.up(); // too short a path: nothing selected
+  await page.keyboard.press('Escape');
+  await expect(overlay).toHaveCount(0);
+
   await lassoAround(cx, cy);
   const chip = view.getByTestId('selection-chip');
   await expect(chip).toContainText('selected');
   const count = async () => Number(((await chip.textContent()) ?? '').replace(/[^0-9]/g, ''));
-  const first = await count();
-  expect(first).toBeGreaterThan(0);
-  expect(first).toBeLessThan(8000);
+  const firstCount = await count();
+  expect(firstCount).toBeGreaterThan(0);
+  expect(firstCount).toBeLessThan(8000);
 
   // the view's colour (cell type) against the selection: two bars, the selected and the rest
   await expect(plot).toHaveAttribute('data-status', 'ready');
@@ -167,13 +181,28 @@ test('lasso: select cells, plot them against the others', async ({ page }) => {
 
   // Shift adds a second lasso elsewhere
   await lassoAround(cx - r * 1.2, cy - r * 1.2, true);
-  await expect.poll(count).toBeGreaterThan(first);
+  await expect.poll(count).toBeGreaterThan(firstCount);
 
   // a gene colour: violins of the selected cells and the others
   await page.getByTestId('gene-search').fill('Monocyte_m1');
   await page.getByTestId('gene-search').press('Enter');
   await expect(plot.getByTestId('violin')).toHaveCount(2);
   await expect(plot.getByTestId('violin').first()).toContainText('in the selection');
+
+  // a lasso around the whole view selects every cell, drawn or not
+  await view.getByTestId('lasso').click();
+  const vb = (await view.boundingBox())!;
+  const corners: [number, number][] = [
+    [vb.x + 4, vb.y + 34],
+    [vb.x + vb.width - 4, vb.y + 34],
+    [vb.x + vb.width - 4, vb.y + vb.height - 4],
+    [vb.x + 4, vb.y + vb.height - 4],
+  ];
+  await page.mouse.move(...corners[0]);
+  await page.mouse.down();
+  for (const c of [...corners.slice(1), corners[0]]) await page.mouse.move(...c, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(count).toBe(8000);
 
   // cleared: the plot waits for a selection again
   await chip.getByRole('button', { name: 'Clear the selection' }).click();

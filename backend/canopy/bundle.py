@@ -33,7 +33,7 @@ from typing import Any
 from canopy.config import Config
 from canopy.logs import NAME_FIELDS, default_log_dir
 from canopy.privacy import code_location, installation_salt, token
-from canopy.telemetry import PLAIN_CODE
+from canopy.telemetry import plain_value
 
 # Fields holding free text in log lines: dropped at strict.
 TEXT_FIELDS = frozenset({"exc_message", "exception", "message", "c_message", "c_code", "c_kind"})
@@ -47,7 +47,7 @@ _STACK_LINE = re.compile(
 
 def _strictify(value: Any, salt: str, key: str = "") -> Any:
     """A log value at strict: name fields tokenised (nested), free text dropped."""
-    if key in ("c_code", "c_kind") and isinstance(value, str) and PLAIN_CODE.fullmatch(value):
+    if key in ("c_code", "c_kind") and isinstance(value, str) and plain_value(key[2:], value):
         return value  # as the server keeps them at strict (telemetry.py)
     if key in TEXT_FIELDS:
         return "(dropped)"
@@ -212,12 +212,27 @@ _NAMED_KEYS = frozenset(
     }
 )
 _HASH = re.compile(r"^[0-9a-f]{12,}$")
-# Version numbers (a store's `software_version`, package versions): not names, and they match the
-# installed versions in every start-up line.
-_VERSION = re.compile(r"v?\d+(\.\d+)+([.+-]?[A-Za-z0-9]+)*")
-# Fingerprint fields that hold format facts, not names (their values are not searched for).
+# A bare version number ("0.8.0") is not a name: it would match the installed versions in every
+# start-up line. Anything more ("2024.03.12-patient07", "v2.1-lab") stays a name (review A-H2).
+_VERSION = re.compile(r"\d+(\.\d+){1,3}")
+# Fingerprint fields that hold format facts, versions or program messages, not names (their
+# values are not searched for).
 _FACT_KEYS = frozenset(
-    {"kind", "encoding", "dtype", "layout", "dataset_id", "compression", "code", "error_type"}
+    {
+        "kind",
+        "encoding",
+        "dtype",
+        "layout",
+        "dataset_id",
+        "compression",
+        "code",
+        "error_type",
+        "message",
+        "encoding_version",
+        "format_version",
+        "software_version",
+        "fingerprint_version",
+    }
 )
 
 
@@ -348,6 +363,8 @@ CODE_FIELDS = frozenset(
         "build",
         "timestamp",
         "what",
+        "privacy_of_runs",
+        "packages",
     }
 )
 
@@ -358,7 +375,11 @@ def _values(value: Any, out: list[str], key: str = "") -> None:
     if key == "event" and isinstance(value, str) and not _CODE.fullmatch(value):
         out.append(value)
         return
-    if key in CODE_FIELDS:
+    # only plain program words are exempt: a value with capitals, spaces or slashes in a
+    # vocabulary field is searched anyway (review A-L5); `packages` holds versions
+    if key in CODE_FIELDS and (
+        key == "packages" or not isinstance(value, str) or _CODE.fullmatch(value)
+    ):
         return
     if isinstance(value, str):
         out.append(value)
@@ -370,8 +391,17 @@ def _values(value: Any, out: list[str], key: str = "") -> None:
             _values(v, out, key)
 
 
+# A code location line of a crash file ("  pkg/mod.py:12 fn"): the function name is the program's
+# (a column called "summary" must not match `summary` in a stack, review A-H1).
+_CODE_LINE = re.compile(r"^(\s+\S+:\d+)\s+\S*$")
+
+
 def _searchable(fname: str, data: bytes) -> str:
     text = data.decode(errors="replace")
+    if fname.startswith("crash/"):
+        return "\n".join(
+            m.group(1) if (m := _CODE_LINE.match(line)) else line for line in text.splitlines()
+        )
     if not (fname.endswith(".json") or fname.endswith(".jsonl")):
         return text
     vals: list[str] = []
@@ -410,9 +440,12 @@ class BundleRefusedError(RuntimeError):
         self.hits = hits
 
 
-def build_bundle(cfg: Config, out: Path, since_days: float) -> tuple[Path, list[str]]:
+def build_bundle(
+    cfg: Config, out: Path, since_days: float, accepted: frozenset[str] = frozenset()
+) -> tuple[Path, list[str]]:
     """Write the archive; returns (path, notes). Raises BundleRefusedError when the self-check
-    finds a known name."""
+    finds a known name. `accepted`: names the owner has read in place and let through
+    (`--accept-name`); the manifest says how many."""
     salt = installation_salt(cfg.state)
     cutoff = time.time() - since_days * 86400
     log_dirs = [d for d in (cfg.logging.dir, default_log_dir()) if d.is_dir()]
@@ -432,6 +465,12 @@ def build_bundle(cfg: Config, out: Path, since_days: float) -> tuple[Path, list[
     files["host.json"] = json.dumps(_host_facts(cfg, salt), indent=2, default=str).encode()
     files["jobs.json"] = json.dumps(_jobs(cfg, salt), indent=2, default=str).encode()
     files["catalog.json"] = json.dumps(_catalog(cfg, salt), indent=2, default=str).encode()
+    # checked before the manifest is added: its text is fixed (and file names and a date), and
+    # a column called "index" or "memory" must not match it (review A-H1)
+    names = known_names(cfg)
+    hits = self_check(files, names - accepted)
+    if hits:
+        raise BundleRefusedError(hits)
     created = datetime.now(UTC).isoformat(timespec="seconds")
     manifest = [
         "# Canopy diagnostics bundle",
@@ -455,10 +494,14 @@ def build_bundle(cfg: Config, out: Path, since_days: float) -> tuple[Path, list[
         )
         manifest.append(f"| `{name}` | {what} |")
     manifest += ["", "Tokens (h_…) can be looked up on the host with `canopy token find`."]
+    n_accepted = len(names & accepted)
+    if n_accepted:
+        manifest += [
+            "",
+            f"{n_accepted} name(s) known on the host were let through by the owner "
+            "(`--accept-name`) after reading where they appear.",
+        ]
     files["MANIFEST.md"] = ("\n".join(manifest) + "\n").encode()
-    hits = self_check(files, known_names(cfg))
-    if hits:
-        raise BundleRefusedError(hits)
     out.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out, "w:gz") as tar:
         for name, data in files.items():

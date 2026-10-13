@@ -260,11 +260,16 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
             log.warning("folders_readable_by_others", folders=open_to_others)
         # a budget above what this process may ever have (the machine's memory, or a cgroup
         # limit, e.g. per user): loads would be admitted that the kernel then kills
+        # limit, e.g. per user): loads would be admitted that the kernel then kills. Conversion
+        # workers may each grow 0.5 × memory_gb + 1 GB past their reservation before they are
+        # stopped (review A-L2).
         total_gb = memory_total() / 2**30
-        if cfg.memory.budget_gb > total_gb * 0.9:
+        overshoot = cfg.jobs.max_running * (0.5 * cfg.jobs.memory_gb + 1)
+        if cfg.memory.budget_gb + overshoot > total_gb * 0.9:
             log.warning(
                 "memory_budget_above_limit",
                 budget_gb=cfg.memory.budget_gb,
+                workers_overshoot_gb=overshoot,
                 limit_gb=round(total_gb, 2),
             )
 

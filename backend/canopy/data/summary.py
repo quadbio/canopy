@@ -28,6 +28,7 @@ class TooManyCategoriesError(ValueError):
     """A categorical feature with more than MAX_PLOT_CATEGORIES categories."""
 
     expected = True
+    code = "too_many_categories"
 
     def __init__(self, n: int) -> None:
         super().__init__(f"{n} categories (at most {MAX_PLOT_CATEGORIES})")

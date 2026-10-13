@@ -70,6 +70,9 @@ export interface ViewOutput {
   content?: ReactNode;
   /** Room kept free inside each panel when fitting (e.g. for axes), besides the title row. */
   margins?: Insets;
+  /** What one unit of the coordinates is (e.g. the embedding's name): the views of a linked group
+   * with the same key are fitted at one scale, so sizes compare; others each fill their space. */
+  scaleKey?: string;
   /** What the data are (e.g. dataset and coordinate system): a view refits when it changes;
    * a change of `bounds` alone (more data arriving) refits only a view the user has not moved.
    * Without it every change of `bounds` counts as new data. */
@@ -93,6 +96,8 @@ export interface ViewOutput {
   n?: number;
   /** Number of items the view holds (for the canvas's level-of-detail budget). */
   total?: number;
+  /** Linked group: cells shown as NA because this dataset lacks the group's column or gene. */
+  naCells?: number;
   /** Whatever the view's Legend needs, computed once by the view's hook. */
   legend?: unknown;
   /** Lasso selection (S7c): adds the cells inside `poly` (view coordinates of `panel`) to `mask`

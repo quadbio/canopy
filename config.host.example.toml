@@ -39,7 +39,7 @@ small_file_gb = 2
 idle_minutes = 30
 
 [jobs]
-max_running = 1              # conversions at a time
+max_running = 1              # conversions at a time (more: see the guide, "Conversions")
 max_queued = 10
 memory_gb = 8                # working memory of one conversion (needs 1.5 x this free)
 threads = 8                  # CPU threads of one conversion (also numeric libraries)

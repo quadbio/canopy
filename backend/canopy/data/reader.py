@@ -42,12 +42,14 @@ class UnknownElementError(LookupError):
     canopy's own membership checks, so a KeyError from inside a library is never mistaken for it."""
 
     expected = True  # a refusal answered with a code, not a fault (logs.timed)
+    code = "unknown_element"
 
 
 class InvalidDimsError(ValueError):
     """The requested embedding columns are not distinct columns of that embedding."""
 
     expected = True
+    code = "invalid_dims"
 
 
 class SourceClosedError(Exception):

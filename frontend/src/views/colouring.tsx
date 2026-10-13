@@ -40,7 +40,7 @@ import { event } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ColourInput, Field, Help, type OptionGroup, Select } from '../ui/controls';
 import { GeneSearch } from '../ui/GeneSearch';
-import { groupColours, groupRange, type LinkedEntry, useLinked } from './linked';
+import { groupScheme, type LinkedEntry, useLinked } from './linked';
 import type { ViewOutput } from './registry';
 
 /** What the points are coloured by: an obs column, or a gene (its var index name) read from
@@ -209,6 +209,7 @@ export type ColourLegendData =
       extended: boolean; // more categories than palette colours: interpolated colours added
       custom: boolean[]; // colour chosen by hand
       regenerated?: boolean; // linked group: preset colours disagreed, palette colours instead
+      na?: { cells: number; datasets: number }; // linked group: datasets without the column
     }
   | { kind: 'numeric'; name: string; range: [number, number]; colormap: ColormapName };
 
@@ -262,7 +263,6 @@ export interface LinkRef {
   view: string;
 }
 
-const NO_ENTRIES: Record<string, LinkedEntry> = {};
 
 /** Loads what the cells are coloured by and builds the GPU colour table. `n`: the number of
  * cells the values must have (values of another length are ignored while they load). */
@@ -369,13 +369,10 @@ export function useColouring(
     },
     [linkGroup, linkView, publishLinked],
   );
-  const groupEntries = useLinked((s) => (linkGroup ? (s.entries[linkGroup] ?? NO_ENTRIES) : NO_ENTRIES));
-  const sameKey = useMemo(() => Object.values(groupEntries).filter((e) => e.key === colourKey), [groupEntries, colourKey]);
-  const scheme = useMemo(
-    () => (link && labels && sameKey.some((e) => e.labels) ? groupColours(sameKey, p.palette) : null),
-    [link, labels, sameKey, p.palette],
-  );
-  const sharedRange = useMemo(() => (link && prepared?.range ? groupRange(sameKey) : null), [link, prepared, sameKey]);
+  // the group's colours and range, made once per group and kept while unchanged (B-M3)
+  const shared = useLinked((s) => (linkGroup ? groupScheme(linkGroup, s.entries[linkGroup], colourKey, p.palette) : null));
+  const scheme = link && labels ? (shared?.colours ?? null) : null;
+  const sharedRange = link && prepared?.range ? (shared?.range ?? null) : null;
   const range = sharedRange ?? prepared?.range ?? null;
   const slots = useMemo(
     () => (labels && order && palette && palette !== 'dataset' ? assignSlots(labels, order, paletteSize(palette, labels.length)) : []),
@@ -781,6 +778,12 @@ export function ColourLegend({
               );
             })}
         </ul>
+      )}
+      {!collapsed && data.na && (
+        <p className="legend-na" data-testid="legend-na">
+          <span className="swatch" style={{ background: 'rgb(190,190,190)' }} />
+          NA: {data.na.cells.toLocaleString()} cells ({data.na.datasets} dataset{data.na.datasets === 1 ? '' : 's'} without “{data.name}”)
+        </p>
       )}
       {!collapsed && !showAll && present(data).length > LEGEND_ROWS && (
         <button className="link small" onClick={() => setShowAll(true)} data-testid="legend-more">

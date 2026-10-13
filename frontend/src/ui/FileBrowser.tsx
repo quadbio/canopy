@@ -119,6 +119,7 @@ function Details({ id }: { id: string }) {
   const [table, setTable] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const groupOpen = useWorkspace((s) => s.views.some((v) => v.group));
   if (!q.data) return <div className="details muted">{q.error ? String(q.error.message) : 'Loading…'}</div>;
   const d = q.data;
   const s = d.summary;
@@ -234,6 +235,8 @@ function Details({ id }: { id: string }) {
         <p className="error small">
           {d.state === 'unsupported' ? 'Not a supported dataset.' : `Could not be read (${d.reason}).`}
         </p>
+      ) : groupOpen ? (
+        <CloseFirst testId="open-blocked">Linked views are open: close them to open a dataset on its own.</CloseFirst>
       ) : (
         <div className="open-row">
           {d.kind === 'spatialdata_zarr' && d.conversion?.converted ? (
@@ -265,15 +268,39 @@ function Details({ id }: { id: string }) {
   );
 }
 
-/** Shared settings for linked views: the first dataset's defaults, coloured by a column all the
- * datasets have when there is one. */
-function sharedDefaults(metas: DatasetMeta[], first: Record<string, unknown>): Record<string, unknown> {
-  const common = metas.reduce<DatasetMeta['obs']>(
-    (cols, m) => cols.filter((c) => m.obs.some((o) => o.name === c.name && o.kind === c.kind)),
-    metas[0].obs,
-  );
-  const col = defaultColumn({ ...metas[0], obs: common });
+/** Shared settings for linked views: the first dataset's defaults, coloured by the column most
+ * of the datasets have (ties: as the first dataset would choose; review B-M5). */
+export function sharedDefaults(metas: DatasetMeta[], first: Record<string, unknown>): Record<string, unknown> {
+  const count = new Map<string, number>();
+  for (const m of metas) for (const c of m.obs) if (c.kind === 'categorical') count.set(c.name, (count.get(c.name) ?? 0) + 1);
+  const most = Math.max(0, ...count.values());
+  let col: string | null = null;
+  // the best-placed candidate among the columns held by the most datasets (at least two)
+  for (const m of metas) {
+    if (col || most < 2) break;
+    col = defaultColumn({ ...m, obs: m.obs.filter((c) => count.get(c.name) === most) });
+  }
   return { ...first, colorBy: col ? { kind: 'obs', name: col } : (first.colorBy ?? null), hidden: [] };
+}
+
+/** Why opening is not possible now, and the way out: close all views. */
+function CloseFirst({ children, testId }: { children: string; testId: string }) {
+  const reset = useWorkspace((s) => s.reset);
+  return (
+    <div className="close-first" data-testid={testId}>
+      <p className="muted small">{children}</p>
+      <button className="ghost" onClick={reset}>
+        Close all
+      </button>
+    </div>
+  );
+}
+
+/** `f` over the items, at most `n` at a time; every outcome, in order. */
+async function inBatches<T, R>(items: T[], n: number, f: (x: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const out: PromiseSettledResult<R>[] = [];
+  for (let i = 0; i < items.length; i += n) out.push(...(await Promise.allSettled(items.slice(i, i + n).map(f))));
+  return out;
 }
 
 /** The ticked datasets, opened together as linked views. */
@@ -281,6 +308,7 @@ function LinkedOpen() {
   const ticked = useWorkspace((s) => s.ticked);
   const tick = useWorkspace((s) => s.tick);
   const addGroup = useWorkspace((s) => s.addGroup);
+  const anyOpen = useWorkspace((s) => s.views.length > 0);
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -292,29 +320,31 @@ function LinkedOpen() {
     setBusy(true);
     setProblem(null);
     try {
-      const ds = await Promise.all(
-        ticked.map((id) => qc.fetchQuery({ queryKey: ['dataset', id], queryFn: () => catalog.dataset(id), staleTime: 60_000 })),
-      );
       const t = viewTypes().find((x) => x.type === type)!;
+      // each dataset's details and meta, a few at a time; one that fails is left out (B-M4)
+      const one = async (id: string) => {
+        const d = await qc.fetchQuery({ queryKey: ['dataset', id], queryFn: () => catalog.dataset(id), staleTime: 60_000 });
+        const tables = Object.keys((d.fingerprint as { spatialdata?: { tables?: object } } | null)?.spatialdata?.tables ?? {});
+        const table = d.kind === 'spatialdata_zarr' ? (tables[0] ?? null) : null;
+        if (type === 'spatial' && !(d.kind === 'spatialdata_zarr' && d.conversion?.converted)) throw new Error(d.name);
+        const meta = await qc.fetchQuery(metaQuery(d.id, table));
+        const params = t.create(meta) as Record<string, unknown> | null;
+        if (!params) throw new Error(d.name);
+        return { meta, member: { type, datasetId: d.id, table, title: d.name, params } };
+      };
+      const results = await inBatches(ticked, 6, one);
       const members: Omit<ViewSpec, 'id' | 'group'>[] = [];
       const metas: DatasetMeta[] = [];
       const skipped: string[] = [];
-      for (const d of ds) {
-        const tables = Object.keys((d.fingerprint as { spatialdata?: { tables?: object } } | null)?.spatialdata?.tables ?? {});
-        const table = d.kind === 'spatialdata_zarr' ? (tables[0] ?? null) : null;
-        if (type === 'spatial' && !(d.kind === 'spatialdata_zarr' && d.conversion?.converted)) {
-          skipped.push(d.name);
-          continue;
+      results.forEach((r, k) => {
+        if (r.status === 'fulfilled') {
+          metas.push(r.value.meta);
+          members.push(r.value.member);
+        } else {
+          const name = qc.getQueryData<{ name: string }>(['dataset', ticked[k]])?.name;
+          skipped.push(name ?? (r.reason instanceof Error ? r.reason.message : ticked[k]));
         }
-        const meta = await qc.fetchQuery(metaQuery(d.id, table));
-        const params = t.create(meta) as Record<string, unknown> | null;
-        if (!params) {
-          skipped.push(d.name);
-          continue;
-        }
-        metas.push(meta);
-        members.push({ type, datasetId: d.id, table, title: d.name, params });
-      }
+      });
       if (members.length < 2) {
         setProblem(`At least two of the ticked datasets must have ${type === 'spatial' ? 'a converted spatial copy' : 'an embedding'}${skipped.length ? ` (not: ${skipped.join(', ')})` : ''}.`);
         return;
@@ -328,7 +358,7 @@ function LinkedOpen() {
         params: { ...shared, ...Object.fromEntries(own.filter((k) => k in m.params).map((k) => [k, m.params[k]])) },
       }));
       if (addGroup(linked) === null) {
-        setProblem(`At most ${MAX_VIEWS} views (or linked groups) fit in the canvas: close one first.`);
+        setProblem('Close the open views first.');
         return;
       }
       event('group_opened', null, { type, n: linked.length, skipped: skipped.length });
@@ -341,6 +371,19 @@ function LinkedOpen() {
     }
   };
   const allSpatial = details.every((d) => d?.kind === 'spatialdata_zarr' && d.conversion?.converted);
+  if (anyOpen) {
+    return (
+      <div className="details linked-open" data-testid="linked-open">
+        <h3>
+          {ticked.length} dataset{ticked.length === 1 ? '' : 's'} ticked
+        </h3>
+        <CloseFirst testId="linked-blocked">Linked views open on an empty canvas: close the open views first.</CloseFirst>
+        <button className="link small" onClick={() => tick(ticked, false)} data-testid="untick-all">
+          Clear the ticks
+        </button>
+      </div>
+    );
+  }
   const tooMany = ticked.length > MAX_GROUP;
   return (
     <div className="details linked-open" data-testid="linked-open">

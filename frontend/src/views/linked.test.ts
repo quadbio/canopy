@@ -28,37 +28,52 @@ describe('linked groups in the workspace', () => {
     expect(after.map((v) => v.params.embedding)).toEqual(['X_umap', 'X_pca', 'X_umap']);
   });
 
-  it('count as one tile; a group left with one view becomes independent', () => {
+  it('open only on an empty canvas, and nothing opens next to them (owner)', () => {
     const ws = useWorkspace.getState();
     ws.reset();
     ws.addView(base('x'));
+    expect(ws.addGroup([base('a'), base('b')])).toBeNull();
+    useWorkspace.getState().reset();
+    expect(useWorkspace.getState().addGroup([base('a'), base('b')])).not.toBeNull();
+    expect(useWorkspace.getState().addView(base('y'))).toBeNull();
+    const views = useWorkspace.getState().views;
+    expect(tilesTaken(views)).toBe(1);
+    expect(membersOf(views, views[0]).map((v) => v.datasetId)).toEqual(['a', 'b']);
+  });
+
+  it('leave one view on its own when all others are removed', () => {
+    const ws = useWorkspace.getState();
+    ws.reset();
     ws.addGroup([base('a'), base('b')]);
-    let views = useWorkspace.getState().views;
-    expect(tilesTaken(views)).toBe(2);
-    expect(membersOf(views, views[1]).map((v) => v.datasetId)).toEqual(['a', 'b']);
-    useWorkspace.getState().removeView(views[1].id);
-    views = useWorkspace.getState().views;
-    expect(views.map((v) => [v.datasetId, v.group])).toEqual([
-      ['x', undefined],
-      ['b', undefined],
-    ]);
+    useWorkspace.getState().removeView(useWorkspace.getState().views[0].id);
+    expect(useWorkspace.getState().views.map((v) => [v.datasetId, v.group])).toEqual([['b', undefined]]);
+  });
+
+  it('a plot below its view takes no tile', () => {
+    const views = [
+      { id: 'a', group: undefined, params: {} },
+      { id: 'p', group: undefined, params: { follows: 'a' } },
+    ];
+    expect(tilesTaken(views)).toBe(1);
   });
 
   it('close together', () => {
     const ws = useWorkspace.getState();
     ws.reset();
-    ws.addView(base('x'));
     const g = ws.addGroup([base('a'), base('b')])!;
     useWorkspace.getState().removeGroup(g);
-    expect(useWorkspace.getState().views.map((v) => v.datasetId)).toEqual(['x']);
+    expect(useWorkspace.getState().views).toEqual([]);
   });
 
-  it('are restored together, beyond the 9 tiles in views', () => {
+  it('are restored alone, beyond the 9 tiles in views', () => {
     const many = Array.from({ length: 12 }, (_, i) => ({ id: `v${i}`, ...base(`d${i}`), group: 'g1' }));
+    // with anything else beside it (an older save), the group alone is restored
     const restored = restoreViews([...many, { id: 'solo', ...base('s'), group: 'g2' }]);
-    expect(restored).toHaveLength(13);
-    expect(restored.filter((v) => v.group === 'g1')).toHaveLength(12);
-    expect(restored.at(-1)!.group).toBeUndefined(); // a group of one
+    expect(restored).toHaveLength(12);
+    expect(restored.every((v) => v.group === 'g1')).toBe(true);
+    // independent views: at most 9 tiles (B-L6)
+    const loose = Array.from({ length: 12 }, (_, i) => ({ id: `w${i}`, ...base(`e${i}`) }));
+    expect(restoreViews(loose)).toHaveLength(9);
   });
 
   it('keep each member’s own keys', () => {

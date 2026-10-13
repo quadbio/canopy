@@ -10,9 +10,11 @@
 //   visible, but never more than VERTEX_FACTOR × its share (every drawn point costs some work
 //   even off screen).
 // - Hidden categories count as not on screen, so isolating one population draws all of it.
-// - The budget adapts to the machine: when moving the canvas runs below ~40 frames per second
-//   while it draws its full budget, the budget is lowered (BudgetTuner), and the browser keeps
-//   the lower one (first host test: ~110 ms frames at 1.7 M cells on an M2 at 2560 × 1440).
+// - The budget adapts to the machine: when dragging the canvas runs clearly slower than the
+//   display's own frame rate while it draws its full budget, the budget is lowered
+//   (BudgetTuner; first host test: ~110 ms frames at 1.7 M cells on an M2 at 2560 × 1440).
+//   Only drags count: wheel zoom draws when a wheel step arrives, so its intervals measure the
+//   wheel, not the drawing (review B-M2). The lower budget is kept for the browser session.
 // The canvas publishes each view's visible share in powers of two, so zooming re-renders views
 // rarely.
 
@@ -36,7 +38,7 @@ const BUDGET_KEY = 'canopy.lod.budget';
 function rememberedBudget(): number {
   if (override() !== null) return CANVAS_BUDGET;
   try {
-    const v = Number(localStorage.getItem(BUDGET_KEY));
+    const v = Number(sessionStorage.getItem(BUDGET_KEY));
     return Number.isFinite(v) && v >= MIN_BUDGET && v < CANVAS_BUDGET ? v : CANVAS_BUDGET;
   } catch {
     return CANVAS_BUDGET;
@@ -73,7 +75,7 @@ export const useLod = create<Lod>()((set) => ({
   budget: rememberedBudget(),
   setBudget: (n) => {
     try {
-      if (override() === null) localStorage.setItem(BUDGET_KEY, String(n));
+      if (override() === null) sessionStorage.setItem(BUDGET_KEY, String(n));
     } catch {
       /* private window: this session only */
     }
@@ -213,6 +215,13 @@ export class BudgetTuner {
   static SLOW_MS = 25;
   static FAST_MS = 18;
   private gaps: number[] = [];
+  /** The display's frame interval (ms; 16.7 at 60 Hz, 33 at 30 Hz): slow and fast are judged
+   * against it, so a 30 Hz display is not taken for a slow machine. */
+  constructor(private period = 1000 / 60) {}
+
+  setPeriod(ms: number) {
+    if (ms > 4 && ms < 100) this.period = ms;
+  }
 
   frame(gap: number, budget: number): number | null {
     if (!(gap > 0 && gap <= 250) || override() !== null) return null;
@@ -222,9 +231,11 @@ export class BudgetTuner {
     this.gaps = [];
     const median = g[Math.floor(g.length / 2)];
     const p95 = g[Math.floor(g.length * 0.95)];
+    const slow = Math.max(BudgetTuner.SLOW_MS, 1.5 * this.period);
+    const fast = Math.max(BudgetTuner.FAST_MS, 1.1 * this.period);
     let next = budget;
-    if (median > BudgetTuner.SLOW_MS) next = Math.max(MIN_BUDGET, budget * Math.max(0.5, Math.min(0.8, 16.7 / median)));
-    else if (median <= BudgetTuner.FAST_MS && p95 <= BudgetTuner.FAST_MS * 1.5) next = Math.min(CANVAS_BUDGET, budget * 1.25);
+    if (median > slow) next = Math.max(MIN_BUDGET, budget * Math.max(0.5, Math.min(0.8, this.period / median)));
+    else if (median <= fast && p95 <= fast * 1.5) next = Math.min(CANVAS_BUDGET, budget * 1.25);
     next = Math.round(next / 50_000) * 50_000;
     return next !== budget ? next : null;
   }

@@ -32,6 +32,11 @@ becomes "is the cell in the selection or not". Filters and gene sets wait.
   summaries: 64 bins, quartiles, mean): no request, and a new lasso updates the plot at once.
   Without a selection the plot shows a quiet instruction.
 - Telemetry: `lasso` (time, cells, selected, whether added).
+- R9 (cold review): pointer positions are taken from the canvas's corner (they were 30 px above
+  the pointer); the stroke is kept as it is drawn (a fast release kept its last part); a lasso
+  started outside every panel keeps lasso mode on with a hint; lasso mode ends with its view;
+  Esc in a field is the field's; a selection read for a view that closed meanwhile is dropped;
+  outlines are made once per selection.
 
 ## Not yet
 - Lasso in linked groups; a selection as a filter or as a new column; saving selections.
@@ -40,5 +45,6 @@ becomes "is the cell in the selection or not". Filters and gene sets wait.
 - `src/views/selection.test.ts`: inside/outside (concave), hidden cells and panel cells left
   out, adding without double counting, polygon rows to table rows, both summaries against
   hand-computed values.
-- e2e `plot.spec.ts` "lasso": instruction before a selection; a lasso selects part of the
-  cells; two bars; Shift adds; a gene gives two violins; clearing.
+- e2e `plot.spec.ts` "lasso": the path under the pointer; instruction before a selection; a
+  lasso selects part of the cells; two bars; Shift adds; a gene gives two violins; a lasso
+  around the whole view selects all 8 000 cells; clearing.

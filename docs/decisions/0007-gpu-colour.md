@@ -66,10 +66,13 @@ feedback asked for a choice of palettes for categories and more colour maps for 
   - The canvas shares one budget of points on screen (1 M; `?lod=<n>` overrides it) among its
     views in proportion to their cells (`views/lod.ts` `allowances`).
   - The budget adapts to the machine (first host test, 2026-10-13: frames of ~110 ms while
-    moving 1.7 M cells on an M2 at 2560 × 1440). Every 30 frames drawn while the canvas moves
-    with its whole budget on screen: below ~40 fps (median over 25 ms) the budget shrinks in
-    proportion (to at most half per step, not below 200 k); at a steady 60 fps it grows back by a
-    quarter, up to 1 M. The browser keeps the lowered budget; `lod_budget` events log changes.
+    moving 1.7 M cells on an M2 at 2560 × 1440). Every 30 frames drawn while the canvas is
+    *dragged* with its whole budget on screen (wheel zoom draws at the wheel's pace, so it does
+    not count; S7b–c review B-M2): when the median is above 1.5 × the display's frame interval
+    (at least 25 ms; the interval is measured at start, so 30 Hz displays are not "slow") the
+    budget shrinks in proportion (to at most half per step, not below 200 k); at about the
+    display's rate it grows back by a quarter, up to 1 M. A lowered budget is kept for the
+    browser session only; `lod_budget` events log changes.
   - Hover picking draws all points once more (~10 ms at 1 M on an M2): while the pointer moves,
     at most one pick per 100 ms, and one where it stops. The `frames` event also reports the
     frames drawn while moving and what was shown (views, cells, budget, device pixels).

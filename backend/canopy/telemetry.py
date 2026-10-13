@@ -8,8 +8,8 @@ Events carry numbers and short codes only, never names or values. The server enf
   messages, already stripped of quoted parts and parenthesised ids by the browser);
 - at `strict` privacy the text fields are dropped (only their presence is kept): a message can
   hold a name; the code location (`where`) and the build still identify the failure. `code` and
-  `kind` are kept when they are plain codes (`too_many_values`, `needs_conversion:legacy_layout`);
-
+  `kind` are kept when they are the program's own (`too_many_values`,
+  `needs_conversion:legacy_layout`, `gene`; see `plain_value`);
 - any other string is dropped and counted.
 Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client address and
 `GLOBAL_PER_MINUTE` in all, so one client cannot flood the log; the rest are dropped and counted
@@ -18,7 +18,6 @@ Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client ad
 
 from __future__ import annotations
 
-import re
 import threading
 import time
 from typing import Annotated
@@ -26,6 +25,7 @@ from typing import Annotated
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, StringConstraints
 
+from canopy.errors import known_code
 from canopy.logs import get_logger
 
 router = APIRouter(prefix="/api/telemetry", tags=["telemetry"])
@@ -51,9 +51,20 @@ CODE_FIELDS = frozenset(
     }
 )
 TEXT_FIELDS = frozenset({"message", "code", "kind"})
-# At strict, `code` and `kind` survive when they look like this (lower-case words, `_`, `:`).
-PLAIN_CODE = re.compile(r"[a-z][a-z0-9_]*(:[a-z0-9_]+)*")
+# At strict, `code` and `kind` survive only when they are the program's own: a refusal code
+# (errors.known_code) or one of these kinds (dataset kinds, colourings, plot summaries). Any
+# other value (e.g. a name sent by mistake) is dropped (review A-M2).
+CLIENT_KINDS = frozenset(
+    {"h5ad", "anndata_zarr", "spatialdata_zarr", "obs", "gene", "none", "violin", "bars", "density"}
+)
 CODE_LIKE_FIELDS = frozenset({"code", "kind"})
+
+
+def plain_value(key: str, v: str) -> bool:
+    """Whether a `code` or `kind` value is the program's own vocabulary (kept at strict)."""
+    return known_code(v) if key == "code" else key == "kind" and v in CLIENT_KINDS
+
+
 STRING_FIELDS = CODE_FIELDS | TEXT_FIELDS  # the frontend's list must match (test)
 RATE_PER_MINUTE = 600
 ADDRESS_PER_MINUTE = 1_500
@@ -115,7 +126,7 @@ def telemetry(batch: ClientBatch, request: Request) -> None:
             if isinstance(v, str) and k not in STRING_FIELDS:
                 dropped_fields += 1
                 continue
-            plain = k in CODE_LIKE_FIELDS and isinstance(v, str) and PLAIN_CODE.fullmatch(v)
+            plain = k in CODE_LIKE_FIELDS and isinstance(v, str) and plain_value(k, v)
             if isinstance(v, str) and strict and k in TEXT_FIELDS and not plain:
                 fields[f"c_{k}"] = "(text dropped at strict)"
                 continue

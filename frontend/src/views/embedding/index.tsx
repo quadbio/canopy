@@ -387,6 +387,8 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     total,
     legend: shown?.legend,
     lasso: spec.group ? undefined : lasso,
+    naCells: colouring.missingHere ? (n ?? 0) : undefined,
+    scaleKey: `embedding:${p.embedding}:${p.dims.join(',')}`,
   };
 }
 

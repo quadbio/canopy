@@ -12,7 +12,7 @@ import { type ReactNode, useCallback, useMemo } from 'react';
 import { useGene, useGenes, useMeta, useObs, useSummary } from '../../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList, SummaryQuery } from '../../api/types';
 import { type ValueColour, ValueColourExtension } from '../../colour/gpu';
-import { MAX_VIEWS, tilesTaken, useWorkspace, type ViewSpec } from '../../state/workspace';
+import { useWorkspace, type ViewSpec } from '../../state/workspace';
 import { Field, formatCount, Help, Select } from '../../ui/controls';
 import { GeneSearch } from '../../ui/GeneSearch';
 import {
@@ -598,7 +598,6 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
   const addView = useWorkspace((s) => s.addView);
   const removeView = useWorkspace((s) => s.removeView);
   const select = useWorkspace((s) => s.select);
-  const full = useWorkspace((s) => tilesTaken(s.views) >= MAX_VIEWS);
   if (!meta.data) return null;
   if (spec.group) return <p className="muted small" data-testid="plot-companion-linked">Plots are not offered for linked views yet.</p>;
   const toggle = (on: boolean) => {
@@ -622,7 +621,7 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
   return (
     <>
       <label className="check" data-testid="plot-companion">
-        <input type="checkbox" checked={!!companion} disabled={!companion && full} onChange={(e) => toggle(e.target.checked)} />
+        <input type="checkbox" checked={!!companion} onChange={(e) => toggle(e.target.checked)} />
         Plot against a second feature
         <Help label="About plotting two features">
           <p>
@@ -632,11 +631,6 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
           </p>
         </Help>
       </label>
-      {!companion && full && (
-        <p className="muted small" data-testid="plot-companion-full">
-          The canvas is full ({MAX_VIEWS} views): close one to plot.
-        </p>
-      )}
       {companion && <FeatureField spec={companion} which="y" title="Plot against" />}
     </>
   );

@@ -800,6 +800,8 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     total: shapes?.n ?? 0,
     legend: colourCells ? colouring.legend : undefined,
     lasso: spec.group ? undefined : lasso,
+    naCells: colouring.missingHere ? (n ?? 0) : undefined,
+    scaleKey: `spatial:${system ?? ''}`,
   };
 }
 

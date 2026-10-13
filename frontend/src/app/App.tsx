@@ -9,7 +9,7 @@ import { catalog } from '../api/endpoints';
 import { metaQuery, useCatalogStatus } from '../api/queries';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
-import { FileBrowser } from '../ui/FileBrowser';
+import { FileBrowser, sharedDefaults } from '../ui/FileBrowser';
 import { JobWatcher } from './JobWatcher';
 import { Canvas } from '../views/Canvas';
 import { viewType } from '../views/registry';
@@ -109,9 +109,17 @@ function ResetView({ spec }: { spec: ViewSpec }) {
     setFailed(null);
     try {
       const meta = await qc.fetchQuery(metaQuery(spec.datasetId, spec.table));
-      const params = t.create(meta);
+      let params = t.create(meta) as Record<string, unknown> | null;
+      if (params && spec.group) {
+        // a linked group: the shared defaults of all its datasets, as when it was opened
+        // (this dataset's own keys from its defaults; the others keep theirs, B-L9)
+        const members = useWorkspace.getState().views.filter((v) => v.group === spec.group);
+        const metas = await Promise.all(members.map((v) => qc.fetchQuery(metaQuery(v.datasetId, v.table))));
+        const own = t.ownKeys ?? [];
+        params = { ...sharedDefaults(metas, params), ...Object.fromEntries(own.filter((k) => k in params!).map((k) => [k, params![k]])) };
+      }
       if (params) {
-        setParams(spec.id, params as Record<string, unknown>);
+        setParams(spec.id, params);
         event('view_reset', null, { type: spec.type });
       }
     } catch (e) {

@@ -299,6 +299,14 @@ def bundle(
         bool,
         typer.Option("--show-names", help="If refused, print the names found (to you only)"),
     ] = False,
+    accept_name: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--accept-name",
+            help="A name found by the check that may stay (repeatable): only after reading "
+            "where it appears (--show-names) and judging it harmless",
+        ),
+    ] = None,
 ) -> None:
     """Collect logs, environment, jobs and index summaries for the developer, at strict privacy,
     into one archive (checked for names known on this host before it is written)."""
@@ -308,7 +316,7 @@ def bundle(
     stamp = time.strftime("%Y%m%d-%H%M")
     target = out or Path.cwd() / f"canopy-bundle-{stamp}.tar.gz"
     try:
-        path, notes = build_bundle(cfg, target, since_days)
+        path, notes = build_bundle(cfg, target, since_days, frozenset(accept_name or ()))
     except BundleRefusedError as e:
         typer.echo(f"not written: {e}", err=True)
         if show_names:
@@ -316,7 +324,9 @@ def bundle(
                 typer.echo(f"  {f}: {name}", err=True)
             typer.echo(
                 "These are for you: do not send them. Tell the developer which kind of value "
-                "matched (e.g. a version number, a column name) and in which file.",
+                "matched (e.g. a version number, a column name) and in which file. If a match "
+                "is harmless (a common word that is also one of your names), --accept-name "
+                "NAME lets it through.",
                 err=True,
             )
         else:

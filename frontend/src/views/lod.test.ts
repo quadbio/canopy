@@ -84,3 +84,14 @@ describe('BudgetTuner', () => {
     expect(run(t, 400, 1_000_000)).toBeNull();
   });
 });
+
+describe('BudgetTuner on a 30 Hz display', () => {
+  it('does not take the display rate for a slow machine (review B-M2)', () => {
+    const t = new BudgetTuner(1000 / 30);
+    let out: number | null = null;
+    for (let i = 0; i < BudgetTuner.SAMPLE; i += 1) out = t.frame(33.4, 1_000_000) ?? out;
+    expect(out).toBeNull();
+    for (let i = 0; i < BudgetTuner.SAMPLE; i += 1) out = t.frame(70, 1_000_000) ?? out;
+    expect(out).toBeLessThan(1_000_000);
+  });
+});

@@ -12,9 +12,12 @@ Restart the demo (Ctrl+C, then `pixi run -e dev demo`) and open the link it prin
 | 5 | **Embedding** → `spatial` (in spatial.h5ad's settings) | Only that view changes: the embedding is chosen per dataset. |
 | 6 | Zoom and pan in one view; then the tile's ⤢ | The other moves along; ⤢ fits both again. |
 | 7 | **Colour by** a gene | Both coloured by the gene on one colour scale (one range for both). |
-| 8 | × on one dataset's title, then **Close all** | The other stays as an ordinary view. |
-| 9 | Tick **spatial.h5ad** and **example_with_layers.h5ad** → open linked | The second has no `celltype_harmonized`: its cells are grey, its caption says *NA*. |
-| 10 | In *extracted*, **tick all** (both regions; convert region_3 first if needed) → **Open linked spatial views** | Both regions side by side at one scale, moved together, one legend. Their own `leiden_1.0` colours disagree, so the title says *colours regenerated* and palette colours are used for both. |
+| 8 | Click another dataset in the list | No **Open** while linked views are open: a line says so, with **Close all**. |
+| 9 | **Embedding** of spatial.h5ad → `X_umap_orig`, after zooming | Views showing the same embedding share one scale; a view showing another embedding fills its own space; the others keep your zoom. |
+| 10 | × on one dataset's title, then **Close all** | The other stays as an ordinary view, then all close. |
+| 11 | Open one dataset; tick **spatial.h5ad**, **dissociated.h5ad** and **example_with_layers.h5ad** | *Open linked* waits: linked views open on an empty canvas (**Close all**, the ticks stay). |
+| 12 | **Close all**, then **Open linked embeddings** | Coloured by `celltype_harmonized` (two of the three have it). The third has none: grey cells, *NA* in its caption, and the legend's last line *NA: 8,000 cells (1 dataset without …)*. |
+| 13 | In *extracted* (after **Close all**), **tick all** (both regions; convert region_3 first if needed) → **Open linked spatial views** | Both regions side by side at one scale, moved together, one legend. Their own `leiden_1.0` colours disagree, so the title says *colours regenerated* and palette colours are used for both. |
 
 What I would like your judgement on: is ticking and *Open linked* the right way in? Is one
 legend beside the views right for 10–20 datasets (each view's title is its dataset)? Should
@@ -25,13 +28,13 @@ dataset besides the embedding?
 
 | # | Do this | You should see |
 |---|---|---|
-| 11 | Open **example_with_layers.h5ad**; tick **Plot against a second feature**; **Plot against** → *Lasso selection* | The plot asks you to draw around cells with the lasso (**lasso** in the view's title row). |
-| 12 | Click **lasso** and drag around a group of cells | An orange outline; the title row says *N selected ×*. The plot shows two bars: the selected cells and the others, stacked by cell type in the legend's colours. |
-| 13 | Click **lasso** again and draw elsewhere holding **Shift** when you release | The selection grows (both outlines shown). |
-| 14 | **Colour by** a gene (e.g. `Monocyte_m1`) | Two violins: selected (orange) and the others (grey), with the share above 0. |
-| 15 | Hide a cell type in the legend, draw a new lasso over it | Hidden cells are not selected. |
-| 16 | Try it in a spatial view (region_1) | The cells whose centres are inside are selected. |
-| 17 | × next to *N selected* | The selection and its outline go; the plot waits again. |
+| 14 | **Close all**; open **example_with_layers.h5ad**; tick **Plot against a second feature**; **Plot against** → *Lasso selection* | The plot asks you to draw around cells with the lasso (**lasso** in the view's title row). |
+| 15 | Click **lasso** and drag around a group of cells | An orange outline; the title row says *N selected ×*. The plot shows two bars: the selected cells and the others, stacked by cell type in the legend's colours. |
+| 16 | Click **lasso** again and draw elsewhere holding **Shift** when you release | The selection grows (both outlines shown). |
+| 17 | **Colour by** a gene (e.g. `Monocyte_m1`) | Two violins: selected (orange) and the others (grey), with the share above 0. |
+| 18 | Hide a cell type in the legend, draw a new lasso over it | Hidden cells are not selected. |
+| 19 | Try it in a spatial view (region_1) | The cells whose centres are inside are selected. |
+| 20 | × next to *N selected* | The selection and its outline go; the plot waits again. |
 
 Judgement wanted: should a selection also become a filter (show only these cells) or a column
 you can colour by? Is "selected vs the others" the comparison you need, or selected vs all?

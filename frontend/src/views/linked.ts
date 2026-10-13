@@ -46,7 +46,9 @@ export const useLinked = create<LinkedStore>()((set) => ({
       const g = { ...(s.entries[group] ?? {}) };
       if (entry) g[view] = entry;
       else delete g[view];
-      return { entries: { ...s.entries, [group]: g } };
+      const entries = { ...s.entries, [group]: g };
+      if (!Object.keys(g).length) delete entries[group]; // a closed group (B-L6)
+      return { entries };
     }),
 }));
 
@@ -134,7 +136,10 @@ export function groupRange(entries: LinkedEntry[]): [number, number] | null {
 
 /** The legend of a linked group: its views' legends together (categories with their counts
  * added up; numbers over one range). The views' colours already agree. */
-export function mergeLegends(legends: (ColourLegendData | undefined)[]): ColourLegendData | undefined {
+export function mergeLegends(
+  legends: (ColourLegendData | undefined)[],
+  na?: { cells: number; datasets: number },
+): ColourLegendData | undefined {
   const ls = legends.filter((l): l is ColourLegendData => !!l);
   if (!ls.length) return undefined;
   const first = ls[0];
@@ -173,5 +178,48 @@ export function mergeLegends(legends: (ColourLegendData | undefined)[]): ColourL
     extended: cats.some((l) => l.extended),
     custom,
     ...(cats.some((l) => l.regenerated) ? { regenerated: true } : {}),
+    ...(na && na.datasets ? { na } : {}),
   };
+}
+
+export interface GroupScheme {
+  colours: GroupColours | null;
+  range: [number, number] | null;
+}
+
+// Per state of a group's entries: its schemes, made once for all of its views (review B-M3).
+const perEntries = new WeakMap<object, Map<string, GroupScheme>>();
+// The last scheme handed out per group, colouring and palette: given again while equal, so the
+// views' colour tables and layers are not rebuilt when another view publishes the same facts.
+const lastScheme = new Map<string, { sig: string; scheme: GroupScheme }>();
+
+/** The colours and number range of a group for one colouring, the same object while unchanged. */
+export function groupScheme(
+  group: string,
+  entries: Record<string, LinkedEntry> | undefined,
+  key: string,
+  palette: PaletteName,
+): GroupScheme | null {
+  if (!entries) return null;
+  const id = `${group}|${key}|${palette}`;
+  let cache = perEntries.get(entries);
+  if (!cache) perEntries.set(entries, (cache = new Map()));
+  const hit = cache.get(id);
+  if (hit) return hit;
+  const same = Object.values(entries).filter((e) => e.key === key);
+  const scheme: GroupScheme = {
+    colours: same.some((e) => e.labels) ? groupColours(same, palette) : null,
+    range: groupRange(same),
+  };
+  const sig = JSON.stringify([
+    scheme.range,
+    scheme.colours ? [...scheme.colours.colourOf] : null,
+    scheme.colours?.extended,
+    scheme.colours?.regenerated,
+  ]);
+  const last = lastScheme.get(id);
+  const out = last && last.sig === sig ? last.scheme : scheme;
+  lastScheme.set(id, { sig, scheme: out });
+  cache.set(id, out);
+  return out;
 }

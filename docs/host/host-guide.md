@@ -74,9 +74,17 @@ disk (first host test: the job list stalled 1–2 s while a conversion started).
 cache can stay on the network disk.
 
 **Conversions.** On a large host, more can run at once and each can use more memory, so a short
-conversion does not wait behind a long one (first host test: a 17 s conversion waited 48 min):
-`[jobs] max_running = 3` and `memory_gb = 16` need 3 × 1.5 × 16 = 72 GB free, within
-`budget_gb`.
+conversion does not wait behind a long one (first host test: a 17 s conversion waited 48 min).
+The memory budget holds the cache *and* the running conversions; each conversion reserves
+1.5 × `memory_gb` plus what it reads whole (a few GB for a 2 M-cell file), and may grow
+0.5 × `memory_gb` + 1 GB beyond that before it is stopped. So:
+
+- `budget_gb` ≥ `cache_gb` + `max_running` × (1.5 × `memory_gb` + 4), and
+- your account's memory limit ≥ `budget_gb` + `max_running` × (0.5 × `memory_gb` + 1).
+
+For example `budget_gb = 128`, `cache_gb = 32`, `max_running = 3`, `memory_gb = 16`
+(32 + 3 × 28 = 116 ≤ 128; the limit must allow 128 + 27 = 155 GB). Canopy warns at start
+(`memory_budget_above_limit`) when the second line does not hold.
 
 **Memory.** Your account may have a memory limit below the machine's memory (Linux "cgroups",
 often set for all your sessions together). Look it up:
@@ -152,13 +160,16 @@ cookie; an old link's cookie never blocks a new link.
    `strict` privacy whatever privacy the server ran with (names as tokens; free text, also
    libraries' own messages, dropped), crash locations, the environment and summaries of jobs and
    the index. It refuses to write if it finds a file, folder, column or element name known on
-   the host. Gene names, version numbers and names shorter than 4 characters are not searched
-   for: read it. **Open it and read `MANIFEST.md` before copying it out.**
+   the host. Gene names, bare version numbers (`0.8.0`) and names shorter than 4 characters are
+   not searched for: read it. **Open it and read `MANIFEST.md` before copying it out.**
 
    If it refuses ("not written: a name known on this host was found …"), add `--show-names`
    to see which names matched, on your terminal only. Do not send the names. Tell the developer
    what kind of value matched (a version number, a column name, a word like `gene`) and in
-   which file of the bundle.
+   which file of the bundle. If a match is harmless (one of your names is also an ordinary word
+   the bundle uses), you may let it through after reading where it appears:
+   `--accept-name NAME` (repeatable); `MANIFEST.md` then says how many names were let through,
+   never which.
 3. A page that hangs: `kill -USR1 $(cat <state_dir>/server.lock)` writes the server's stacks to
    the log folder; then make the bundle.
 4. The developer may name tokens like `h_fb26d42600`. On the host,
@@ -198,7 +209,15 @@ Use `canopy …` directly instead of `pixi run --frozen canopy …` in the steps
 ## 11. Moving to a new release
 
 The state (access token, index), cache and logs live in the folders named in `config.toml`, not
-in the release folder, so a new release keeps them, and the link stays the same.
+in the release folder, so a new release keeps them, and the link stays the same: **as long as
+`cache_dir`, `state_dir` and `[logging] dir` are absolute paths** (the template's are). A
+relative path is resolved against the config's own folder, so in the new release folder it
+would start empty: a new access link, an empty index, every conversion again. Check before you
+start the new release:
+
+```bash
+grep -E '^(cache_dir|state_dir|dir) ' canopy-<new>/config.toml   # each must start with /
+```
 
 ```bash
 cd /scratch/$USER/canopy
@@ -211,4 +230,10 @@ pixi run --frozen canopy --version               # shows the new commit
 ```
 
 Stop the old server (`Ctrl-C` in its tmux window), then start the new one there, as in section
-6. Keep the old folder until the new one works; going back is starting the old one again.
+6. Started as a user service instead: `systemctl --user stop canopy`, then the `systemd-run`
+line of section 6 again **from the new folder** (it names the folder and the program).
+
+Keep the old folder until the new one works; going back is starting the old one again. That
+holds while the new release has not converted anything in a newer format: a release note says
+so when a release changes the format of converted copies (then the old release ignores them and
+converts again).

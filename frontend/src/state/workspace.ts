@@ -8,7 +8,8 @@
 // Linked groups (S7b): views opened together from several datasets carry the same `group`.
 // They share one tile, pan and zoom together and share their settings: a change made in one
 // applies to all, except the view type's `ownKeys` (e.g. the embedding, whose names differ
-// between datasets). A group counts as one of the MAX_VIEWS tiles.
+// between datasets). A group and independent views never share the canvas (owner, S7b review):
+// a group is opened on an empty canvas and fills it; while one is open, nothing else opens.
 //
 // The last settings of each dataset (per table and view type) are remembered when they change,
 // so opening a dataset again continues where it was left (`recall`); "Reset to defaults" in the
@@ -75,11 +76,15 @@ const VERSION = 2;
 const newId = () => `v${Math.random().toString(36).slice(2, 8)}`;
 const newGroupId = () => `g${Math.random().toString(36).slice(2, 8)}`;
 
-/** Tiles the views take: one per independent view, one per group. */
-export function tilesTaken(views: Pick<ViewSpec, 'id' | 'group'>[]): number {
+/** Tiles the views take: one per independent view, one per group; a plot below its view takes
+ * none (it shares the view's tile). */
+export function tilesTaken(views: Pick<ViewSpec, 'id' | 'group' | 'params'>[]): number {
   const groups = new Set<string>();
+  const ids = new Set(views.map((v) => v.id));
   let n = 0;
   for (const v of views) {
+    const follows = v.params.follows;
+    if (typeof follows === 'string' && ids.has(follows)) continue;
     if (!v.group) n += 1;
     else if (!groups.has(v.group)) {
       groups.add(v.group);
@@ -163,7 +168,14 @@ export function restoreViews(raw: unknown): ViewSpec[] {
   for (const v of out) if (v.group && sizes.get(v.group)! < 2) delete v.group;
   // a plot whose view is gone (not restored) goes too
   const ids = new Set(out.map((v) => v.id));
-  return out.filter((v) => typeof v.params.follows !== 'string' || ids.has(v.params.follows));
+  const kept = out.filter((v) => typeof v.params.follows !== 'string' || ids.has(v.params.follows));
+  // a linked group alone (the first, at most MAX_GROUP views), else at most MAX_VIEWS tiles
+  // (older or edited saves, review B-L6)
+  const group = kept.find((v) => v.group)?.group;
+  if (group) return kept.filter((v) => v.group === group).slice(0, MAX_GROUP);
+  const out2: ViewSpec[] = [];
+  for (const v of kept) if (tilesTaken([...out2, v]) <= MAX_VIEWS) out2.push(v);
+  return out2.filter((v) => typeof v.params.follows !== 'string' || out2.some((x) => x.id === v.params.follows));
 }
 
 /** Used when browser storage is blocked or missing: the workspace then lasts for this page only. */
@@ -251,7 +263,9 @@ export const useWorkspace = create<Workspace>()(
           return { ticked: [...t] };
         }),
       addView: (v, after) => {
-        if (tilesTaken(get().views) >= MAX_VIEWS) return null;
+        // nothing opens next to a linked group (owner)
+        const all = get().views;
+        if (all.some((x) => x.group) || tilesTaken([...all, { ...v, id: '(new)' }]) > MAX_VIEWS) return null;
         const id = newId();
         set((s) => {
           const at = after ? s.views.findIndex((x) => x.id === after) + 1 : 0;
@@ -262,7 +276,8 @@ export const useWorkspace = create<Workspace>()(
         return id;
       },
       addGroup: (vs) => {
-        if (vs.length < 1 || tilesTaken(get().views) >= MAX_VIEWS) return null;
+        // a group opens on an empty canvas (owner)
+        if (vs.length < 1 || get().views.length > 0) return null;
         const group = newGroupId();
         const added = vs.slice(0, MAX_GROUP).map((v) => ({ ...v, id: newId(), ...(vs.length > 1 ? { group } : {}) }));
         set((s) => ({ views: [...s.views, ...added], selected: added[0].id }));
@@ -311,7 +326,8 @@ export const useWorkspace = create<Workspace>()(
       },
       select: (id) => set({ selected: id }),
       selectDataset: (id) => set({ browserSelection: id }),
-      reset: () => set({ views: [], selected: null, browserSelection: null, ticked: [] }),
+      // (ticks stay: closing the views is the way to open the ticked datasets linked)
+      reset: () => set({ views: [], selected: null, browserSelection: null }),
     }),
     {
       name: STORAGE_KEY,

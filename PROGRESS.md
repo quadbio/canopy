@@ -370,3 +370,17 @@ Resume rule: read this file, then continue with the first unchecked step.
   cells vs the others, computed in the browser. Tests: `selection.test.ts` (6), e2e lasso. The
   linked spatial e2e moved to the end of browse.spec.ts (it converts region_3, which two tests
   there need unconverted).
+- 2026-10-13 Owner: plots and lasso staying out of linked groups, and page-only selections, are
+  right. Cold review of 54855a9..0b0a822 launched before the S7b–c demo
+  (../reviews/code_review_S7bc/: A backend/ops/bundle privacy, B frontend S7b–c, LOD, hover).
+- 2026-10-13 S7b–c cold review (../reviews/code_review_S7bc/): A backend/ops 2 high (bundle
+  refuses on common words with no way out; version filter hides dated names), 4 medium, 6 low;
+  B frontend 1 high (lasso 30 px above the pointer), 5 medium, 13 low. Owner: go ahead, option 2
+  (one scale per coordinates in a group), and a linked group and independent views are mutually
+  exclusive (Close all offered; ticks kept). Batch R9 DONE (table:
+  ../reviews/code_review_S7bc/R9-fixes.md): bundle check without its own text, `--accept-name`,
+  bare versions only; refusal codes logged; strict keeps the server's own codes only; host guide
+  (absolute paths on upgrade, conversion sizing); trial scripts; lasso position and lifetime;
+  scale classes and refits keeping the user's zoom; tuner on drags only, display-relative,
+  per session; group colours once per group; parallel *Open linked*; most-shared default
+  column and an NA line; group reset; restore caps; stale hover text. Linux trial not re-run.

@@ -57,7 +57,7 @@ mkdir -p "$run"
 sed -e "s#/scratch/YOUR_USER/canopy#$run#g" \
   -e 's#^name = "lab".*#name = "examples"#' \
   -e 's#^path = "/path/to/the/lab/share/projects".*#path = "/examples"#' \
-  -e 's#^budget_gb = .*#budget_gb = 3#' -e 's#^cache_gb = .*#cache_gb = 1.5#' \
+  -e 's#^budget_gb = .*#budget_gb = 2.25#' -e 's#^cache_gb = .*#cache_gb = 1.5#' \
   -e 's#^memory_gb = .*#memory_gb = 0.5#' -e 's#^memory_sample_interval = .*#memory_sample_interval = 2#' \
   config.host.example.toml >config.toml
 check "canopy link (config valid, prints the link)" bash -c 'pixi run --frozen canopy link --config config.toml | grep -q "token="'
@@ -68,7 +68,8 @@ for _ in $(seq 1 120); do
   curl -sf http://127.0.0.1:8765/api/health >/dev/null && break
   sleep 1
 done
-pid=$(cat "$run/state/server.lock") # the server's own process id (as the guide says)
+pid=$(cat "$run/state/server.lock" 2>/dev/null || true) # the server's own process id (as the guide says)
+check "server.lock holds the process id" test -n "$pid"
 check "server answers /api/health" curl -sf http://127.0.0.1:8765/api/health
 check "no token in output that is not a terminal" bash -c '! grep -q "token=" serve.out && grep -q "canopy link" serve.out'
 tok=$(cat "$run/state/access_token")
@@ -84,12 +85,17 @@ check "log files are 600" bash -c "for f in $run/logs/*.jsonl; do test \$(stat -
 
 # --- memory: the container's limit is read, and a budget above it is warned about
 sleep 3 # a memory sample or two
-check "cgroup v2 limit read at start (cgroup_limit_gb ≈ 4)" bash -c "grep -h '\"event\": *\"startup\"\\|\"event\":\"startup\"' $run/logs/canopy-server-*.jsonl | grep -q 'cgroup_limit_gb'"
+check "cgroup v2 limit read at start (cgroup_limit_gb ≈ 4)" bash -c "grep -ho '\"cgroup_limit_gb\": *[0-9.]*' $run/logs/canopy-server-*.jsonl | head -1 | grep -Eq ': *(3\.9|4\.[01]|4$)'"
 grep -ho '"cgroup_[a-z_]*":[^,]*' "$run"/logs/canopy-server-*.jsonl | sort | uniq | head -8 | sed 's/^/      /' | tee -a "$summary"
-check "no budget warning with budget 3 GB under a 4 GB limit" bash -c "! grep -q memory_budget_above_limit $run/logs/canopy-server-*.jsonl"
+check "no budget warning: budget 2.25 GB + a worker's overshoot (1.25 GB) under a 4 GB limit" bash -c "! grep -q memory_budget_above_limit $run/logs/canopy-server-*.jsonl"
 
 # --- the data: the catalogue finds the examples; a dataset opens; a plot summary is computed
-ids=$(curl -s "${auth[@]}" "http://127.0.0.1:8765/api/catalog/search?q=dissociated")
+# the first scan may still run: ask again for up to 30 s
+for _ in $(seq 1 30); do
+  ids=$(curl -s "${auth[@]}" "http://127.0.0.1:8765/api/catalog/search?q=dissociated")
+  case "$ids" in *'"id"'*) break ;; esac
+  sleep 1
+done
 id=$(echo "$ids" | pixi run --frozen python -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])' 2>/dev/null)
 check "catalogue lists dissociated.h5ad" test -n "$id"
 check "dataset meta" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/meta")" = 200
@@ -110,7 +116,7 @@ check "bundle file is 600" test "$(mode /out/bundle.tar.gz)" = 600
 # --- stop: the server ends cleanly
 kill "$pid"
 for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-check "server stopped on SIGTERM" bash -c "! kill -0 $pid 2>/dev/null"
+check "server stopped on SIGTERM" bash -c "test -n '$pid' && ! kill -0 $pid 2>/dev/null"
 check "shutdown logged" bash -c "grep -q '\"shutdown\"' $run/logs/canopy-server-*.jsonl"
 
 # --- a budget above the limit is said at start

@@ -90,3 +90,23 @@ def test_a_budget_above_the_limit_is_warned_about_at_start(
     with TestClient(app_module.create_app(cfg, background=False)):
         pass
     assert "memory_budget_above_limit" in caplog.text and "'limit_gb': 4.0" in caplog.text
+
+
+def test_no_budget_warning_within_the_limit(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Within the limit, with room for the workers' overshoot, nothing is said (review A-L2)."""
+    from fastapi.testclient import TestClient
+
+    from canopy import app as app_module
+
+    monkeypatch.setattr(app_module, "memory_total", lambda: 64 * 2**30)
+    cfg.memory.budget_gb = 32
+    cfg.jobs.max_running, cfg.jobs.memory_gb = 2, 8  # overshoot 2 × 5 = 10 GB: 42 < 57.6
+    with TestClient(app_module.create_app(cfg, background=False)):
+        pass
+    assert "memory_budget_above_limit" not in caplog.text
+    cfg.jobs.max_running, cfg.jobs.memory_gb = 3, 16  # 32 + 27 = 59 > 57.6
+    with TestClient(app_module.create_app(cfg, background=False)):
+        pass
+    assert "memory_budget_above_limit" in caplog.text

@@ -442,11 +442,16 @@ def timed(stage: str, **fields: Any) -> Iterator[dict[str, Any]]:
     except Exception as e:
         peak = _PEAK.close(holder)
         if getattr(e, "expected", False):
+            from canopy.errors import known_code
+
+            code = getattr(e, "code", None)
             log.info(
                 "stage_refused",
                 stage=name,
                 ms=_ms(t0),
                 exc_type=type(e).__name__,
+                # the refusal's code (e.g. too_many_values), when it is one of the program's
+                code=code if isinstance(code, str) and known_code(code) else None,
                 **fields,
                 **extra,
             )

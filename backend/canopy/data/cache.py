@@ -100,7 +100,11 @@ def store_table(cache_dir: Path, fp: Fingerprint, table: str | None = None) -> S
     with _STORE_LOCKS_GUARD:
         lock = _STORE_LOCKS.setdefault(key, threading.Lock())
     with lock:
-        return _store_table(*key)
+        out = _store_table(*key)
+    # described (and cached): the lock is not needed any more (the map stays small, review A-L1)
+    with _STORE_LOCKS_GUARD:
+        _STORE_LOCKS.pop(key, None)
+    return out
 
 
 _STORE_LOCKS: dict[tuple[str, int, str], threading.Lock] = {}

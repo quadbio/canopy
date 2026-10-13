@@ -29,6 +29,53 @@ STATUS_CODES = {
 }
 
 
+# The program's own refusal codes: what the server answers and what the browser reports back.
+# At strict privacy only these are kept from client events (review A-M2).
+REFUSAL_CODES = frozenset(
+    {
+        "vanished",
+        "unknown_dataset",
+        "unknown_root",
+        "unknown_job",
+        "unknown_element",
+        "unknown_matrix",
+        "unknown_gene",
+        "unknown_folder",
+        "path_escape",
+        "invalid_folder",
+        "invalid_q",
+        "invalid_features",
+        "invalid_dims",
+        "not_convertible",
+        "already_converted",
+        "too_many_values",
+        "too_many_categories",
+        "error",  # the browser's code for a failure without one
+    }
+)
+NEEDS_CONVERSION_REASONS = frozenset(
+    {
+        "legacy_layout",
+        "matrix_csr",
+        "no_table",
+        "non_numeric_embedding",
+        "too_many_values",
+        "unsupported_column",
+    }
+)
+DATASET_STATES = frozenset({"inspected", "unsupported", "failed", "discovered"})
+
+
+def known_code(v: str) -> bool:
+    """Whether `v` is one of the program's own codes (never a name or a value)."""
+    if v in REFUSAL_CODES or v in STATUS_CODES.values():
+        return True
+    family, _, rest = v.partition(":")
+    return (family == "needs_conversion" and rest in NEEDS_CONVERSION_REASONS) or (
+        family == "state" and rest in DATASET_STATES
+    )
+
+
 class ApiError(Exception):
     """An expected failure with a stable code (e.g. `needs_conversion:legacy_layout`)."""
 

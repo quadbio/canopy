@@ -97,7 +97,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .tree-row:hover { background: var(--surface-2); }
 .tree-item { position: relative; }
 .tree-item > .tick { position: absolute; top: 50%; transform: translateY(-50%); margin: 0; z-index: 1; }
-.tree-item > .tick-all { position: absolute; right: 36px; top: 3px; z-index: 1; }
+.tree-item > .tick-all { position: absolute; right: 40px; top: 3px; z-index: 1; padding: 0 4px; background: var(--surface); }
 .linked-open h3 { display: flex; align-items: center; gap: var(--space-1); }
 .tree-row.selected { background: var(--accent-soft); }
 .tree-row.dim { opacity: 0.6; }
@@ -483,3 +483,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   background: color-mix(in srgb, #e65014 14%, var(--surface));
   font-size: var(--text-xs);
 }
+.close-first { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.close-first p { margin: 0; flex: 1 1 160px; }
+.lasso-hint { position: absolute; left: 8px; top: 4px; margin: 0; padding: 2px 6px; border-radius: var(--radius-sm); background: var(--surface); font-size: var(--text-xs); pointer-events: none; }
+.legend-na { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--text-muted); font-size: var(--text-xs); }

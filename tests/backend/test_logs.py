@@ -79,6 +79,7 @@ def test_timed_logs_an_expected_refusal_as_info(cfg: Config) -> None:
     events = log_events()
     ev = next(e for e in events if e["event"] == "stage_refused")
     assert ev["level"] == "info" and ev["exc_type"] == "NeedsConversionError"
+    assert ev["code"] == "too_many_values"  # why it was refused (review A-M1)
     assert "exc_frames" not in ev
     assert not any(e["event"] == "stage_failed" for e in events)
 
@@ -326,3 +327,12 @@ def test_token_find_names_a_strict_token(cfg: Config, tmp_path: Path) -> None:
     t = token("PRIVATE.h5ad", installation_salt(cfg.cache_dir))
     r = CliRunner().invoke(app, ["token", "find", t, "--config", str(conf)])
     assert r.exit_code == 0 and "PRIVATE.h5ad" in r.output
+
+
+def test_a_refusal_with_a_name_as_its_message_logs_only_a_known_code(cfg: Config) -> None:
+    from canopy.data.reader import UnknownElementError
+
+    with pytest.raises(UnknownElementError), timed("load_array"):
+        raise UnknownElementError("SECRETCOLUMN")
+    ev = next(e for e in log_events() if e["event"] == "stage_refused")
+    assert ev["code"] == "unknown_element" and "SECRETCOLUMN" not in str(ev)

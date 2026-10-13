@@ -70,6 +70,21 @@ test('two datasets opened linked share settings, legend, zoom; the embedding sta
   await expect.poll(() => z(1)).toBeGreaterThan(b0 + 0.5);
   await expect.poll(async () => (await z(0)) - a0).toBeCloseTo((await z(1)) - b0, 1);
 
+  // nothing opens beside a linked group (owner): the way out is Close all
+  await page.getByTestId('dataset-row').filter({ hasText: 'example_with_layers' }).click();
+  await expect(page.getByTestId('open-blocked')).toBeVisible();
+  await expect(page.getByTestId('open-dataset')).toHaveCount(0);
+
+  // one view showing other coordinates: fitted on its own; the other keeps the user's zoom
+  const zb = await z(1);
+  await cells.nth(0).getByRole('button', { name: 'spatial.h5ad' }).click();
+  await page.getByTestId('embedding-select').click();
+  await page.getByRole('option', { name: /^X_umap_orig/ }).click();
+  await expect(cells.nth(0)).toHaveAttribute('data-status', 'ready');
+  await page.waitForTimeout(300);
+  expect(await z(1)).toBeCloseTo(zb, 3);
+  expect(await drawnFraction(page, cells.nth(0))).toBeGreaterThan(0.01);
+
   // removing one leaves an independent view
   await cells.nth(1).getByRole('button', { name: 'Remove from the linked views' }).click();
   await expect(page.getByTestId('group-tile')).toHaveCount(0);
@@ -80,17 +95,25 @@ test('two datasets opened linked share settings, legend, zoom; the embedding sta
 test('a dataset without the shared column shows its cells as NA', async ({ page }) => {
   const errors = collectErrors(page);
   await freshPage(page);
+  // with a view open, linked opening waits for Close all (owner)
+  await page.getByTestId('dataset-row').filter({ hasText: 'example_with_layers' }).click();
+  await page.getByTestId('open-dataset').click();
   await tickRow(page, 'spatial.h5ad');
+  await tickRow(page, 'dissociated.h5ad');
   await tickRow(page, 'example_with_layers');
+  await expect(page.getByTestId('linked-blocked')).toBeVisible();
+  await page.getByTestId('linked-blocked').getByRole('button', { name: 'Close all' }).click();
   await page.getByTestId('open-linked').click();
   const cells = page.getByTestId('view-cell');
-  await expect(cells).toHaveCount(2);
-  for (const k of [0, 1]) await expect(cells.nth(k)).toHaveAttribute('data-status', 'ready');
-  // no column in common: the first dataset's colouring, missing in the second
-  await expect(cells.nth(1).getByTestId('view-caption')).toContainText('NA');
+  await expect(cells).toHaveCount(3);
+  for (const k of [0, 1, 2]) await expect(cells.nth(k)).toHaveAttribute('data-status', 'ready');
+  // coloured by the column most of them have (B-M5); the third lacks it: NA, said in the legend
+  await expect(page.getByTestId('legend')).toContainText('celltype_harmonized');
+  await expect(cells.nth(2).getByTestId('view-caption')).toContainText('NA');
+  await expect(page.getByTestId('legend-na')).toContainText('8,000 cells (1 dataset');
   await expect(page.getByTestId('legend')).toHaveCount(1);
   await page.waitForTimeout(300);
-  expect(await drawnFraction(page, cells.nth(1))).toBeGreaterThan(0.01);
+  expect(await drawnFraction(page, cells.nth(2))).toBeGreaterThan(0.01);
   expect(errors).toEqual([]);
 });
 
