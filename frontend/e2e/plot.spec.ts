@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { collectErrors, drawnFraction, freshPage, openDataset } from './helpers';
+import { collectErrors, colourShare, drawnFraction, freshPage, openDataset } from './helpers';
 
 // S7 plot (ADR 0013): "Plot against a second feature" in an embedding's settings opens a plot
 // beside it whose first feature is the embedding's colour: violins, composition, scatter, density.
@@ -30,7 +30,11 @@ test('plot against a second feature: follows the embedding colour, closes with i
   const fill = await cell.getByTestId('violin').filter({ hasText: 'T cell:' }).locator('polygon').getAttribute('fill');
   const legend = page.getByTestId('legend');
   await expect(legend).toHaveCount(1); // the embedding's legend controls the plot's categories
-  await legend.getByRole('button', { name: /cell_type/ }).click(); // collapsed in the narrower cell
+  // the plot takes the bottom third of the embedding's tile: the embedding keeps its width
+  const [eb, pb] = [(await cells.first().boundingBox())!, (await cell.boundingBox())!];
+  expect(Math.abs(eb.width - pb.width)).toBeLessThan(3);
+  expect(pb.y).toBeGreaterThan(eb.y + eb.height - 4);
+  expect(pb.height).toBeLessThan(eb.height);
   const tcell = legend.locator('.legend-row').filter({ hasText: 'T cell' }).locator('.swatch');
   expect((await tcell.evaluate((e) => getComputedStyle(e).backgroundColor)).replace(/\s/g, '')).toBe(fill);
   // a category hidden in the embedding leaves the plot
@@ -77,6 +81,23 @@ test('plot against a second feature: follows the embedding colour, closes with i
     }
   }
   expect(tip).toMatch(/^total_counts: .+ · Monocyte_m1: /);
+  // panned left and down, points beyond the axes are covered (not drawn over the tick labels)
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.8, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: 'test-results/screens/plot-scatter-panned.png' });
+  const pink = await legend
+    .nth(1)
+    .locator('.legend-row')
+    .filter({ hasText: 'Monocyte' })
+    .locator('.swatch')
+    .evaluate((e) => getComputedStyle(e).backgroundColor.match(/\d+/g)!.slice(0, 3).map(Number) as [number, number, number]);
+  const margin = 48 / box.width; // the y axis' room
+  expect(await colourShare(page, cell, pink, 40, { x0: margin + 0.01, x1: margin + 0.2 })).toBeGreaterThan(0); // up to the axis
+  expect(await colourShare(page, cell, pink, 40, { x0: 0, x1: margin - 0.005 })).toBe(0); // none beyond it
+  await cell.getByLabel('Fit to data').click();
 
   // the plot's own settings: the first feature is shown, not chosen; the same as a density map
   await cell.locator('.view-title').click();

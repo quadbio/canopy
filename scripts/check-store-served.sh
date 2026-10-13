@@ -4,7 +4,13 @@
 set -euo pipefail
 tmp=$(mktemp -d)
 pid=""
-cleanup() { [ -n "$pid" ] && kill "$pid" 2>/dev/null; rm -rf "$tmp"; }
+# wait for the server to exit before removing its folder (it may still be writing its cache)
+cleanup() {
+  if [ -n "$pid" ] && kill "$pid" 2>/dev/null; then
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  fi
+  rm -rf "$tmp" || true
+}
 trap cleanup EXIT
 
 version=0123456789abcdef

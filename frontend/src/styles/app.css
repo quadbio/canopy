@@ -157,6 +157,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
   text-overflow: ellipsis;
 }
 .view-header {
+  position: relative; /* above a view's overlay (axes and their mask) */
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -446,5 +448,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 .axis text { fill: var(--text-muted); font-size: 11px; font-family: var(--font-sans); }
 .axis line, .axis path { stroke: var(--border-strong, var(--text-muted)); stroke-width: 1; fill: none; }
 .axis .label { fill: var(--text); font-size: 12px; }
+.axis .axis-mask rect { fill: var(--canvas-bg); stroke: none; }
 .chart { position: relative; width: 100%; height: 100%; min-height: 120px; }
 .axis-note { fill: var(--text-muted); font-size: 10px; }

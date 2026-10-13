@@ -539,7 +539,7 @@ function PlotPanel({ spec }: { spec: ViewSpec<PlotParams> }) {
 }
 
 /** "Plot against a second feature" in an embedding or spatial view's settings: ticked, a plot
- * view opens beside it whose first feature is the view's colour and whose second is chosen
+ * view opens below it (a third of its tile) whose first feature is the view's colour and whose second is chosen
  * here; unticked (or the view closed), the plot closes. */
 export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
   const meta = useMeta(spec.datasetId, spec.table);
@@ -564,7 +564,7 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
         title: `${spec.title} · plot`,
         params: companionParams(meta.data!, spec.id, spec.params as unknown as ColourParams) as never,
       },
-      spec.id, // beside its view
+      spec.id, // next to its view in the list (the canvas puts it in the view's tile)
     );
     // the settings stay on this view, where the second feature is chosen
     if (id) select(spec.id);
@@ -576,7 +576,7 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
         Plot against a second feature
         <Help label="About plotting two features">
           <p>
-            Opens a plot beside this view: the colour feature above against a second one chosen here. Categories against
+            Opens a plot below this view: the colour feature above against a second one chosen here. Categories against
             numbers give violins, two category columns the composition (stacked bars), two numbers a scatter or a density
             map. Category colours and hidden categories are this view's.
           </p>

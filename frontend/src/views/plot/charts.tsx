@@ -386,6 +386,12 @@ export function scatterAxes(
     const right = rect.width - (taken.right ?? 0);
     return (
       <svg width={rect.width} height={rect.height} className="axis" data-testid="scatter-axes">
+        {/* points panned beyond the axes are covered: the plotting area ends at the axes */}
+        <g className="axis-mask" data-testid="axis-mask">
+          <rect x={0} y={0} width={left} height={rect.height} />
+          <rect x={0} y={bottom} width={rect.width} height={rect.height - bottom} />
+          <rect x={0} y={0} width={rect.width} height={top} />
+        </g>
         <line x1={left} x2={left} y1={top} y2={bottom} />
         <line x1={left} x2={right} y1={bottom} y2={bottom} />
         {xt.map((t) => {

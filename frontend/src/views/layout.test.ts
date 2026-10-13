@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fitBounds, gridCells, resizeView } from './layout';
+import { COMPANION_SHARE, fitBounds, gridCells, resizeView, viewCells } from './layout';
 
 describe('gridCells', () => {
   it('lays out views as square as possible', () => {
@@ -49,5 +49,24 @@ describe('fitBounds with insets and flipped y', () => {
   it('moves the centre the other way when y grows downwards', () => {
     const v = fitBounds([0, 0, 100, 100], { width: 200, height: 220 }, 0, 20, true);
     expect(v.target[1]).toBeCloseTo(45);
+  });
+});
+
+describe('viewCells', () => {
+  it('gives a plot the bottom third of the tile of the view it follows', () => {
+    const [a, p] = viewCells(['a', 'p'], [null, 'a'], 900, 601, 1);
+    expect(a).toEqual({ x: 0, y: 0, width: 900, height: 400 });
+    expect(p).toEqual({ x: 0, y: 401, width: 900, height: Math.round(601 * COMPANION_SHARE) });
+  });
+  it('tiles the other views as before, companions inside their views\' tiles', () => {
+    const cells = viewCells(['a', 'b', 'pa', 'pb'], [null, null, 'a', 'b'], 800, 600, 0);
+    expect(cells[0].x).toBe(0);
+    expect(cells[1].x).toBe(400); // two tiles side by side, not four
+    expect(cells[2].x).toBe(0);
+    expect(cells[3].x).toBe(400);
+    expect(cells[2].y).toBe(cells[0].height);
+  });
+  it('treats a plot whose view is gone as a view of its own', () => {
+    expect(viewCells(['p'], ['gone'], 800, 600)).toEqual(gridCells(1, 800, 600));
   });
 });

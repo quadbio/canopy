@@ -12,7 +12,7 @@ The full review (B-M6) noted that the view contract knew only zoomable maps.
 - **A plot belongs to a view** (revised after the owner's first look, same day): not opened on
   its own from the dataset list, but by ticking *Plot against a second feature* (unticked by
   default) in an embedding's or spatial view's settings, under *Colour by*. A plot view opens
-  beside it (`params.follows` = that view's id); its first feature (x) is always that view's
+  below it (`params.follows` = that view's id); its first feature (x) is always that view's
   colour (column or gene), its second is chosen in the same settings (*Plot against*). Unticking,
   or closing the view, closes the plot (`removeView`). A view of its own rather than a window
   floating over the map: it keeps the GPU scatter, the server summaries, its own pan and zoom
@@ -20,6 +20,10 @@ The full review (B-M6) noted that the view contract knew only zoomable maps.
   view's colour column, that view's colour settings apply (palette, colours picked by hand,
   hidden categories) and its legend controls them; the plot shows none. A free plot (`follows`
   null) is still understood (restored workspaces), but no longer offered.
+- **Layout** (owner, S7a demo): the plot does not take a tile of the grid; it takes the bottom
+  third of its view's tile (`viewCells`, `COMPANION_SHARE`), so the view keeps its width and,
+  with several datasets open, each plot stays under its own view. The scatter's axes cover what
+  is panned beyond them (the plotting area ends at the axes); the view title stays above.
 - **View contract** (`views/registry.ts`):
   - `ViewOutput.content`: a chart drawn in the page (SVG) instead of map layers, shown in the
     view's cell below its title and left of an open legend; nothing pans or zooms.
@@ -73,7 +77,7 @@ The full review (B-M6) noted that the view contract knew only zoomable maps.
   numpy calculations (zeros of genes included, missing values counted), ETag, wrong kinds.
 - `src/views/plot/plot.test.ts`, `axes.test.ts`: plot choice, feature kinds, defaults, scatter
   positions, ticks.
-- e2e `plot.spec.ts`: unticked by default; ticked, a plot opens beside the embedding; violins in
+- e2e `plot.spec.ts`: unticked by default; ticked, a plot opens in the bottom third of the embedding's tile; violins in
   the embedding legend's colours, a category hidden there leaves, a gene's violins with shares
   above 0, composition, a change of Colour by changes the plot (scatter with axes and hover),
   density, unticking and closing the view close the plot.

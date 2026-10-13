@@ -307,3 +307,9 @@ Resume rule: read this file, then continue with the first unchecked step.
   hidden rows in bars, idle status, stale dim, companion beside its view, full-canvas notice,
   orphan drop. 283 backend, 84 unit, 26 e2e (also 26 on GPU at 2x).
   - Next: owner's S7a demo review (docs/demo/S7a-plot-guide.md); then the first host test.
+- 2026-10-13 S7a demo feedback (docs/demo/feedback-S7a.md): all steps work, correctness and
+  speed good. Two changes done: the plot takes the bottom third of its view's tile instead of a
+  tile of its own (viewCells; the view keeps its width, each plot stays under its dataset), and
+  the scatter's axes cover points panned beyond them (title row kept above). Also: the store
+  check waits for its server before cleanup. 283 backend, 87 unit, 26 e2e (also 26 on GPU at 2x).
+  - Next: the owner's first host test (docs/host/host-guide.md), or the rest of S7.

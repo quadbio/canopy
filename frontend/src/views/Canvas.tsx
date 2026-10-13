@@ -17,7 +17,7 @@ import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
-import { type Cell, gridCells, type Insets, type OrthoState, resizeView } from './layout';
+import { type Cell, type Insets, type OrthoState, resizeView, viewCells } from './layout';
 import { allowances, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
@@ -334,7 +334,19 @@ export function Canvas() {
   const outputs = useViewOutputs((s) => s.outputs);
   const drop = useViewOutputs((s) => s.drop);
   const [ref, size] = useSize<HTMLDivElement>();
-  const cells = useMemo(() => gridCells(views.length, size.width, size.height, 2), [views.length, size]);
+  // a plot belonging to a view shares that view's tile (the bottom third)
+  const followKey = views.map((v) => `${v.id}>${typeof v.params.follows === 'string' ? v.params.follows : ''}`).join(',');
+  const cells = useMemo(
+    () =>
+      viewCells(
+        views.map((v) => v.id),
+        views.map((v) => (typeof v.params.follows === 'string' ? v.params.follows : null)),
+        size.width,
+        size.height,
+        2,
+      ),
+    [followKey, size], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const [viewStates, setViewStates] = useState<Record<string, OrthoState>>({});
   const layouts = useMemo(
     () => views.map((v, i) => (cells[i] ? layoutOf(v, cells[i], outputs[v.id]) : null)),

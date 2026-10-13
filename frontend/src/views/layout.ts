@@ -22,6 +22,40 @@ export function gridCells(n: number, width: number, height: number, gap = 1): Ce
   }));
 }
 
+// The share of its view's tile a companion plot takes, at the bottom (owner, S7a demo).
+export const COMPANION_SHARE = 1 / 3;
+
+/** Tiles for views: the grid holds one tile per view, except that a view following another
+ * (a plot belonging to an embedding: `follows[i]` is that view's id) takes the bottom third of
+ * the followed view's tile instead of a tile of its own. In the order of `ids`. */
+export function viewCells(ids: string[], follows: (string | null)[], width: number, height: number, gap = 1): Cell[] {
+  const attached = ids.map((_, i) => {
+    const f = follows[i];
+    return f !== null && f !== ids[i] && ids.includes(f) && follows[ids.indexOf(f)] === null ? f : null;
+  });
+  const own = ids.filter((_, i) => attached[i] === null);
+  const tiles = gridCells(own.length, width, height, gap);
+  const tileOf = new Map(own.map((id, k) => [id, tiles[k]]));
+  const out: Cell[] = [];
+  ids.forEach((id, i) => {
+    const host = attached[i];
+    const tile = tileOf.get(host ?? id)!;
+    const companion = host === null && attached.indexOf(id) >= 0;
+    if (!tile) return;
+    if (host === null && !companion) {
+      out[i] = tile;
+      return;
+    }
+    const lower = Math.round(tile.height * COMPANION_SHARE);
+    const upper = tile.height - lower - gap;
+    out[i] =
+      host === null
+        ? { ...tile, height: upper }
+        : { x: tile.x, y: tile.y + upper + gap, width: tile.width, height: lower };
+  });
+  return out;
+}
+
 export interface OrthoState {
   target: [number, number, number];
   zoom: number;
