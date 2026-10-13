@@ -20,7 +20,7 @@ import { type Layer } from '@deck.gl/core';
 import { PathLayer, ScatterplotLayer, type ScatterplotLayerProps, SolidPolygonLayer } from '@deck.gl/layers';
 import { loadOmeZarrFromStore, MultiscaleImageLayer } from '@hms-dbmi/viv';
 import { Matrix4 } from '@math.gl/core';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { useMeta } from '../../api/queries';
@@ -35,6 +35,7 @@ import {
   useStoreArray,
 } from '../../api/store';
 import type { DatasetMeta, GeneList } from '../../api/types';
+import { hiddenBy } from '../../colour/colouring';
 import { MISSING_VALUE, type ValueColour, ValueColourExtension } from '../../colour/gpu';
 import { hexToRgb } from '../../colour/palettes';
 import { event } from '../../telemetry/telemetry';
@@ -54,6 +55,7 @@ import {
 import { PlotCompanionField } from '../plot';
 import { useLod } from '../lod';
 import { type Bounds, MAIN_PANEL, panelKey, panelLayerId, registerView, type ViewOutput } from '../registry';
+import { lassoInto, type Polygon } from '../selection';
 
 export interface ChannelSetting {
   on: boolean;
@@ -396,16 +398,17 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
   const m = manifest.data;
   const { p, notice } = useMemo(() => {
     if (!meta.data) return { p: spec.params, notice: undefined };
-    const c = effectiveColouring(spec.params, meta.data);
+    const c = effectiveColouring(spec.params, meta.data, undefined, !!spec.group);
     return { p: c.p, notice: c.notes.length ? `Saved settings changed: ${c.notes.join('; ')}.` : undefined };
-  }, [spec.params, meta.data]);
+  }, [spec.params, meta.data, spec.group]);
   useEffect(() => {
     if (notice) update(spec.id, p);
   }, [notice]); // eslint-disable-line react-hooks/exhaustive-deps
   const el = useMemo(() => (m ? resolveElements(p, m, spec.table) : null), [p, m, spec.table]);
   const system = el?.system ?? null;
   const n = meta.data?.n_obs ?? null;
-  const colouring = useColouring(spec.datasetId, spec.table, p, n);
+  const link = useMemo(() => (spec.group ? { group: spec.group, view: spec.id } : undefined), [spec.group, spec.id]);
+  const colouring = useColouring(spec.datasetId, spec.table, p, n, link);
 
   // ---- image
   const imageEntry = m && el?.image ? m.images[el.image] : null;
@@ -558,6 +561,32 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
   // ---- layers
   const id = (name: string) => panelLayerId(spec.id, MAIN_PANEL, name);
   const valueColour = colouring.valueColour;
+
+  // Lasso: the cells whose centre is inside (all cells of the element, read once), when the
+  // cells are the rows of the view's table; hidden categories left out
+  const qc = useQueryClient();
+  const lasso = useMemo<ViewOutput['lasso']>(() => {
+    if (!shapes || !affine || !version || !colourCells || n === null) return undefined;
+    const read = (path: string) =>
+      qc.fetchQuery({
+        queryKey: ['store-array', version, path],
+        queryFn: ({ signal }) => readWhole(version, path, { signal }),
+        staleTime: Infinity,
+      });
+    return {
+      key: `${version}|${system}|${shapes.path}`,
+      n,
+      select: async (_panel: string, poly: Polygon, mask: Uint8Array) => {
+        const [xy, rows] = await Promise.all([
+          read(`${shapes.path}/${shapes.kind === 'circles' ? 'center' : 'centroid'}`),
+          read(`${shapes.path}/row`),
+        ]);
+        const inv = invert(affine);
+        const own = poly.map(([x, y]) => [inv[0][0] * x + inv[0][1] * y + inv[0][2], inv[1][0] * x + inv[1][1] * y + inv[1][2]] as [number, number]);
+        return lassoInto(mask, xy.data as Float32Array, own, null, hiddenBy(valueColour, values), rows.data as Int32Array);
+      },
+    };
+  }, [shapes, affine, version, colourCells, n, qc, system, valueColour, values]);
   const layers = useMemo(() => {
     const out: Layer[] = [];
     if (!m || !system) return out;
@@ -764,12 +793,13 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
     problem: problem ? { message: `Part of the view failed: ${(problem as Error).message}.`, retry } : undefined,
     tooltip,
     caption: shapes
-      ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' || outlinesReady ? '' : loadedBlocks ? ' (loading outlines…)' : ' (centres; zoom in for outlines)'}`
+      ? `${formatCount(shapes.n)} cells${whole || shapes.kind === 'circles' || outlinesReady ? '' : loadedBlocks ? ' (loading outlines…)' : ' (centres; zoom in for outlines)'}${colouring.missingHere && p.colorBy ? ` · no “${p.colorBy.name}”: NA` : ''}`
       : undefined,
     n: shapes?.n ?? 0,
     // drawn cells count against the canvas's shared point budget (outlines or centres)
     total: shapes?.n ?? 0,
     legend: colourCells ? colouring.legend : undefined,
+    lasso: spec.group ? undefined : lasso,
   };
 }
 

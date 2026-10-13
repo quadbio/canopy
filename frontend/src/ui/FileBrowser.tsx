@@ -1,13 +1,17 @@
 // File browser (F10, basic): data roots as a folder tree, name search, and a details panel with
 // "Open". Everything comes from the catalog index; nothing here touches the file system.
+// Datasets ticked in the tree open together as linked views (S7b: one tile, shared settings,
+// linked pan and zoom).
 
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
 import { ApiError } from '../api/client';
+import { catalog } from '../api/endpoints';
 import { metaQuery, useDatasetDetail, useFolder, useRoots, useSearch } from '../api/queries';
-import type { DatasetEntry } from '../api/types';
-import { MAX_VIEWS, rememberKey, useWorkspace } from '../state/workspace';
+import type { DatasetEntry, DatasetMeta } from '../api/types';
+import { MAX_GROUP, MAX_VIEWS, rememberKey, type ViewSpec, useWorkspace } from '../state/workspace';
+import { defaultColumn } from '../views/colouring';
 import { event } from '../telemetry/telemetry';
 import { viewTypes } from '../views/registry';
 import { formatBytes, formatCount, Help } from './controls';
@@ -19,12 +23,26 @@ const KIND_LABEL: Record<string, string> = { h5ad: 'h5ad', anndata_zarr: 'zarr',
 function DatasetRow({ d, depth }: { d: DatasetEntry; depth: number }) {
   const selected = useWorkspace((s) => s.browserSelection === d.id);
   const select = useWorkspace((s) => s.selectDataset);
+  const ticked = useWorkspace((s) => s.ticked.includes(d.id));
+  const tick = useWorkspace((s) => s.tick);
   const s = d.summary;
   return (
-    <li>
+    <li className="tree-item">
+      {d.state === 'inspected' && (
+        <input
+          type="checkbox"
+          className="tick"
+          style={{ left: 6 + depth * 14 }}
+          checked={ticked}
+          onChange={(e) => tick([d.id], e.target.checked)}
+          aria-label={`Tick ${d.name} to open it linked with others`}
+          title="Tick several datasets to open them as linked views"
+          data-testid="dataset-tick"
+        />
+      )}
       <button
         className={`tree-row dataset${selected ? ' selected' : ''}${d.state !== 'inspected' ? ' dim' : ''}`}
-        style={{ paddingLeft: 8 + depth * 14 }}
+        style={{ paddingLeft: 26 + depth * 14 }}
         onClick={() => select(d.id)}
         data-testid="dataset-row"
         title={`${d.path}${d.size_bytes !== null ? ` · ${formatBytes(d.size_bytes)}` : ''}`}
@@ -42,8 +60,21 @@ function DatasetRow({ d, depth }: { d: DatasetEntry; depth: number }) {
 function Folder({ root, path, name, depth, count }: { root: string; path: string; name: string; depth: number; count: number }) {
   const [open, setOpen] = useState(depth === 0);
   const q = useFolder(root, path, open);
+  const tick = useWorkspace((s) => s.tick);
+  const here = (q.data?.datasets ?? []).filter((d) => d.state === 'inspected').map((d) => d.id);
+  const allTicked = useWorkspace((s) => here.length > 0 && here.every((id) => s.ticked.includes(id)));
   return (
-    <li>
+    <li className="tree-item">
+      {open && here.length > 1 && (
+        <button
+          className="link small tick-all"
+          onClick={() => tick(here, !allTicked)}
+          title={allTicked ? 'Untick the datasets in this folder' : 'Tick the datasets in this folder, to open them linked'}
+          data-testid="tick-folder"
+        >
+          {allTicked ? 'untick all' : 'tick all'}
+        </button>
+      )}
       <button
         className="tree-row folder"
         style={{ paddingLeft: 8 + depth * 14 }}
@@ -234,6 +265,124 @@ function Details({ id }: { id: string }) {
   );
 }
 
+/** Shared settings for linked views: the first dataset's defaults, coloured by a column all the
+ * datasets have when there is one. */
+function sharedDefaults(metas: DatasetMeta[], first: Record<string, unknown>): Record<string, unknown> {
+  const common = metas.reduce<DatasetMeta['obs']>(
+    (cols, m) => cols.filter((c) => m.obs.some((o) => o.name === c.name && o.kind === c.kind)),
+    metas[0].obs,
+  );
+  const col = defaultColumn({ ...metas[0], obs: common });
+  return { ...first, colorBy: col ? { kind: 'obs', name: col } : (first.colorBy ?? null), hidden: [] };
+}
+
+/** The ticked datasets, opened together as linked views. */
+function LinkedOpen() {
+  const ticked = useWorkspace((s) => s.ticked);
+  const tick = useWorkspace((s) => s.tick);
+  const addGroup = useWorkspace((s) => s.addGroup);
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const details = useQueries({
+    queries: ticked.map((id) => ({ queryKey: ['dataset', id], queryFn: () => catalog.dataset(id), staleTime: 60_000 })),
+  }).map((q) => q.data);
+  if (!ticked.length) return null;
+  const open = async (type: 'embedding' | 'spatial') => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const ds = await Promise.all(
+        ticked.map((id) => qc.fetchQuery({ queryKey: ['dataset', id], queryFn: () => catalog.dataset(id), staleTime: 60_000 })),
+      );
+      const t = viewTypes().find((x) => x.type === type)!;
+      const members: Omit<ViewSpec, 'id' | 'group'>[] = [];
+      const metas: DatasetMeta[] = [];
+      const skipped: string[] = [];
+      for (const d of ds) {
+        const tables = Object.keys((d.fingerprint as { spatialdata?: { tables?: object } } | null)?.spatialdata?.tables ?? {});
+        const table = d.kind === 'spatialdata_zarr' ? (tables[0] ?? null) : null;
+        if (type === 'spatial' && !(d.kind === 'spatialdata_zarr' && d.conversion?.converted)) {
+          skipped.push(d.name);
+          continue;
+        }
+        const meta = await qc.fetchQuery(metaQuery(d.id, table));
+        const params = t.create(meta) as Record<string, unknown> | null;
+        if (!params) {
+          skipped.push(d.name);
+          continue;
+        }
+        metas.push(meta);
+        members.push({ type, datasetId: d.id, table, title: d.name, params });
+      }
+      if (members.length < 2) {
+        setProblem(`At least two of the ticked datasets must have ${type === 'spatial' ? 'a converted spatial copy' : 'an embedding'}${skipped.length ? ` (not: ${skipped.join(', ')})` : ''}.`);
+        return;
+      }
+      // the settings are shared: the first dataset's, coloured by a column all of them have;
+      // each keeps its own choices where the view type has some (e.g. the embedding)
+      const shared = sharedDefaults(metas, members[0].params);
+      const own = t.ownKeys ?? [];
+      const linked = members.map((m) => ({
+        ...m,
+        params: { ...shared, ...Object.fromEntries(own.filter((k) => k in m.params).map((k) => [k, m.params[k]])) },
+      }));
+      if (addGroup(linked) === null) {
+        setProblem(`At most ${MAX_VIEWS} views (or linked groups) fit in the canvas: close one first.`);
+        return;
+      }
+      event('group_opened', null, { type, n: linked.length, skipped: skipped.length });
+      if (skipped.length) setProblem(`Not opened: ${skipped.join(', ')}.`);
+      tick(ticked, false);
+    } catch (e) {
+      setProblem(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const allSpatial = details.every((d) => d?.kind === 'spatialdata_zarr' && d.conversion?.converted);
+  const tooMany = ticked.length > MAX_GROUP;
+  return (
+    <div className="details linked-open" data-testid="linked-open">
+      <h3>
+        {ticked.length} dataset{ticked.length === 1 ? '' : 's'} ticked
+        <Help label="About linked views">
+          <p>
+            Ticked datasets open together as <b>linked views</b>: one tile with a view per dataset, panned and zoomed
+            together at one scale, with one legend. Their settings are shared: a change in one (colour, palette, point
+            size…) applies to all. Only the embedding is chosen per dataset (its name can differ).
+          </p>
+          <p>
+            A dataset without the chosen column or gene shows its cells as NA (grey). When the datasets bring their own
+            colours and these disagree, palette colours are used for all of them.
+          </p>
+        </Help>
+      </h3>
+      <div className="open-row">
+        {allSpatial && (
+          <button className="primary" onClick={() => void open('spatial')} disabled={busy || ticked.length < 2 || tooMany} data-testid="open-linked-spatial">
+            {busy ? 'Opening…' : 'Open linked spatial views'}
+          </button>
+        )}
+        <button
+          className={allSpatial ? 'ghost' : 'primary'}
+          onClick={() => void open('embedding')}
+          disabled={busy || ticked.length < 2 || tooMany}
+          data-testid="open-linked"
+        >
+          {busy && !allSpatial ? 'Opening…' : 'Open linked embeddings'}
+        </button>
+        <button className="ghost" onClick={() => tick(ticked, false)} data-testid="untick-all">
+          Clear
+        </button>
+      </div>
+      {ticked.length < 2 && <p className="muted small">Tick at least one more dataset to open them linked.</p>}
+      {tooMany && <p className="error small">At most {MAX_GROUP} datasets can be linked.</p>}
+      {problem && <p className="error small">{problem}</p>}
+    </div>
+  );
+}
+
 export function FileBrowser() {
   const roots = useRoots();
   const [query, setQuery] = useState('');
@@ -275,6 +424,7 @@ export function FileBrowser() {
           </ul>
         )}
       </div>
+      <LinkedOpen />
       {selected && <Details key={selected} id={selected} />}
     </aside>
   );

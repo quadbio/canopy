@@ -354,3 +354,19 @@ Resume rule: read this file, then continue with the first unchecked step.
   (no conversion ran, so the NFS stall was not re-tested). Frames: moving median 16.6 ms (60 fps)
   with 2 and 4 views, 3.4 M cells, budget 1 M; no `lod_budget` change (none needed); hover throttled
   (picked ≤ moves). Open: the first test's ~110 ms was on a 2560×1440 display; re-check there.
+- 2026-10-13 Owner: the server test counts as successful. S7 answers (note §7): 1–3 independent
+  views usually; linked opening of up to 10–20 datasets by ticking them; linked views share all
+  settings but the embedding; NA for a missing column; preset colours checked for conflicts and
+  regenerated; lasso with the two-feature plot now; export, saved workspaces (on the server,
+  shared) later. S7b built: linked groups (ADR 0014): ticks and *Open linked* in the file
+  browser, one tile per group with one legend, shared settings (`ownKeys` per type), fitted at
+  one scale and linked pan and zoom, group colours (`views/linked.ts`: union of categories,
+  preset-colour check, one number range, NA). Tests: `linked.test.ts` (11), e2e `linked.spec.ts` (2) and
+  linked spatial views. Demo guide `docs/demo/S7b-linked-guide.md`. Next: S7c lasso.
+- 2026-10-13 S7c built: lasso selection (ADR 0015): *lasso* in a view's title row (embedding,
+  spatial), Shift adds, Esc stops; all cells inside (not only those drawn), hidden ones left out;
+  kept per view in the page (mask), outline while the coordinates stay; *N selected ×*. *Plot
+  against: Lasso selection*: composition (categories) or violins (numbers, genes) of the selected
+  cells vs the others, computed in the browser. Tests: `selection.test.ts` (6), e2e lasso. The
+  linked spatial e2e moved to the end of browse.spec.ts (it converts region_3, which two tests
+  there need unconverted).

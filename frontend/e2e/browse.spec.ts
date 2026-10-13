@@ -758,3 +758,45 @@ test('a spatial view whose converted copy is missing says so and offers the conv
   await expect(cell.getByTestId('view-error')).toContainText('needs the converted copy');
   await expect(cell.getByTestId('convert')).toBeVisible();
 });
+
+// S7b, after the test above that needs region_3 unconverted (tests in a file run in order).
+async function tickRow(page: Page, name: string) {
+  const row = page.getByTestId('dataset-row').filter({ hasText: name }).first();
+  await row.locator('..').getByTestId('dataset-tick').check();
+}
+
+/** Converts a SpatialData store if needed (the test server starts with an empty cache). */
+async function convertedStore(page: Page, name: string) {
+  await page.getByTestId('dataset-row').filter({ hasText: name }).click();
+  const open = page.getByTestId('open-spatial');
+  const convert = page.getByTestId('convert');
+  await expect(open.or(convert)).toBeVisible({ timeout: 20_000 });
+  if (await convert.isVisible()) await convert.click();
+  await expect(open).toBeVisible({ timeout: 120_000 });
+}
+
+test('two regions opened as linked spatial views', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await convertedStore(page, 'region_1');
+  await convertedStore(page, 'region_3');
+  await tickRow(page, 'region_1');
+  await tickRow(page, 'region_3');
+  await page.getByTestId('open-linked-spatial').click();
+  const cells = page.getByTestId('view-cell');
+  await expect(cells).toHaveCount(2);
+  for (const k of [0, 1]) await expect(cells.nth(k)).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
+  await expect(page.getByTestId('legend')).toHaveCount(1);
+  await page.waitForTimeout(1000);
+  for (const k of [0, 1]) expect(await drawnFraction(page, cells.nth(k))).toBeGreaterThan(0.01);
+  await page.screenshot({ path: 'test-results/screens/linked-spatial.png' });
+  // fitted at one scale, zoomed together
+  const z = async (k: number) => Number(await cells.nth(k).getAttribute('data-zoom'));
+  expect(await z(0)).toBeCloseTo(await z(1), 3);
+  const box = (await cells.nth(0).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(async () => (await z(1)) - (await z(0))).toBeCloseTo(0, 3);
+  expect(errors).toEqual([]);
+});

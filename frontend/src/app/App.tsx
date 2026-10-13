@@ -73,6 +73,7 @@ function SettingsPanel() {
             {spec.title}
           </h3>
           <p className="muted small">{t.label}</p>
+          {spec.group && <LinkedNote spec={spec} />}
           <t.Panel key={spec.id} spec={spec} />
           <ResetView key={`reset-${spec.id}`} spec={spec} />
         </>
@@ -80,6 +81,18 @@ function SettingsPanel() {
         <p className="muted small pad">Select a view to change its settings.</p>
       )}
     </aside>
+  );
+}
+
+/** In a linked group: what the settings apply to. */
+function LinkedNote({ spec }: { spec: ViewSpec }) {
+  const n = useWorkspace((s) => s.views.filter((v) => v.group === spec.group).length);
+  const own = viewType(spec.type)?.ownKeys ?? [];
+  return (
+    <p className="small linked-note" data-testid="linked-note">
+      Linked with {n - 1} other dataset{n === 2 ? '' : 's'}: changes apply to all of them
+      {own.includes('embedding') ? ', except the embedding (chosen per dataset)' : ''}.
+    </p>
   );
 }
 

@@ -12,7 +12,7 @@ import { type ReactNode, useCallback, useMemo } from 'react';
 import { useGene, useGenes, useMeta, useObs, useSummary } from '../../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList, SummaryQuery } from '../../api/types';
 import { type ValueColour, ValueColourExtension } from '../../colour/gpu';
-import { MAX_VIEWS, useWorkspace, type ViewSpec } from '../../state/workspace';
+import { MAX_VIEWS, tilesTaken, useWorkspace, type ViewSpec } from '../../state/workspace';
 import { Field, formatCount, Help, Select } from '../../ui/controls';
 import { GeneSearch } from '../../ui/GeneSearch';
 import {
@@ -29,11 +29,13 @@ import {
   useColouring,
 } from '../colouring';
 import { useLod } from '../lod';
+import { NOT_SELECTED, SELECTED, selectionBars, selectionViolin, useSelection } from '../selection';
 import { type Bounds, MAIN_PANEL, panelLayerId, registerView, type ViewOutput } from '../registry';
 import { Density, scatterAxes, StackedBars, Violins } from './charts';
 
-/** A feature: an obs column, or a gene (by name) from X or a layer. */
-export type Feature = { kind: 'obs'; name: string } | { kind: 'gene'; name: string; matrix?: string };
+/** A feature: an obs column, a gene (by name) from X or a layer, or whether a cell is in the
+ * lasso selection of the view the plot belongs to (S7c). */
+export type Feature = { kind: 'obs'; name: string } | { kind: 'gene'; name: string; matrix?: string } | { kind: 'selection' };
 
 export interface PlotParams extends ColourParams {
   /** The view this plot belongs to (an embedding or spatial view): its colour feature is the
@@ -53,6 +55,12 @@ export interface PlotParams extends ColourParams {
 export const SCATTER_MAX = 1_000_000;
 const AXES = { left: 48, bottom: 36 }; // room for the scatter's axes
 const VALUE_COLOUR = new ValueColourExtension();
+const NO_ROWS = new Set<string>();
+// selected cells in the lasso's colour, the others grey
+const SELECTION_COLOURS = new Map<string, [number, number, number]>([
+  [SELECTED, [230, 80, 20]],
+  [NOT_SELECTED, [150, 150, 150]],
+]);
 const BASE: ValueColour = { lut: new Uint8Array([...BASE_RGB, 255]), mode: 'categories', missing: [...BASE_RGB, 255] };
 
 export type FeatureKind = 'category' | 'number';
@@ -61,6 +69,7 @@ export type FeatureKind = 'category' | 'number';
 export function featureKind(f: Feature | null, meta: DatasetMeta | undefined): FeatureKind | null {
   if (!f || !meta) return null;
   if (f.kind === 'gene') return 'number';
+  if (f.kind === 'selection') return 'category';
   const c = meta.obs.find((x) => x.name === f.name);
   if (!c) return null;
   return c.kind === 'numeric' ? 'number' : 'category';
@@ -85,6 +94,7 @@ export function plotKind(
 
 function featureName(f: Feature | null, genes: GeneList | undefined): string {
   if (!f) return '';
+  if (f.kind === 'selection') return 'lasso selection';
   if (f.kind === 'obs') return f.name;
   const i = genes ? genes.names.indexOf(f.name) : -1;
   const label = i >= 0 && genes ? geneLabel(genes, i) : f.name;
@@ -93,6 +103,7 @@ function featureName(f: Feature | null, genes: GeneList | undefined): string {
 
 /** The summary request's form of a feature (genes by their index in the gene list). */
 function featureSpec(f: Feature, genes: GeneList | undefined): { s: string; m: string } | null {
+  if (f.kind === 'selection') return null; // computed in the browser
   if (f.kind === 'obs') return { s: `obs:${f.name}`, m: 'X' };
   const i = genes ? genes.names.indexOf(f.name) : -1;
   return i >= 0 ? { s: `gene:${i}`, m: f.matrix ?? 'X' } : null;
@@ -101,6 +112,7 @@ function featureSpec(f: Feature, genes: GeneList | undefined): { s: string; m: s
 function normaliseFeature(v: unknown): Feature | null {
   if (!v || typeof v !== 'object') return null;
   const r = v as Record<string, unknown>;
+  if (r.kind === 'selection') return { kind: 'selection' };
   if (typeof r.name !== 'string' || !r.name) return null;
   if (r.kind === 'obs') return { kind: 'obs', name: r.name };
   if (r.kind === 'gene') return { kind: 'gene', name: r.name, ...(typeof r.matrix === 'string' ? { matrix: r.matrix } : {}) };
@@ -144,6 +156,7 @@ export function defaultFeatures(meta: DatasetMeta): { x: Feature | null; y: Feat
 /** One feature's values per cell (numbers), for the scatter: an obs column or a gene. */
 function useValues(spec: ViewSpec<PlotParams>, f: Feature | null, version: string | undefined, genes: GeneList | undefined) {
   const obs = useObs(spec.datasetId, spec.table, f?.kind === 'obs' ? f.name : null, version);
+  // (a selection is never a scatter axis: it is a category)
   const index = f?.kind === 'gene' && genes ? genes.names.indexOf(f.name) : -1;
   const gene = useGene(spec.datasetId, spec.table, index >= 0 ? index : null, f?.kind === 'gene' ? (f.matrix ?? 'X') : 'X', version);
   if (f?.kind === 'obs') return { values: obs.data?.data as ArrayLike<number> | undefined, error: obs.error };
@@ -228,7 +241,11 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   // scatter by the user's choice
   // when the categories are the followed view's colour column, its colour settings (palette,
   // colours picked by hand, hidden categories) apply, and its legend controls them
-  const usesFollowed = !!fp && plot?.kind !== 'scatter' && catF?.kind === 'obs' && fp.colorBy?.kind === 'obs' && fp.colorBy.name === catF.name;
+  // against the lasso selection: the first feature coloured as in the followed view
+  const bySelection = p.y?.kind === 'selection';
+  const usesFollowed =
+    !!fp &&
+    ((bySelection && !!p.x) || (plot?.kind !== 'scatter' && catF?.kind === 'obs' && fp.colorBy?.kind === 'obs' && fp.colorBy.name === catF.name));
   const colourParams = useMemo<ColourParams>(
     () =>
       usesFollowed
@@ -268,7 +285,15 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
       ...(logs && logs !== '00' ? { log1p: logs } : {}),
     };
   }, [plot?.kind, plot?.swap, p.x, p.y, p.log1pX, p.log1pY, genes.data]); // eslint-disable-line react-hooks/exhaustive-deps
-  const summary = useSummary(spec.datasetId, spec.table, version, q);
+  const summary = useSummary(spec.datasetId, spec.table, version, bySelection ? null : q);
+  // the selection against the first feature, from the values the view holds
+  const sel = useSelection((s) => (own.follows ? s.selections[own.follows] : undefined));
+  const selSummary = useMemo(() => {
+    const vals = colouring.values?.value;
+    if (!bySelection || !sel || !vals || sel.mask.length !== vals.length || !colouring.legend) return null;
+    if (colouring.legend.kind === 'categories') return selectionBars(vals, colouring.legend.labels, sel.mask);
+    return selectionViolin(vals, sel.mask, p.log1pX);
+  }, [bySelection, sel, colouring.values, colouring.legend, p.log1pX]);
 
   // ---- scatter
   const scatter = plot?.kind === 'scatter';
@@ -336,14 +361,28 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
   );
 
   // ---- output
-  const s = summary.data;
+  const s = bySelection ? (selSummary ?? undefined) : summary.data;
   const catName = featureName(catF, genes.data);
   const numName = featureName(numF, genes.data);
   // memoised: a new element on every render would re-publish the view (and redraw the canvas)
-  const stale = summary.isPlaceholderData; // the previous features' summary, until the new one comes
+  const stale = !bySelection && summary.isPlaceholderData; // the previous features' summary, until the new one comes
   const content = useMemo<ReactNode>(() => {
     let c: ReactNode = null;
-    if (s?.kind === 'violin' && plot?.kind === 'violin') {
+    if (bySelection && s?.kind === 'bars') {
+      c = <StackedBars summary={s} colours={rgbOf} hidden={hidden} hiddenRows={NO_ROWS} xLabel="lasso selection" proportions={p.proportions} />;
+    } else if (bySelection && s?.kind === 'violin') {
+      c = (
+        <Violins
+          summary={s}
+          colours={SELECTION_COLOURS}
+          hidden={NO_ROWS}
+          xLabel="lasso selection"
+          yLabel={xName}
+          showAboveZero={p.aboveZero && p.x?.kind === 'gene'}
+          zeroSpike={p.x?.kind === 'gene'}
+        />
+      );
+    } else if (s?.kind === 'violin' && plot?.kind === 'violin') {
       c = (
         <Violins
           summary={s}
@@ -361,10 +400,11 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
       c = <Density summary={s} xLabel={xName} yLabel={yName} />;
     }
     return c && stale ? <div className="chart-stale">{c}</div> : c;
-  }, [s, plot?.kind, rgbOf, hidden, hiddenRows, catName, numName, xName, yName, p.aboveZero, p.proportions, numF?.kind, stale]);
+  }, [s, bySelection, p.x?.kind, plot?.kind, rgbOf, hidden, hiddenRows, catName, numName, xName, yName, p.aboveZero, p.proportions, numF?.kind, stale]);
   const error = meta.error ?? summary.error ?? xv.error ?? yv.error ?? (genes.error as unknown);
   const missingGene = wantsGenes && genes.data && ((p.x?.kind === 'gene' && !featureSpec(p.x, genes.data)) || (p.y?.kind === 'gene' && !featureSpec(p.y, genes.data)));
-  const unset = !!meta.data && (!plot || missingGene || (!!own.follows && !followed));
+  const noSelection = bySelection && !sel;
+  const unset = !!meta.data && (!plot || missingGene || noSelection || (!!own.follows && !followed));
   const ready = scatter ? !!pts && !!colourAttr : !!content;
   const legend: ColourLegendData | undefined =
     plot?.kind === 'density' && s?.kind === 'density'
@@ -382,6 +422,7 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
     content: scatter ? undefined : content,
     // a plot still waiting for a choice is not an error: a quiet instruction
     status: error ? 'error' : unset ? (missingGene || (own.follows && !followed) ? 'error' : 'idle') : ready ? 'ready' : 'loading',
+    // (a selection plot is ready once the selection and the view's values are there)
     error: error
       ? String((error as Error).message)
       : unset
@@ -389,6 +430,8 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
           ? 'The view this plot belongs to was closed.'
           : missingGene
             ? 'A chosen gene is not in this dataset.'
+            : noSelection && p.x
+              ? 'Draw around cells with the lasso (in the view’s title row): the plot compares them with the other cells.'
             : own.follows && !p.x
               ? 'Colour the view by a column or a gene: that is the first feature of this plot.'
               : own.follows
@@ -396,8 +439,11 @@ function usePlotView(spec: ViewSpec<PlotParams>): ViewOutput {
                 : 'Choose two features in the settings (columns or genes).'
         : undefined,
     tooltip,
-    caption:
-      plot && n
+    caption: bySelection
+      ? sel
+        ? `${formatCount(sel.count)} selected of ${formatCount(n)} cells`
+        : undefined
+      : plot && n
         ? `${plot.kind === 'violin' ? 'violins' : plot.kind === 'bars' ? 'composition' : plot.kind === 'density' ? `density of ${formatCount(n)} cells` : `${formatCount(pts?.cells.length ?? n)} cells`}`
         : undefined,
     n,
@@ -416,8 +462,10 @@ function FeatureField({ spec, which, title }: { spec: ViewSpec<PlotParams>; whic
   const genes = useGenes(spec.datasetId, spec.table, m?.version, readable.length > 0);
   if (!m) return null;
   const f = spec.params[which];
-  const value = f?.kind === 'obs' ? `obs:${f.name}` : null;
+  const value = f?.kind === 'obs' ? `obs:${f.name}` : f?.kind === 'selection' ? 'selection' : null;
   const set = (next: Feature | null) => update(spec.id, { [which]: next });
+  // a plot below a view can compare the view's lasso selection with the other cells
+  const withSelection = !!spec.params.follows && which === 'y';
   const label = title ?? (which === 'x' ? 'Horizontal (x)' : 'Vertical (y)');
   return (
     <Field
@@ -434,8 +482,9 @@ function FeatureField({ spec, which, title }: { spec: ViewSpec<PlotParams>; whic
         testId={`plot-${which}`}
         value={value}
         allowNone={f?.kind === 'gene' ? `Gene: ${f.name}` : 'Choose…'}
-        onChange={(v) => set(v ? { kind: 'obs', name: v.slice(4) } : f?.kind === 'gene' ? f : null)}
+        onChange={(v) => set(v === 'selection' ? { kind: 'selection' } : v ? { kind: 'obs', name: v.slice(4) } : f?.kind === 'gene' ? f : null)}
         groups={[
+          ...(withSelection ? [{ label: 'Selection', options: [{ value: 'selection', label: 'Lasso selection', hint: 'selected or not' }] }] : []),
           {
             label: 'Categories',
             options: m.obs
@@ -549,8 +598,9 @@ export function PlotCompanionField({ spec }: { spec: ViewSpec }) {
   const addView = useWorkspace((s) => s.addView);
   const removeView = useWorkspace((s) => s.removeView);
   const select = useWorkspace((s) => s.select);
-  const full = useWorkspace((s) => s.views.length >= MAX_VIEWS);
+  const full = useWorkspace((s) => tilesTaken(s.views) >= MAX_VIEWS);
   if (!meta.data) return null;
+  if (spec.group) return <p className="muted small" data-testid="plot-companion-linked">Plots are not offered for linked views yet.</p>;
   const toggle = (on: boolean) => {
     if (!on) {
       if (companion) removeView(companion.id);

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { useEmbedding, useGenes, useMeta, useObs, useSubset } from '../../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList } from '../../api/types';
-import { constantColouring } from '../../colour/colouring';
+import { constantColouring, hiddenBy } from '../../colour/colouring';
 import { type ValueColour, ValueColourExtension } from '../../colour/gpu';
 import { event } from '../../telemetry/telemetry';
 import { compactCount, Field, formatCount, Help, Select, Slider } from '../../ui/controls';
@@ -29,6 +29,7 @@ import {
 import { drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
 import { PlotCompanionField } from '../plot';
 import { type Bounds, MAIN_PANEL, type PanelOutput, panelLayerId, registerView, type ViewOutput } from '../registry';
+import { lassoInto, type Polygon } from '../selection';
 
 // Kept here for existing imports (tests, other modules).
 export { defaultColumn, formatValue, geneLabel, geneRange } from '../colouring';
@@ -118,6 +119,7 @@ export function effectiveParams(
   p: EmbeddingParams,
   meta: DatasetMeta | undefined,
   genes?: GeneList,
+  linked = false,
 ): { p: EmbeddingParams; notice?: string } {
   if (!meta) return { p };
   const notes: string[] = [];
@@ -129,13 +131,14 @@ export function effectiveParams(
   } else if (emb && Math.max(...p.dims) >= emb.dims) {
     out = { ...out, dims: [0, 1] };
   }
-  const colouring = effectiveColouring(out, meta, genes);
+  const colouring = effectiveColouring(out, meta, genes, linked);
   out = colouring.p;
   notes.push(...colouring.notes);
   if (p.splitBy) {
     const c = meta.obs.find((x) => x.name === p.splitBy);
     if (!c || !splittable(c)) {
-      notes.push(c ? `“${p.splitBy}” has too many categories to split by` : `column “${p.splitBy}” not found`);
+      // in a linked group the split is the group's: a dataset without the column is not split
+      if (!linked) notes.push(c ? `“${p.splitBy}” has too many categories to split by` : `column “${p.splitBy}” not found`);
       out = { ...out, splitBy: null };
     }
   }
@@ -148,21 +151,24 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   const version = meta.data?.version;
   const wantsGene = spec.params.colorBy?.kind === 'gene';
   const genes = useGenes(spec.datasetId, spec.table, version, wantsGene);
+  const linked = !!spec.group;
   const { p, notice } = useMemo(
-    () => effectiveParams(spec.params, meta.data, genes.data),
-    [spec.params, meta.data, genes.data],
+    () => effectiveParams(spec.params, meta.data, genes.data, linked),
+    [spec.params, meta.data, genes.data, linked],
   );
+  const link = useMemo(() => (spec.group ? { group: spec.group, view: spec.id } : undefined), [spec.group, spec.id]);
   const emb = useEmbedding(spec.datasetId, spec.table, p.embedding, p.dims, version);
   const positions = emb.data?.data as Float32Array | undefined;
   const n = positions ? positions.length / 2 : null;
-  const colouring = useColouring(spec.datasetId, spec.table, p, n);
+  const colouring = useColouring(spec.datasetId, spec.table, p, n, link);
   const { coloured, valueColour, legend, tooltip } = colouring;
   const splitCol = (p.splitBy && meta.data?.obs.find((c) => c.name === p.splitBy)) || null;
   const splitQ = useObs(spec.datasetId, spec.table, splitCol ? splitCol.name : null, version);
 
-  // Keep the corrected parameters, so the notice is shown only once.
+  // Keep the corrected parameters, so the notice is shown only once (in a linked group only
+  // this dataset's own choices: the others are the group's).
   useEffect(() => {
-    if (notice) update(spec.id, p);
+    if (notice) update(spec.id, linked ? { embedding: p.embedding, dims: p.dims } : p);
   }, [notice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const bounds = useMemo(() => (positions ? computeBounds(positions) : null), [positions]);
@@ -336,6 +342,24 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
     if (splitQ.error) void splitQ.refetch();
   };
 
+  // Lasso: the cells inside, of the panel drawn in (all of its cells, not only those drawn),
+  // except hidden ones
+  const lassoKey = `${p.embedding}|${p.dims.join(',')}|${groups ? p.splitBy : ''}`;
+  const lasso = useMemo<ViewOutput['lasso']>(
+    () =>
+      positions && n !== null
+        ? {
+            key: lassoKey,
+            n,
+            select: async (panel: string, poly: Polygon, mask: Uint8Array) => {
+              const cells = panel === MAIN_PANEL ? null : (groups?.find((g) => g.id === panel)?.cells ?? null);
+              return lassoInto(mask, positions, poly, cells, hiddenBy(valueColour, colouring.values?.value));
+            },
+          }
+        : undefined,
+    [positions, n, lassoKey, groups, valueColour, colouring.values],
+  );
+
   const split = !!panels && !waitingForOrder;
   const drawnNow = split ? drawnSplit : count;
   return {
@@ -352,10 +376,17 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       ? { message: `Colouring failed: ${(colourError as Error).message}`, retry }
       : undefined,
     tooltip: shown ? (drawOrder ? (i: number) => shown.tooltip(drawOrder[i]) : shown.tooltip) : () => null,
-    caption: drawOrder && drawnNow < total ? `${formatCount(drawnNow)} of ${formatCount(total)} cells` : undefined,
+    caption:
+      [
+        drawOrder && drawnNow < total ? `${formatCount(drawnNow)} of ${formatCount(total)} cells` : null,
+        colouring.missingHere && spec.params.colorBy ? `no “${spec.params.colorBy.name}”: NA` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || undefined,
     n: n ?? 0,
     total,
     legend: shown?.legend,
+    lasso: spec.group ? undefined : lasso,
   };
 }
 
@@ -642,6 +673,7 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
 registerView<EmbeddingParams>({
   type: 'embedding',
   label: 'Embedding',
+  ownKeys: ['embedding', 'dims'],
   create: (meta) => {
     const first = meta.embeddings[0];
     if (!first) return null;

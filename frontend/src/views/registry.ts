@@ -12,6 +12,7 @@ import type { Layer } from '@deck.gl/core';
 import type { ComponentType, ReactNode } from 'react';
 
 import type { Cell, Insets, OrthoState } from './layout';
+import type { Polygon } from './selection';
 
 import type { DatasetMeta } from '../api/types';
 import type { ViewSpec } from '../state/workspace';
@@ -94,6 +95,11 @@ export interface ViewOutput {
   total?: number;
   /** Whatever the view's Legend needs, computed once by the view's hook. */
   legend?: unknown;
+  /** Lasso selection (S7c): adds the cells inside `poly` (view coordinates of `panel`) to `mask`
+   * (one entry per cell of the view's table; cells hidden in the legend left out) and returns
+   * how many it added. `key` says what the coordinates are: a selection's outline is shown
+   * while it stays the same. */
+  lasso?: { key: string; n: number; select: (panel: string, poly: Polygon, mask: Uint8Array) => Promise<number> };
 }
 
 /** The panels of a view output: its `panels`, or one panel from `layers`/`bounds`/`tooltip`. */
@@ -110,6 +116,9 @@ export interface ViewType<P = Record<string, unknown>> {
   rank?: number;
   /** The name of the "Open" button for this view type (default "Open"). */
   openLabel?: string;
+  /** Parameters that stay per dataset in a linked group (e.g. the embedding: names differ
+   * between datasets); every other parameter is shared by the group. */
+  ownKeys?: readonly string[];
   /** Whether this view can show the dataset, and its default parameters if so. */
   create: (meta: DatasetMeta) => P | null;
   /** Saved parameters (from an older build, or edited by hand) made valid: defaults filled in,

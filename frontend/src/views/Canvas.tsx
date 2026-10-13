@@ -8,8 +8,13 @@
 // or closes) until the user pans or zooms it; from then on pan and zoom are the user's, kept
 // (scaled with the cell) when other views open or close. "Fit" refits on demand. The panels of a
 // view pan and zoom together (`link`); fitted together they share one zoom, so sizes compare.
+//
+// A linked group (S7b) takes one tile: its views form a grid inside it under one title row,
+// with one legend (their legends merged). They are fitted together at one scale and pan and
+// zoom together, as the panels of one view.
 
 import { type Layer, OrthographicView, type PickingInfo } from '@deck.gl/core';
+import { PathLayer } from '@deck.gl/layers';
 import DeckGL from '@deck.gl/react';
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -17,11 +22,14 @@ import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
-import { type Cell, type Insets, type OrthoState, resizeView, viewCells } from './layout';
+import type { ColourLegendData } from './colouring';
+import { type Cell, type Insets, type OrthoState, resizeView, tileCells } from './layout';
+import { mergeLegends } from './linked';
 import { allowances, BudgetTuner, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
 import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
+import { type Polygon, useSelection } from './selection';
 
 const TITLE_ROW = 30; // px kept free for the view's title when fitting
 const PANEL_TITLE = 18; // px kept free at the top of each panel for its title
@@ -32,6 +40,7 @@ const ZOOM_LIMITS = { minZoom: -20, maxZoom: 40 };
 /** Where a view's panels go and what is kept free when fitting them. */
 interface Layout extends FitLayout {
   cell: Cell; // keys: panel keys (deck.gl view ids); fitInsets: per panel
+  unit: string; // what is fitted, moved and linked together: the view, or its linked group
   link: Link;
   titles: (string | undefined)[];
   fitKey: string | undefined;
@@ -51,11 +60,13 @@ function withMargins(base: Insets, m: Insets | undefined): Insets {
 function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layout {
   const panels = panelsOf(out);
   const compact = cell.width < COMPACT_WIDTH;
-  const legendOpen = !!out?.legend && !((spec.params.legendCollapsed as boolean | undefined) ?? compact);
+  // a view of a linked group has no legend of its own (the group's is beside them)
+  const legendOpen = !spec.group && !!out?.legend && !((spec.params.legendCollapsed as boolean | undefined) ?? compact);
   const right = legendOpen ? LEGEND_SPACE : 0;
   const many = panels.length > 1;
   return {
     cell,
+    unit: spec.group ?? spec.id,
     keys: panels.map((p) => panelKey(spec.id, p.id)),
     rects: panelRects(panels.length, cell, { top: TITLE_ROW, right }),
     fitInsets: withMargins(many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right }, out?.margins),
@@ -66,6 +77,24 @@ function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layo
     bounds: panels.map((p) => p.bounds),
     titles: panels.map((p) => p.title),
     fitKey: out?.fitKey,
+  };
+}
+
+/** The layouts of a linked group's views as one: their panels fitted together at one scale and
+ * linked (pan and zoom). */
+function combined(ls: Layout[]): Layout {
+  if (ls.length === 1) return ls[0];
+  const keys = ls.map((l) => l.fitKey ?? '');
+  return {
+    ...ls[0],
+    keys: ls.flatMap((l) => l.keys),
+    rects: ls.flatMap((l) => l.rects),
+    bounds: ls.flatMap((l) => l.bounds),
+    titles: ls.flatMap((l) => l.titles),
+    link: 'pan+zoom',
+    sameScale: true,
+    sameCoordinates: false,
+    fitKey: keys.some(Boolean) ? keys.join('|') : undefined,
   };
 }
 
@@ -96,6 +125,7 @@ const ViewRunner = memo(function ViewRunner({ spec }: { spec: ViewSpec }) {
       out.content,
       out.margins,
       out.fitKey,
+      out.lasso,
     ],
   );
   return null;
@@ -129,6 +159,8 @@ const ViewCell = memo(function ViewCell({
   output,
   selected,
   onFit,
+  lassoOn,
+  onLasso,
   panels,
   overlays,
 }: {
@@ -136,13 +168,18 @@ const ViewCell = memo(function ViewCell({
   cell: Cell;
   output: ViewOutput | undefined;
   selected: boolean;
-  onFit: (id: string) => void;
+  onFit: (unit: string) => void;
+  /** Lasso mode of this view on or off (views that can select cells). */
+  lassoOn: boolean;
+  onLasso: (id: string | null) => void;
   panels: { key: string; title?: string; rect: Cell }[];
   /** Panels drawing an overlay (axes), with their current view states. */
   overlays?: { key: string; rect: Cell; state: OrthoState; taken: Insets; draw: (s: OrthoState, r: Cell, t: Insets) => ReactNode }[];
 }) {
   const select = useWorkspace((s) => s.select);
   const remove = useWorkspace((s) => s.removeView);
+  const chosen = useSelection((s) => s.selections[spec.id]?.count ?? null);
+  const clearSelection = useSelection((s) => s.set);
   const t = viewType(spec.type);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -152,7 +189,7 @@ const ViewCell = memo(function ViewCell({
   const compact = cell.width < COMPACT_WIDTH;
   return (
     <div
-      className={`view-cell${selected ? ' selected' : ''}`}
+      className={`view-cell${selected ? ' selected' : ''}${spec.group ? ' member' : ''}`}
       style={{ left: cell.x, top: cell.y, width: cell.width, height: cell.height }}
       data-testid="view-cell"
       data-status={output?.status ?? 'loading'}
@@ -204,11 +241,38 @@ const ViewCell = memo(function ViewCell({
           </span>
         )}
         {output?.status === 'loading' && <span className="spinner" aria-label="Loading" />}
+        {chosen !== null && (
+          <span className="selection-chip" data-testid="selection-chip">
+            {chosen.toLocaleString()} selected
+            <button className="link" onClick={() => clearSelection(spec.id, null)} aria-label="Clear the selection" title="Clear the selection">
+              ×
+            </button>
+          </span>
+        )}
         <span className="view-header-actions">
-          <button className="icon-button" onClick={() => onFit(spec.id)} aria-label="Fit to data" title="Fit to data">
-            ⤢
-          </button>
-          <button className="icon-button" onClick={() => remove(spec.id)} aria-label="Close view" title="Close view">
+          {output?.lasso && output.status === 'ready' && (
+            <button
+              className={`icon-button${lassoOn ? ' on' : ''}`}
+              onClick={() => onLasso(lassoOn ? null : spec.id)}
+              aria-pressed={lassoOn}
+              aria-label="Lasso: select cells"
+              title="Lasso: draw around cells to select them (Shift: add to the selection; Esc: stop)"
+              data-testid="lasso"
+            >
+              lasso
+            </button>
+          )}
+          {!spec.group && (
+            <button className="icon-button" onClick={() => onFit(spec.id)} aria-label="Fit to data" title="Fit to data">
+              ⤢
+            </button>
+          )}
+          <button
+            className="icon-button"
+            onClick={() => remove(spec.id)}
+            aria-label={spec.group ? 'Remove from the linked views' : 'Close view'}
+            title={spec.group ? 'Remove this dataset from the linked views' : 'Close view'}
+          >
             ×
           </button>
         </span>
@@ -242,10 +306,117 @@ const ViewCell = memo(function ViewCell({
           </button>
         </div>
       )}
-      {t?.Legend && output?.status === 'ready' && (
+      {t?.Legend && output?.status === 'ready' && !spec.group && (
         <div className={`view-legend${compact ? ' compact' : ''}`}>
           <ErrorBoundary scope="view" fallback={() => null}>
             <t.Legend spec={spec} output={output} compact={compact} />
+          </ErrorBoundary>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/** Drawing a lasso over a view's cell: the pointer's path (canvas pixels) until it is released. */
+function LassoOverlay({ cell, onDone, onCancel }: { cell: Cell; onDone: (points: Polygon, add: boolean) => void; onCancel: () => void }) {
+  const [points, setPoints] = useState<Polygon>([]);
+  const drawing = useRef(false);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && onCancel();
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [onCancel]);
+  const at = (e: React.PointerEvent) => {
+    const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return [e.clientX - box.left + cell.x, e.clientY - box.top + cell.y] as [number, number];
+  };
+  return (
+    <div
+      className="lasso-overlay"
+      data-testid="lasso-overlay"
+      style={{ left: cell.x, top: cell.y + TITLE_ROW, width: cell.width, height: cell.height - TITLE_ROW }}
+      onPointerDown={(e) => {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        drawing.current = true;
+        setPoints([at(e)]);
+      }}
+      onPointerMove={(e) => {
+        if (!drawing.current) return;
+        const p = at(e);
+        setPoints((ps) => {
+          const last = ps[ps.length - 1];
+          return last && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3 ? ps : [...ps, p];
+        });
+      }}
+      onPointerUp={(e) => {
+        drawing.current = false;
+        if (points.length >= 3) onDone(points, e.shiftKey);
+        setPoints([]);
+      }}
+    >
+      <svg width="100%" height="100%">
+        <polyline
+          points={points.map(([x, y]) => `${x - cell.x},${y - cell.y - TITLE_ROW}`).join(' ')}
+          className="lasso-path"
+        />
+      </svg>
+    </div>
+  );
+}
+
+/** A linked group's tile: its title row (fit, close) and its legend; its views are drawn in
+ * the cells below. */
+const GroupTile = memo(function GroupTile({
+  group,
+  first,
+  n,
+  tile,
+  legend,
+  selected,
+  onFit,
+}: {
+  group: string;
+  first: ViewSpec;
+  n: number;
+  tile: Cell;
+  legend: ColourLegendData | undefined;
+  selected: boolean;
+  onFit: (unit: string) => void;
+}) {
+  const select = useWorkspace((s) => s.select);
+  const removeGroup = useWorkspace((s) => s.removeGroup);
+  const t = viewType(first.type);
+  const compact = tile.width < COMPACT_WIDTH;
+  const output = useMemo<ViewOutput>(() => ({ layers: [], bounds: null, status: 'ready', legend }), [legend]);
+  return (
+    <div
+      className={`group-tile${selected ? ' selected' : ''}`}
+      style={{ left: tile.x, top: tile.y, width: tile.width, height: tile.height }}
+      data-testid="group-tile"
+      data-group={group}
+    >
+      <div className="view-header">
+        <button className="view-title" onClick={() => select(first.id)} title="Linked views: settings are shared">
+          Linked · {n} datasets
+        </button>
+        {legend?.kind === 'categories' && legend.regenerated && (
+          <span className="view-caption" data-testid="colours-regenerated" title="The datasets’ own colours disagree (the same colour for different categories, or different colours for one category): palette colours are used for all.">
+            colours regenerated
+          </span>
+        )}
+        <span className="view-header-actions">
+          <button className="icon-button" onClick={() => onFit(group)} aria-label="Fit to data" title="Fit to data">
+            ⤢
+          </button>
+          <button className="icon-button" onClick={() => removeGroup(group)} aria-label="Close linked views" title="Close the linked views">
+            ×
+          </button>
+        </span>
+      </div>
+      {t?.Legend && legend && (
+        <div className={`view-legend${compact ? ' compact' : ''}`}>
+          <ErrorBoundary scope="view" fallback={() => null}>
+            <t.Legend spec={first} output={output} compact={compact} />
           </ErrorBoundary>
         </div>
       )}
@@ -363,20 +534,51 @@ export function Canvas() {
   const outputs = useViewOutputs((s) => s.outputs);
   const drop = useViewOutputs((s) => s.drop);
   const [ref, size] = useSize<HTMLDivElement>();
-  // a plot belonging to a view shares that view's tile (the bottom third)
-  const followKey = views.map((v) => `${v.id}>${typeof v.params.follows === 'string' ? v.params.follows : ''}`).join(',');
-  const cells = useMemo(
-    () =>
-      viewCells(
-        views.map((v) => v.id),
-        views.map((v) => (typeof v.params.follows === 'string' ? v.params.follows : null)),
-        size.width,
-        size.height,
-        2,
-      ),
-    [followKey, size], // eslint-disable-line react-hooks/exhaustive-deps
-  );
+  // linked groups: their legends merged, and room for them when open
+  const groupLegends = useMemo(() => {
+    const by: Record<string, (ColourLegendData | undefined)[]> = {};
+    for (const v of views) if (v.group) (by[v.group] ??= []).push(outputs[v.id]?.status === 'ready' ? (outputs[v.id]?.legend as ColourLegendData | undefined) : undefined);
+    return Object.fromEntries(Object.entries(by).map(([g, ls]) => [g, mergeLegends(ls)]));
+  }, [views, outputs]);
+  const firstOfGroup = useMemo(() => {
+    const m: Record<string, ViewSpec> = {};
+    for (const v of views) if (v.group && !m[v.group]) m[v.group] = v;
+    return m;
+  }, [views]);
+  // a plot belonging to a view shares that view's tile (the bottom third); a linked group's
+  // views share one tile
+  const followKey = views.map((v) => `${v.id}>${typeof v.params.follows === 'string' ? v.params.follows : ''}>${v.group ?? ''}`).join(',');
+  const legendOpenKey = Object.keys(groupLegends)
+    .map((g) => `${g}:${groupLegends[g] && !(firstOfGroup[g]?.params.legendCollapsed as boolean | undefined) ? 1 : 0}`)
+    .join(',');
+  const tiles = useMemo(() => {
+    const right = Object.fromEntries(legendOpenKey ? legendOpenKey.split(',').map((x) => [x.split(':')[0], x.endsWith(':1') ? LEGEND_SPACE : 0]) : []);
+    const first = tileCells(
+      views.map((v) => ({ id: v.id, follows: typeof v.params.follows === 'string' ? v.params.follows : null, group: v.group })),
+      size.width,
+      size.height,
+      2,
+      TITLE_ROW,
+      right,
+    );
+    // a narrow group tile starts with its legend folded (as a view's)
+    for (const g of Object.keys(first.groups)) {
+      if (right[g] && first.groups[g].width < COMPACT_WIDTH && firstOfGroup[g]?.params.legendCollapsed === undefined) right[g] = 0;
+    }
+    return tileCells(
+      views.map((v) => ({ id: v.id, follows: typeof v.params.follows === 'string' ? v.params.follows : null, group: v.group })),
+      size.width,
+      size.height,
+      2,
+      TITLE_ROW,
+      right,
+    );
+  }, [followKey, size, legendOpenKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cells = tiles.cells;
   const [viewStates, setViewStates] = useState<Record<string, OrthoState>>({});
+  const [lassoing, setLassoing] = useState<string | null>(null);
+  const selections = useSelection((s) => s.selections);
+  const setSelection = useSelection((s) => s.set);
   const layouts = useMemo(
     () => views.map((v, i) => (cells[i] ? layoutOf(v, cells[i], outputs[v.id]) : null)),
     [views, cells, outputs],
@@ -412,20 +614,28 @@ export function Canvas() {
     for (const m of [fitted.current, fittedKey.current, fits.current, placed.current]) {
       for (const k of Object.keys(m)) if (!keys.has(k)) delete m[k];
     }
+    for (const v of views) if (v.group) open.add(v.group);
     for (const id of touched.current) if (!open.has(id)) touched.current.delete(id);
     for (const id of Object.keys(outputs)) if (!open.has(id)) drop(id);
+    for (const id of Object.keys(useSelection.getState().selections)) if (!open.has(id)) useSelection.getState().set(id, null);
   }, [views, outputs, drop, layouts]);
+
+  // What is fitted and moved together: a view, or a linked group (its views' layouts as one).
+  const units = useMemo(() => {
+    const by = new Map<string, Layout[]>();
+    for (const l of layouts) if (l) by.set(l.unit, [...(by.get(l.unit) ?? []), l]);
+    return [...by.entries()].map(([unit, ls]) => ({ unit, l: combined(ls) }));
+  }, [layouts]);
 
   // Fit when a view's data first arrives or changes; follow size changes otherwise.
   useEffect(() => {
     const updates: Record<string, OrthoState> = {};
-    views.forEach((v, i) => {
-      const l = layouts[i];
-      if (!l || l.cell.width < 10) return;
+    units.forEach(({ unit, l }) => {
+      if (l.cell.width < 10) return;
       const insets = `${JSON.stringify(l.fitInsets)}|${l.sameScale}|${l.sameCoordinates}`;
       let refit = false;
       const resized: string[] = [];
-      const user = touched.current.has(v.id);
+      const user = touched.current.has(unit);
       l.keys.forEach((key, j) => {
         const b = l.bounds[j];
         const prev = placed.current[key];
@@ -458,12 +668,12 @@ export function Canvas() {
       l.keys.forEach((key, j) => (placed.current[key] = { rect: l.rects[j], insets }));
     });
     if (Object.keys(updates).length) setViewStates((s) => ({ ...s, ...updates }));
-  }, [views, layouts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [units]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fit = (id: string) => {
-    const l = layouts[views.findIndex((v) => v.id === id)];
+  const fit = (unit: string) => {
+    const l = units.find((u) => u.unit === unit)?.l;
     if (!l) return;
-    touched.current.delete(id);
+    touched.current.delete(unit);
     const states = fitLayout(l);
     Object.assign(fits.current, states);
     setViewStates((s) => ({ ...s, ...states }));
@@ -499,10 +709,28 @@ export function Canvas() {
   const shown = useRef<Set<Layer>>(new Set());
   const layers = useMemo(() => {
     const all = views.flatMap((v) => panelsOf(outputs[v.id]).flatMap((p) => p.layers as Layer[]));
+    // the outlines of each view's lassos, while its coordinates are those they were drawn in
+    for (const v of views) {
+      const sel = selections[v.id];
+      if (!sel || outputs[v.id]?.lasso?.key !== sel.key) continue;
+      sel.polygons.forEach((pg, k) => {
+        all.push(
+          new PathLayer({
+            id: `${panelKey(v.id, pg.panel)}:lasso-${k}`,
+            data: [{ path: [...pg.points, pg.points[0]] }],
+            getPath: (d: { path: Polygon }) => d.path,
+            getColor: [230, 80, 20, 230],
+            getWidth: 1.5,
+            widthUnits: 'pixels',
+            pickable: false,
+          }) as unknown as Layer,
+        );
+      });
+    }
     const fresh = all.map((l) => (shown.current.has(l) || !l.internalState ? l : l.clone({})));
     shown.current = new Set(fresh);
     return dragging ? fresh.map((l) => l.clone({ pickable: false })) : fresh;
-  }, [views, outputs, dragging]);
+  }, [views, outputs, dragging, selections]);
   const viewState = Object.fromEntries(
     deckViews.map((dv) => [dv.id, { ...(viewStates[dv.id] ?? { target: [0, 0, 0], zoom: 0 }), ...ZOOM_LIMITS }]),
   );
@@ -642,6 +870,32 @@ export function Canvas() {
     showTip(info ? tooltip(info) : null);
   };
 
+  // A lasso drawn over view `id`: its points in the coordinates of the panel it started in, the
+  // cells inside selected (Shift: added to the selection).
+  const lassoDone = async (id: string, screen: Polygon, add: boolean) => {
+    setLassoing(null);
+    const out = outputs[id];
+    const deck = deckRef.current?.deck as unknown as {
+      getViewports: () => { id: string; x: number; y: number; width: number; height: number; unproject: (p: number[]) => number[] }[];
+    } | undefined;
+    if (!out?.lasso || !deck) return;
+    const [sx, sy] = screen[0];
+    const vp = deck
+      .getViewports()
+      .find((p) => p.id.startsWith(`${id}/`) && sx >= p.x && sx <= p.x + p.width && sy >= p.y && sy <= p.y + p.height);
+    if (!vp) return;
+    const poly = screen.map(([x, y]) => vp.unproject([x - vp.x, y - vp.y]).slice(0, 2) as [number, number]);
+    const panel = ownerOf(vp.id).panel;
+    const old = useSelection.getState().selections[id];
+    const keep = add && old && old.key === out.lasso.key && old.mask.length === out.lasso.n;
+    const mask = keep ? old.mask.slice() : new Uint8Array(out.lasso.n);
+    const t0 = performance.now();
+    const added = await out.lasso.select(panel, poly, mask);
+    const count = (keep ? old.count : 0) + added;
+    event('lasso', performance.now() - t0, { n: out.lasso.n, selected: count, added: keep ? 1 : 0 });
+    setSelection(id, { mask, count, key: out.lasso.key, polygons: [...(keep ? old.polygons : []), { panel, points: poly }] });
+  };
+
   return (
     <div
       className="canvas"
@@ -694,11 +948,12 @@ export function Canvas() {
           onViewStateChange={({ viewId, viewState: vs, interactionState }) => {
             const { target, zoom } = vs as unknown as OrthoState;
             const owner = ownerOf(viewId).view;
+            const unit = views.find((v) => v.id === owner)?.group ?? owner;
             if (interactionState && Object.values(interactionState).some(Boolean)) {
-              touched.current.add(owner);
+              touched.current.add(unit);
               moving.current = performance.now() + 300; // the frames of this move (and its end)
             }
-            const l = layouts[views.findIndex((v) => v.id === owner)];
+            const l = units.find((u) => u.unit === unit)?.l;
             setViewStates((s) => {
               if (!l || l.keys.length < 2) return { ...s, [viewId]: { target, zoom } };
               const mine = Object.fromEntries(l.keys.filter((k) => s[k]).map((k) => [k, s[k]]));
@@ -757,6 +1012,18 @@ export function Canvas() {
           style={{ background: 'var(--canvas-bg)' }}
         />
       )}
+      {Object.entries(tiles.groups).map(([g, tile]) => (
+        <GroupTile
+          key={g}
+          group={g}
+          first={firstOfGroup[g]}
+          n={views.filter((v) => v.group === g).length}
+          tile={tile}
+          legend={groupLegends[g]}
+          selected={views.some((v) => v.group === g && v.id === selected)}
+          onFit={fit}
+        />
+      ))}
       {views.map((v, i) =>
         cells[i] ? (
           <ErrorBoundary key={v.id} scope="view" fallback={() => null}>
@@ -766,11 +1033,20 @@ export function Canvas() {
               output={outputs[v.id]}
               selected={v.id === selected}
               onFit={fit}
+              lassoOn={lassoing === v.id}
+              onLasso={setLassoing}
               panels={panelsFor(layouts[i])}
               overlays={overlaysFor(outputs[v.id], layouts[i], viewStates)}
             />
           </ErrorBoundary>
         ) : null,
+      )}
+      {lassoing && cells[views.findIndex((v) => v.id === lassoing)] && (
+        <LassoOverlay
+          cell={cells[views.findIndex((v) => v.id === lassoing)]}
+          onDone={(pts, add) => void lassoDone(lassoing, pts, add)}
+          onCancel={() => setLassoing(null)}
+        />
       )}
       <div ref={tipRef} className="hover-tip" data-testid="hover-tip" role="tooltip" style={{ display: 'none' }} />
     </div>

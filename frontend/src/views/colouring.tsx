@@ -3,7 +3,7 @@
 // table (colour/gpu.ts), the settings fields and the legend. A view keeps these parameters
 // under the same names (`ColourParams`), so they are remembered and reset alike.
 
-import { type KeyboardEvent, useCallback, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useGene, useGenes, useMeta, useObs, useObsLabels } from '../api/queries';
 import type { ColumnMeta, DatasetMeta, GeneList, GeneVector } from '../api/types';
@@ -24,6 +24,7 @@ import {
   COLORMAPS,
   coloursExtended,
   hexToRgb,
+  MISSING,
   normaliseHex,
   PALETTE_LABELS,
   type PaletteName,
@@ -39,6 +40,7 @@ import { event } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ColourInput, Field, Help, type OptionGroup, Select } from '../ui/controls';
 import { GeneSearch } from '../ui/GeneSearch';
+import { groupColours, groupRange, type LinkedEntry, useLinked } from './linked';
 import type { ViewOutput } from './registry';
 
 /** What the points are coloured by: an obs column, or a gene (its var index name) read from
@@ -162,10 +164,18 @@ export function defaultColourParams(meta: DatasetMeta): ColourSettings {
   };
 }
 
-/** The colouring this dataset can actually show; notes when a saved choice no longer exists. */
-export function effectiveColouring<P extends ColourParams>(p: P, meta: DatasetMeta, genes?: GeneList): { p: P; notes: string[] } {
+/** The colouring this dataset can actually show; notes when a saved choice no longer exists.
+ * In a linked group the choice is the group's: kept as it is (a dataset without the column or
+ * gene shows its cells as NA). */
+export function effectiveColouring<P extends ColourParams>(
+  p: P,
+  meta: DatasetMeta,
+  genes?: GeneList,
+  linked = false,
+): { p: P; notes: string[] } {
   const notes: string[] = [];
   let out = p;
+  if (linked) return { p, notes };
   if (p.colorBy?.kind === 'gene') {
     const { name } = p.colorBy;
     let matrix = meta.matrices.find((m) => m.name === (p.colorBy!.matrix ?? 'X'));
@@ -198,6 +208,7 @@ export type ColourLegendData =
       order: number[]; // natural order of the labels
       extended: boolean; // more categories than palette colours: interpolated colours added
       custom: boolean[]; // colour chosen by hand
+      regenerated?: boolean; // linked group: preset colours disagreed, palette colours instead
     }
   | { kind: 'numeric'; name: string; range: [number, number]; colormap: ColormapName };
 
@@ -241,7 +252,17 @@ export interface Colouring {
   retry: () => void;
   /** The colouring's name (column, or gene symbol and matrix). */
   name: string | null;
+  /** Linked group: this dataset lacks the group's column or gene (its cells are NA). */
+  missingHere: boolean;
 }
+
+/** A view in a linked group (its colours are the group's, views/linked.ts). */
+export interface LinkRef {
+  group: string;
+  view: string;
+}
+
+const NO_ENTRIES: Record<string, LinkedEntry> = {};
 
 /** Loads what the cells are coloured by and builds the GPU colour table. `n`: the number of
  * cells the values must have (values of another length are ignored while they load). */
@@ -250,6 +271,7 @@ export function useColouring(
   table: string | null,
   p: ColourParams,
   n: number | null,
+  link?: LinkRef,
 ): Colouring {
   const meta = useMeta(datasetId, table);
   const version = meta.data?.version;
@@ -269,6 +291,16 @@ export function useColouring(
     : geneChoice && geneIndex !== null
       ? geneLabel(genes.data!, geneIndex) + (geneChoice.matrix ? ` (${geneChoice.matrix})` : '')
       : null;
+
+  // Linked group: the column or gene is not in this dataset (or its values cannot be read).
+  const geneMatrix = geneChoice ? meta.data?.matrices.find((m) => m.name === (geneChoice.matrix ?? 'X')) : undefined;
+  const missingHere =
+    !!link &&
+    !!meta.data &&
+    !!p.colorBy &&
+    (p.colorBy.kind === 'obs'
+      ? !column
+      : !geneMatrix || geneMatrix.access === 'needs_conversion' || (!!genes.data && geneIndex === null));
 
   // Values for the GPU and the range of numbers: once per loaded column.
   const prepared = useMemo(() => {
@@ -315,6 +347,36 @@ export function useColouring(
         ? (labelsQ.data?.colors ?? null)
         : null;
   const palette = labels ? resolvePalette(p.palette, labels.length, given) : null;
+
+  // Linked group: publish what this dataset holds, and take the group's colours and range.
+  const colourKey = p.colorBy ? `${p.colorBy.kind}:${p.colorBy.name}:${p.colorBy.matrix ?? ''}` : '';
+  const entry = useMemo<LinkedEntry | null>(() => {
+    if (!link || !p.colorBy || missingHere) return null;
+    if (labels) return { key: colourKey, labels, given: given && given.length === labels.length ? given : null };
+    if (prepared?.range) return { key: colourKey, range: prepared.range };
+    return null;
+  }, [link, colourKey, missingHere, labels, given, prepared]); // eslint-disable-line react-hooks/exhaustive-deps
+  const publishLinked = useLinked((s) => s.publish);
+  const linkGroup = link?.group;
+  const linkView = link?.view;
+  useEffect(() => {
+    if (!linkGroup || !linkView) return;
+    publishLinked(linkGroup, linkView, entry);
+  }, [linkGroup, linkView, entry, publishLinked]);
+  useEffect(
+    () => () => {
+      if (linkGroup && linkView) publishLinked(linkGroup, linkView, null);
+    },
+    [linkGroup, linkView, publishLinked],
+  );
+  const groupEntries = useLinked((s) => (linkGroup ? (s.entries[linkGroup] ?? NO_ENTRIES) : NO_ENTRIES));
+  const sameKey = useMemo(() => Object.values(groupEntries).filter((e) => e.key === colourKey), [groupEntries, colourKey]);
+  const scheme = useMemo(
+    () => (link && labels && sameKey.some((e) => e.labels) ? groupColours(sameKey, p.palette) : null),
+    [link, labels, sameKey, p.palette],
+  );
+  const sharedRange = useMemo(() => (link && prepared?.range ? groupRange(sameKey) : null), [link, prepared, sameKey]);
+  const range = sharedRange ?? prepared?.range ?? null;
   const slots = useMemo(
     () => (labels && order && palette && palette !== 'dataset' ? assignSlots(labels, order, paletteSize(palette, labels.length)) : []),
     [labels, order, palette],
@@ -324,31 +386,31 @@ export function useColouring(
   const customKey = custom ? JSON.stringify(custom) : '';
   const colours = useMemo(() => {
     if (!labels || !palette) return null;
-    const base = categoryColours(palette, slots, given);
+    const base = scheme ? labels.map((l) => scheme.colourOf.get(l) ?? MISSING) : categoryColours(palette, slots, given);
     const picked: Record<string, string> = customKey ? JSON.parse(customKey) : {};
     return base.map((c, i) => (picked[labels[i]] ? hexToRgb(picked[labels[i]]) : c));
-  }, [labels, palette, slots, given, customKey]);
+  }, [labels, palette, slots, given, customKey, scheme]);
 
   const hiddenKey = p.hidden.join('\u0000');
-  const coloured = !!column || geneIndex !== null;
+  const coloured = (!!column || geneIndex !== null) && !missingHere;
   const valueColour = useMemo<ValueColour | null>(() => {
+    if (missingHere) return constantColouring(MISSING);
     if (!coloured) return constantColouring(BASE_RGB);
     if (!prepared) return null;
-    if (prepared.range) return { ...numberColouring(p.colormap, prepared.range), sortByValue: p.sortByValue };
+    if (range) return { ...numberColouring(p.colormap, range), sortByValue: p.sortByValue };
     if (!labels || !colours) return null;
     const hidden = new Set(hiddenKey ? hiddenKey.split('\u0000') : []);
     return categoryColouring(colours, labels.map((l) => hidden.has(l)));
-  }, [coloured, prepared, labels, colours, p.colormap, p.sortByValue, hiddenKey]);
+  }, [missingHere, coloured, prepared, range, labels, colours, p.colormap, p.sortByValue, hiddenKey]);
 
   const legend = useMemo<ColourLegendData | undefined>(() => {
-    if (gene && colourName && prepared?.range) {
-      return { kind: 'numeric', name: colourName, range: displayRange(prepared.range, p.colormap), colormap: p.colormap };
+    if (missingHere) return undefined;
+    if (gene && colourName && range) {
+      return { kind: 'numeric', name: colourName, range: displayRange(range, p.colormap), colormap: p.colormap };
     }
     if (!column || !values) return undefined;
     if (values.kind === 'numeric') {
-      return prepared?.range
-        ? { kind: 'numeric', name: column.name, range: displayRange(prepared.range, p.colormap), colormap: p.colormap }
-        : undefined;
+      return range ? { kind: 'numeric', name: column.name, range: displayRange(range, p.colormap), colormap: p.colormap } : undefined;
     }
     if (!labels || !colours || !order || !palette) return undefined;
     return {
@@ -358,13 +420,15 @@ export function useColouring(
       colours,
       counts: countCodes(values.data, labels.length),
       order,
-      extended: coloursExtended(palette, labels.length),
+      extended: scheme ? scheme.extended : coloursExtended(palette, labels.length),
       custom: labels.map((l) => !!custom?.[l]),
+      ...(scheme?.regenerated ? { regenerated: true } : {}),
     };
-  }, [gene, colourName, column, values, labels, colours, order, palette, prepared, p.colormap, custom]);
+  }, [missingHere, gene, colourName, column, values, labels, colours, order, palette, range, p.colormap, custom, scheme]);
 
   const hiddenSet = useMemo(() => new Set(p.hidden), [p.hidden]);
   const tooltip = useCallback((i: number): string | null => {
+    if (missingHere) return `${p.colorBy!.name}: NA (not in this dataset)`;
     if (gene && colourName) {
       const v = gene.values[i];
       return `${colourName}: ${isMissing(v) ? 'NA' : formatValue(v)}`;
@@ -375,7 +439,7 @@ export function useColouring(
     const label = v >= 0 ? labels?.[v] : undefined;
     if (label !== undefined && hiddenSet.has(label)) return null; // hidden cells are not reported
     return `${column.name}: ${label ?? 'NA'}`;
-  }, [gene, colourName, column, values, labels, hiddenSet]);
+  }, [missingHere, p.colorBy, gene, colourName, column, values, labels, hiddenSet]);
 
   const error = tooMany ?? obs.error ?? labelsQ.error ?? genes.error ?? geneQ.error;
   const retry = useCallback(() => {
@@ -390,6 +454,7 @@ export function useColouring(
     error,
     retry,
     name: colourName,
+    missingHere,
   };
 }
 

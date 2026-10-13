@@ -119,3 +119,65 @@ test('plot against a second feature: follows the embedding colour, closes with i
   await expect(cells).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+// S7c: a lasso drawn in the view selects cells; "Plot against: Lasso selection" compares them
+// with the other cells (composition for a category colour, violins for a number or gene).
+test('lasso: select cells, plot them against the others', async ({ page }) => {
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await openDataset(page, 'example_with_layers');
+  const cells = page.getByTestId('view-cell');
+  const view = cells.first();
+  await page.getByTestId('plot-companion').locator('input').check();
+  await expect(cells).toHaveCount(2);
+  const plot = cells.nth(1);
+  await page.getByTestId('plot-y').click();
+  await page.getByRole('option', { name: /^Lasso selection/ }).click();
+  // nothing selected yet: a quiet instruction
+  await expect(plot).toHaveAttribute('data-status', 'idle');
+  await expect(plot.getByTestId('view-idle')).toContainText('lasso');
+
+  // draw a lasso around the middle of the view
+  const box = (await view.boundingBox())!;
+  const [cx, cy, r] = [box.x + box.width / 2, box.y + box.height / 2, Math.min(box.width, box.height) / 4];
+  const lassoAround = async (x: number, y: number, shift = false) => {
+    await view.getByTestId('lasso').click();
+    await expect(page.getByTestId('lasso-overlay')).toBeVisible();
+    if (shift) await page.keyboard.down('Shift');
+    await page.mouse.move(x + r, y);
+    await page.mouse.down();
+    for (let k = 1; k <= 24; k += 1) await page.mouse.move(x + r * Math.cos((k * Math.PI) / 12), y + r * Math.sin((k * Math.PI) / 12));
+    await page.mouse.up();
+    if (shift) await page.keyboard.up('Shift');
+    await expect(page.getByTestId('lasso-overlay')).toHaveCount(0);
+  };
+  await lassoAround(cx, cy);
+  const chip = view.getByTestId('selection-chip');
+  await expect(chip).toContainText('selected');
+  const count = async () => Number(((await chip.textContent()) ?? '').replace(/[^0-9]/g, ''));
+  const first = await count();
+  expect(first).toBeGreaterThan(0);
+  expect(first).toBeLessThan(8000);
+
+  // the view's colour (cell type) against the selection: two bars, the selected and the rest
+  await expect(plot).toHaveAttribute('data-status', 'ready');
+  await expect(plot.getByTestId('bar')).toHaveCount(2);
+  await expect(plot.getByTestId('view-caption')).toContainText('selected of 8.0 k cells');
+  await page.screenshot({ path: 'test-results/screens/lasso-bars.png' });
+
+  // Shift adds a second lasso elsewhere
+  await lassoAround(cx - r * 1.2, cy - r * 1.2, true);
+  await expect.poll(count).toBeGreaterThan(first);
+
+  // a gene colour: violins of the selected cells and the others
+  await page.getByTestId('gene-search').fill('Monocyte_m1');
+  await page.getByTestId('gene-search').press('Enter');
+  await expect(plot.getByTestId('violin')).toHaveCount(2);
+  await expect(plot.getByTestId('violin').first()).toContainText('in the selection');
+
+  // cleared: the plot waits for a selection again
+  await chip.getByRole('button', { name: 'Clear the selection' }).click();
+  await expect(chip).toHaveCount(0);
+  await expect(plot).toHaveAttribute('data-status', 'idle');
+  expect(errors).toEqual([]);
+});

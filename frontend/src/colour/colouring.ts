@@ -59,3 +59,16 @@ export function lookup(vc: ValueColour, v: number): [number, number, number, num
   }
   return Array.from(vc.lut.slice(idx * 4, idx * 4 + 4)) as [number, number, number, number];
 }
+
+/** Whether cell `i` is hidden (its category's alpha is 0) under a category colouring. */
+export function hiddenBy(vc: ValueColour | null | undefined, values: ArrayLike<number> | null | undefined): ((i: number) => boolean) | null {
+  if (!vc || vc.mode !== 'categories' || !values) return null;
+  const n = vc.lut.length / 4;
+  let any = false;
+  for (let k = 0; k < n; k += 1) if (vc.lut[4 * k + 3] === 0) any = true;
+  if (!any) return null;
+  return (i: number) => {
+    const v = Math.round(values[i]);
+    return v >= 0 && v < n && vc.lut[4 * v + 3] === 0;
+  };
+}

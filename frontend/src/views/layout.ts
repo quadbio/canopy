@@ -98,3 +98,43 @@ export function resizeView(state: OrthoState, from: Pick<Cell, 'width' | 'height
   const ratio = Math.min(to.width / Math.max(from.width, 1), to.height / Math.max(from.height, 1));
   return { ...state, zoom: state.zoom + Math.log2(ratio) };
 }
+
+/** Tiles with linked groups (S7b): a group takes one tile, its views a grid inside it, below
+ * the group's title row (`top`) and left of its legend (`right[group]`, when open). Other views
+ * as `viewCells`. Returns each view's cell (in the order of `views`) and each group's tile. */
+export function tileCells(
+  views: { id: string; follows: string | null; group?: string }[],
+  width: number,
+  height: number,
+  gap: number,
+  top: number,
+  right: Record<string, number> = {},
+): { cells: Cell[]; groups: Record<string, Cell> } {
+  const firstOf = new Map<string, string>();
+  for (const v of views) if (v.group && !firstOf.has(v.group)) firstOf.set(v.group, v.id);
+  // one entry per tile: independent views (with their followers), and each group's first view
+  const units = views.filter((v) => !v.group || firstOf.get(v.group) === v.id);
+  const unitCells = viewCells(
+    units.map((v) => v.id),
+    units.map((v) => (v.group ? null : v.follows)),
+    width,
+    height,
+    gap,
+  );
+  const cellOf = new Map(units.map((v, i) => [v.id, unitCells[i]]));
+  const groups: Record<string, Cell> = {};
+  const members = new Map<string, string[]>();
+  for (const v of views) if (v.group) members.set(v.group, [...(members.get(v.group) ?? []), v.id]);
+  const inner = new Map<string, Cell>();
+  for (const [g, ids] of members) {
+    const tile = cellOf.get(firstOf.get(g)!);
+    if (!tile) continue;
+    groups[g] = tile;
+    const w = Math.max(tile.width - (right[g] ?? 0), 20);
+    const h = Math.max(tile.height - top, 20);
+    gridCells(ids.length, w, h, 4).forEach((r, k) =>
+      inner.set(ids[k], { x: tile.x + r.x, y: tile.y + top + r.y, width: r.width, height: r.height }),
+    );
+  }
+  return { cells: views.map((v) => (v.group ? inner.get(v.id)! : cellOf.get(v.id)!)), groups };
+}
