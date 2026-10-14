@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import hashlib
+import json
 import os
 import threading
 import time
@@ -246,6 +248,7 @@ class ScanCounts:
     removed: int = 0
     failed: int = 0
     unsupported: int = 0
+    adopted: int = 0  # converted copies carried over to a dataset's new id
     walk: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -278,14 +281,16 @@ def _check_one(
     except OSError as e:
         stamp = f"error:{type(e).__name__}"
     prev = known.get(c.relpath)
-    # unchanged: the same stamp, and the same version id. The id also holds the real path, which
-    # changes when a root moves (a renamed folder, a new mount point) while its files' times stay:
-    # the old id would make every conversion refuse ("the file changed", S7b demo).
+    identity = f"{c.root}/{c.relpath}"
+    # unchanged: the same stamp, and the same version id. The id holds the root's name and the
+    # path in it (owner, host test 3: moving the whole data folder keeps the conversions); an
+    # index written by an earlier release (real paths) is re-inspected once, its converted
+    # copies carried over (`adopt_store`).
     if (
         prev is not None
         and prev[0] == stamp
         and not full
-        and (prev[2] is None or prev[2] == dataset_id(c.path, stamp))
+        and (prev[2] is None or prev[2] == dataset_id(c.path, stamp, identity))
     ):
         return None
     row: dict[str, Any] = {
@@ -300,13 +305,15 @@ def _check_one(
     t0 = time.perf_counter()
     try:
         row["kind"] = detect_kind(c.path)
-        fp = inspect_path(c.path, measure_size=cfg.measure_store_size)
+        fp = inspect_path(c.path, measure_size=cfg.measure_store_size, identity=identity)
     except Exception as e:
         state, reason = _reason(e)
         row.update(state=state, reason=reason, inspect_ms=_ms(t0))
         if state == "failed":
             log.warning("inspect_failed", root=c.root, path=c.relpath, reason=reason, exc_info=e)
         return row
+    if prev is not None and prev[0] == stamp and prev[2] and prev[2] != fp.dataset_id:
+        row["_previous_version"] = prev[2]  # the same content under its former id
     row.update(
         kind=fp.kind,
         version=fp.dataset_id,
@@ -351,8 +358,11 @@ def scan(
     *,
     full: bool = False,
     trigger: str = "manual",
+    cache_dir: Path | None = None,
 ) -> ScanCounts:
-    """Scan every root, update the index and return the counts (also stored with the scan)."""
+    """Scan every root, update the index and return the counts (also stored with the scan).
+    With `cache_dir`, a dataset whose id changed while its content did not (an index from an
+    earlier release) keeps its converted copy."""
     log = get_logger("canopy.catalog")
     counts = ScanCounts()
     scan_id = db.start_scan(trigger, full)
@@ -364,7 +374,7 @@ def scan(
             counts.removed += db.remove_roots_except(r.name for r in roots)
             with ThreadPoolExecutor(cfg.inspect_workers, thread_name_prefix="inspect") as pool:
                 for root in roots:
-                    _scan_root(db, root, cfg, pool, scan_id, full, counts, progress)
+                    _scan_root(db, root, cfg, pool, scan_id, full, counts, progress, cache_dir)
             extra.update(counts.as_dict())
         elapsed = time.perf_counter() - t0
         if cfg.rescan_minutes and elapsed > cfg.rescan_minutes * 30:
@@ -381,6 +391,30 @@ def scan(
     return counts
 
 
+def adopt_store(cache_dir: Path, old: str, new: str) -> bool:
+    """Give the converted copy of version `old` to version `new` (the same content under a new
+    id): its folder is renamed and its manifest updated. Not while a conversion writes into it,
+    nor over an existing copy."""
+    from canopy.contract import MANIFEST
+
+    src, dst = cache_dir / old, cache_dir / new
+    if not src.is_dir() or dst.exists() or any(src.glob("c*.tmp-*")):
+        return False
+    try:
+        src.rename(dst)
+    except OSError:
+        return False
+    for manifest in dst.glob(f"c*/{MANIFEST}"):
+        with contextlib.suppress(OSError, ValueError):
+            m = json.loads(manifest.read_text())
+            m["dataset_id"] = new
+            part = manifest.with_name(manifest.name + ".part")
+            part.write_text(json.dumps(m, indent=2))
+            part.replace(manifest)  # the manifest marks a complete store: never half-written
+    get_logger("canopy.catalog").info("store_adopted", version=new, previous=old)
+    return True
+
+
 def _scan_root(
     db: CatalogDB,
     root: DataRoot,
@@ -390,6 +424,7 @@ def _scan_root(
     full: bool,
     counts: ScanCounts,
     progress: Progress | None = None,
+    cache_dir: Path | None = None,
 ) -> None:
     log = get_logger("canopy.catalog")
     counts.roots += 1
@@ -430,6 +465,13 @@ def _scan_root(
                 counts.unchanged += 1
                 unchanged.append(c.relpath)
                 continue
+            previous = row.pop("_previous_version", None)
+            if (
+                previous
+                and cache_dir is not None
+                and adopt_store(cache_dir, previous, row["version"])
+            ):
+                counts.adopted += 1
             if row.pop("_new"):
                 counts.new += 1
             else:

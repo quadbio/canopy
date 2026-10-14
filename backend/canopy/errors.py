@@ -50,6 +50,13 @@ REFUSAL_CODES = frozenset(
         "already_converted",
         "too_many_values",
         "too_many_categories",
+        "memory_busy",
+        "queue_full",
+        "conversion_running",
+        "auth_required",
+        "host_not_allowed",
+        "json_required",
+        "internal_error",
         "error",  # the browser's code for a failure without one
     }
 )
@@ -57,6 +64,8 @@ NEEDS_CONVERSION_REASONS = frozenset(
     {
         "legacy_layout",
         "matrix_csr",
+        "matrix_csc",
+        "matrix_dense",
         "no_table",
         "non_numeric_embedding",
         "too_many_values",

@@ -170,7 +170,7 @@ def convert_anndata(
     t0 = time.monotonic()
     version = fp.dataset_id
     stamp = version_stamp(src)
-    if dataset_id(src, stamp) != version:
+    if dataset_id(src, stamp, fp.identity) != version:
         raise ConversionError("source_changed", "the file changed since it was inspected")
     final = store_dir(cache_dir, version)
     tmp = final.parent / f"{final.name}.tmp-j{opts.job}-{uuid.uuid4().hex[:8]}"

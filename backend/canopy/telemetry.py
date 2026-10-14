@@ -19,6 +19,7 @@ Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client ad
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Annotated
@@ -86,6 +87,16 @@ def plain_value(key: str, v: str) -> bool:
 
 
 STRING_FIELDS = CODE_FIELDS | TEXT_FIELDS  # the frontend's list must match (test)
+# Fields whose values have a fixed shape: anything else (a name sent by mistake, or by a client
+# that is not ours) is dropped and counted (review H3 A-L8).
+_FRAME = r"[\w.-]+\.(?:js|mjs|ts|tsx):\d+:\d+"
+FIELD_SHAPES = {
+    "where": re.compile(rf"{_FRAME}|unknown"),
+    "caller": re.compile(rf"{_FRAME}(?: {_FRAME})?|unknown"),
+    "view": re.compile(r"v[a-z0-9]{1,12}"),
+    "dataset": re.compile(r"[0-9a-f]{16}"),
+    "layer": re.compile(r"[A-Za-z0-9]*Layer|none"),
+}
 RATE_PER_MINUTE = 600
 ADDRESS_PER_MINUTE = 1_500
 GLOBAL_PER_MINUTE = 3_000
@@ -143,7 +154,9 @@ def telemetry(batch: ClientBatch, request: Request) -> None:
     for e in batch.events[:allowed]:
         fields: dict[str, object] = {}
         for k, v in e.fields.items():
-            if isinstance(v, str) and k not in STRING_FIELDS:
+            if isinstance(v, str) and (
+                k not in STRING_FIELDS or (k in FIELD_SHAPES and not FIELD_SHAPES[k].fullmatch(v))
+            ):
                 dropped_fields += 1
                 continue
             plain = k in CODE_LIKE_FIELDS and isinstance(v, str) and plain_value(k, v)

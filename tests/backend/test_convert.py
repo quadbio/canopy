@@ -652,3 +652,40 @@ def test_queue_limit_and_stores_cap(cfg: Config) -> None:
     c.app.state.jobs.tick()  # type: ignore[attr-defined]
     j = c.get(f"/api/jobs/{job['id']}").json()
     assert j["state"] == "failed" and j["error"] == "stores_full"
+
+
+def test_cache_prune_never_trusts_a_missing_new_or_empty_index(cfg: Config, tmp_path: Path) -> None:
+    """Prune removes what the index does not know: an index that is missing (a state folder that
+    is not on this machine), never scanned or empty knows nothing, and must not wipe the cache;
+    removing most of the copies needs --yes (review H3 A-H1)."""
+    from typer.testing import CliRunner
+
+    from canopy.catalog import CatalogDB, scan
+    from canopy.catalog.db import DB_FILE
+    from canopy.cli import app as cli
+
+    stores = [cfg.cache_dir / f"{i:016x}" / "c0" for i in range(3)]
+    for s in stores:
+        s.mkdir(parents=True)
+        (s / "manifest.json").write_text("{}")
+    conf = tmp_path / "canopy.toml"
+    conf.write_text(
+        f'cache_dir = "{cfg.cache_dir}"\nstate_dir = "{tmp_path / "state"}"\n[[data_roots]]\n'
+        f'name = "data"\npath = "{cfg.data_roots[0].path}"\n[logging]\ndir = "{cfg.logging.dir}"\n'
+    )
+
+    def prune(*args: str) -> str:
+        out = CliRunner().invoke(cli, ["cache", "prune", "--config", str(conf), *args])
+        return f"{out.exit_code}:{out.output}"
+
+    assert prune().startswith("1:") and "no index" in prune()
+    assert not (tmp_path / "state").exists()  # nothing made on the way
+    db = CatalogDB(tmp_path / "state" / DB_FILE)  # an index, never scanned
+    assert "no finished scan" in prune()
+    source(cfg.data_roots[0].path / "m.h5ad")
+    scan(db, cfg.data_roots, cfg.catalog)
+    out = prune()
+    assert out.startswith("1:") and "3 of 3 converted copies would be removed" in out
+    assert all(s.exists() for s in stores)
+    assert "would remove" in prune("--dry-run")
+    assert prune("--yes").startswith("0:") and not any(s.exists() for s in stores)

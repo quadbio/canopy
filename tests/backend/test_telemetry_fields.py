@@ -68,3 +68,18 @@ def test_strict_keeps_a_library_message_and_the_caller(cfg: Config) -> None:
     assert msg in text and "a.js:3:4 a.js:5:6" in text
     assert _strictify(msg, "salt", "c_message") == msg
     assert _strictify("SECRETWORD failed", "salt", "c_message") == "(dropped)"
+
+
+def test_fields_of_a_fixed_shape_drop_anything_else(cfg: Config) -> None:
+    cfg.logging.privacy = "strict"
+    setup_logging(cfg.logging, role="test", salt="s", to_console=False)
+    bad = {"where": "/home/SECRETUSER/x.js:1:2 extra", "view": "SECRETVIEW", "dataset": "SECRET"}
+    good = {"where": "index-Ab_c.js:1:2", "view": "v1a2b3c", "dataset": "0123456789abcdef"}
+    with TestClient(create_app(cfg, background=False)) as c:
+        for f in (bad, good):
+            r = c.post(
+                "/api/telemetry", json={"session": "s1", "events": [{"name": "x", "fields": f}]}
+            )
+            assert r.status_code == 204
+    text = (cfg.logging.dir / log_file_name("test")).read_text()
+    assert "SECRET" not in text and "index-Ab_c.js:1:2" in text and "v1a2b3c" in text

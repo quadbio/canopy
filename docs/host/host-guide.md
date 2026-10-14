@@ -83,8 +83,9 @@ The memory budget holds the cache *and* the running conversions; each conversion
 - your account's memory limit ≥ `budget_gb` + `max_running` × (0.5 × `memory_gb` + 1).
 
 For example `budget_gb = 128`, `cache_gb = 32`, `max_running = 3`, `memory_gb = 16`
-(32 + 3 × 28 = 116 ≤ 128; the limit must allow 128 + 27 = 155 GB). Canopy warns at start
-(`memory_budget_above_limit`) when the second line does not hold.
+(32 + 3 × 28 = 116 ≤ 128; the limit must allow 128 + 27 = 155 GB). Canopy keeps a 10 % margin:
+it warns at start (`memory_budget_above_limit`), and `canopy selfcheck` fails, when the right
+side of the second line is above 90 % of the limit (here: a limit under 172 GB).
 
 **Memory.** Your account may have a memory limit below the machine's memory (Linux "cgroups",
 often set for all your sessions together). Look it up:
@@ -171,8 +172,9 @@ cookie; an old link's cookie never blocks a new link.
    ```
 
    This writes `canopy-bundle-<date>.tar.gz`: logs of the server, workers and browser at
-   `strict` privacy whatever privacy the server ran with (names as tokens; free text, also
-   libraries' own messages, dropped), crash locations, the environment and summaries of jobs and
+   `strict` privacy whatever privacy the server ran with (names as tokens; free text dropped,
+   also libraries' messages, except a short list of their fixed texts such as "Failed to
+   fetch"), crash locations, the environment and summaries of jobs and
    the index. It refuses to write if it finds a file, folder, column or element name known on
    the host. Gene names, bare version numbers (`0.8.0`) and names shorter than 4 characters are
    not searched for: read it. **Open it and read `MANIFEST.md` before copying it out.**
@@ -230,8 +232,11 @@ would start empty: a new access link, an empty index, every conversion again. Ch
 start the new release:
 
 ```bash
-grep -E '^(cache_dir|state_dir|dir) ' canopy-<new>/config.toml   # each must start with /
+grep -E '^(cache_dir|state_dir|dir) ' canopy-<new>/config.toml   # all three lines, each starting with /
 ```
+
+All three lines must be there: a missing one falls back to a relative default. `canopy
+selfcheck` (section 6) says the same in its first line.
 
 ```bash
 cd /scratch/$USER/canopy
@@ -246,6 +251,12 @@ pixi run --frozen canopy --version               # shows the new commit
 Stop the old server (`Ctrl-C` in its tmux window), then start the new one there, as in section
 6. Started as a user service instead: `systemctl --user stop canopy`, then the `systemd-run`
 line of section 6 again **from the new folder** (it names the folder and the program).
+
+**This release changes what a dataset's version is made of** (the data root's name and the path
+inside it, instead of the full path on disk). The first scan of the new release therefore
+inspects every dataset once more (a few minutes on a large share), and carries each converted
+copy over to its dataset's new version (`store_adopted` in the log): nothing is converted again.
+Going back to an older release afterwards would not find those copies.
 
 Keep the old folder until the new one works; going back is starting the old one again. That
 holds while the new release has not converted anything in a newer format: a release note says
@@ -273,9 +284,12 @@ what you do, then make the bundle (section 8) and send it with this list.
 
 ## 13. Cleaning up old converted copies
 
-A converted copy belongs to one version of a dataset. When a dataset changes, or is **moved or
-renamed** (its path is part of its version), the next scan indexes it as a new version, and it
-is converted again when you ask; the copy of the old version stays in the cache folder, unused.
+A converted copy belongs to one version of a dataset: its data root's name, its path inside the
+root, and its file times. Moving or remounting the **whole data folder** (the root's path in
+`config.toml` changes, its name stays) keeps every version and every copy. When a dataset
+changes, or is **moved or renamed inside the root**, the next scan indexes it as a new version,
+and it is converted again when you ask; the copy of the old version stays in the cache folder,
+unused.
 So do the leftovers of conversions that failed or were stopped. `canopy cache prune` removes
 both: every converted copy whose version the index no longer knows, and conversion leftovers.
 
@@ -287,7 +301,11 @@ both: every converted copy whose version the index no longer knows, and conversi
    it the command refuses (older releases looked at an empty `cache` folder in the current
    directory and said "would free 0.00 GB"). The dry run first names the cache folder and the
    index it uses, then lists every converted copy: `keep` with the dataset that uses it, or
-   `would remove`. The dataset names are shown on your terminal only.
+   `would remove`. The dataset names are shown on your terminal only. **Check the number of
+   dataset versions in the index first:** prune removes what the index does not know. It
+   refuses when there is no index at the configured `state_dir` (e.g. on another machine), when
+   the index has never finished a scan, and, without `--yes`, when more than half of the copies
+   would go.
 
    ```bash
    cd /scratch/$USER/canopy/canopy-<release>

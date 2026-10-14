@@ -114,10 +114,12 @@ def version_stamp(path: Path) -> str:
     return str(max(_store_stamps(path)))
 
 
-def dataset_id(path: Path, stamp: str | None = None) -> str:
-    """Stable id of a dataset version: real path plus its version stamp."""
-    real = os.path.realpath(path)
-    return hashlib.sha256(f"{real}|{stamp or version_stamp(path)}".encode()).hexdigest()[:16]
+def dataset_id(path: Path, stamp: str | None = None, identity: str | None = None) -> str:
+    """Stable id of a dataset version: what it is (`identity`: "<root name>/<path in the root>"
+    for a dataset of the index, so that moving or remounting the whole data folder keeps it;
+    otherwise its real path) plus its version stamp."""
+    where = identity or os.path.realpath(path)
+    return hashlib.sha256(f"{where}|{stamp or version_stamp(path)}".encode()).hexdigest()[:16]
 
 
 # HDF5's own wording for lock failures ("sblock" in other messages must not match).
@@ -142,11 +144,13 @@ def open_h5(path: Path) -> h5py.File:
         raise
 
 
-def inspect_path(path: Path, *, measure_size: bool = True) -> Fingerprint:
+def inspect_path(
+    path: Path, *, measure_size: bool = True, identity: str | None = None
+) -> Fingerprint:
     """Fingerprint a dataset. Raises ValueError if the path is not a supported dataset.
 
     `measure_size=False` skips counting the files of a directory store (slow on network
-    storage); `size_bytes` is then None.
+    storage); `size_bytes` is then None. `identity`: see `dataset_id`.
     """
     path = Path(path).absolute()
     kind = detect_kind(path)
@@ -161,7 +165,8 @@ def inspect_path(path: Path, *, measure_size: bool = True) -> Fingerprint:
         else:
             size, exact = None, False
         fp = Fingerprint(
-            dataset_id=dataset_id(path),
+            dataset_id=dataset_id(path, identity=identity),
+            identity=identity,
             kind=kind,
             path=str(path),
             name=path.name,

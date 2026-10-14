@@ -227,7 +227,7 @@ def token_find(
     from canopy.catalog.db import DB_FILE, CatalogDB
     from canopy.privacy import token
 
-    cfg = _load(config)
+    cfg = _load(_required(config))
     salt = _salt(cfg)
     candidates: dict[str, str] = {}
 
@@ -305,7 +305,7 @@ def bundle(
     into one archive (checked for names known on this host before it is written)."""
     from canopy.bundle import BundleRefusedError, build_bundle
 
-    cfg = _load(config)
+    cfg = _load(_required(config))
     stamp = time.strftime("%Y%m%d-%H%M")
     target = out or Path.cwd() / f"canopy-bundle-{stamp}.tar.gz"
     try:
@@ -385,7 +385,7 @@ def analyse(
 @app.command("link")
 def link_cmd(config: ConfigOpt = None) -> None:
     """Print the access link of this installation (with its token) again."""
-    cfg = _load(config)
+    cfg = _load(_required(config))
     if cfg.server.auth != "token":
         typer.echo('server.auth is "none": no token needed.')
         return
@@ -586,7 +586,9 @@ def catalog_scan(
     cfg = _cli_logging(_required(config))
     assert cfg is not None
     db = CatalogDB(cfg.state / DB_FILE)
-    counts = scan(db, cfg.data_roots, cfg.catalog, full=full, trigger="cli")
+    counts = scan(
+        db, cfg.data_roots, cfg.catalog, full=full, trigger="cli", cache_dir=cfg.cache_dir
+    )
     typer.echo(json.dumps(counts.as_dict(), indent=2))
 
 
@@ -600,61 +602,100 @@ def cache_prune(
     dry_run: Annotated[
         bool, typer.Option(help="Only list the converted copies: kept (and why) or removed")
     ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Remove even when that is more than half of the copies"),
+    ] = False,
 ) -> None:
     """Remove converted stores of dataset versions the catalog no longer knows (old versions of
     changed, moved or removed files) and leftovers of failed conversions. Refuses while a server
-    uses the cache."""
+    uses the cache, without an index that has finished a scan, and (without --yes) when more
+    than half of the copies would go."""
     import shutil
 
     from canopy.catalog import Catalog
-    from canopy.jobs.manager import CacheInUseError, lock_cache, tmp_dirs
+    from canopy.catalog.db import DB_FILE
+    from canopy.jobs.manager import CacheInUseError, LockUnsupportedError, lock_cache, tmp_dirs
 
     # checked before logging starts: that writes the installation's salt into the state folder
     # (by default the cache folder), which would make the folder this checks for
-    cache_dir = _load(_required(config)).cache_dir
-    if not cache_dir.is_dir():
-        typer.echo(f"error: the cache folder {cache_dir} does not exist", err=True)
+    pre = _load(_required(config))
+    if not pre.cache_dir.is_dir():
+        typer.echo(f"error: the cache folder {pre.cache_dir} does not exist", err=True)
+        raise typer.Exit(1)
+    # prune trusts the index: a missing or new one knows no versions and would remove every
+    # copy (review H3 A-H1: a state folder absent on this machine, a deleted index)
+    index = pre.state / DB_FILE
+    if not index.is_file():
+        typer.echo(
+            f"error: no index at {index}: prune removes the copies the index does not know, so "
+            "it needs the server's index (is state_dir right, and on this machine?)",
+            err=True,
+        )
         raise typer.Exit(1)
     cfg = _cli_logging(config)
     assert cfg is not None
     try:
         lock_cache(cfg.state)
-    except CacheInUseError as e:
+    except (CacheInUseError, LockUnsupportedError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
-    users = Catalog(cfg).db.version_users()
-    typer.echo(f"cache folder {cfg.cache_dir}; index {cfg.state / 'catalog.sqlite'}")
+    db = Catalog(cfg).db
+    with db.connect() as con:
+        scanned = con.execute("SELECT COUNT(*) FROM scans WHERE status='done'").fetchone()[0]
+    users = db.version_users()
+    typer.echo(f"cache folder {cfg.cache_dir}; index {index}")
     typer.echo(f"{len(users)} dataset versions in the index")
+    if not scanned or not users:
+        typer.echo(
+            "error: the index has no finished scan or no datasets: start the server (or run "
+            "`canopy catalog scan --config …`) and let it index the data roots first",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    stores = [
+        d
+        for d in sorted(p for p in cfg.cache_dir.iterdir() if p.is_dir())
+        if any(d.glob("c*/manifest.json")) or any(d.glob("c*.tmp-*"))
+    ]
+    unused = [d for d in stores if d.name not in users]
+    if not dry_run and not yes and len(unused) * 2 > len(stores):
+        typer.echo(
+            f"error: {len(unused)} of {len(stores)} converted copies would be removed. If that is "
+            "right (see the list with --dry-run), run again with --yes",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    def size(d: Path) -> int:
+        return sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+
     log = get_logger("canopy.cache")
     removed = kept = 0
-    n_removed = n_kept = 0
-    for d in sorted(p for p in cfg.cache_dir.iterdir() if p.is_dir()):
-        if not any(d.glob("c*/manifest.json")) and not any(d.glob("c*.tmp-*")):
-            continue  # not a store folder (logs, tmp, jobs, …)
-        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+    for d in stores:
         if d.name in users:
-            kept += size
-            n_kept += 1
-            if dry_run:  # names on the owner's terminal only, never in a log
-                typer.echo(
-                    f"keep         {d.name} {size / 2**30:7.2f} GB  {', '.join(users[d.name])}"
-                )
+            if dry_run:  # names on the owner's terminal only, never in a log; kept copies are
+                n = size(d)  # measured only here (file by file: slow on network storage)
+                kept += n
+                typer.echo(f"keep         {d.name} {n / 2**30:7.2f} GB  {', '.join(users[d.name])}")
             continue
+        n = size(d)
         typer.echo(
-            f"{'would remove' if dry_run else 'removing'} {d.name} {size / 2**30:7.2f} GB  "
+            f"{'would remove' if dry_run else 'removing'} {d.name} {n / 2**30:7.2f} GB  "
             "(no dataset in the index at this version)"
         )
         if not dry_run:
             shutil.rmtree(d, ignore_errors=True)
-            log.info("store_pruned", version=d.name, bytes=size)
-        removed += size
-        n_removed += 1
+            log.info("store_pruned", version=d.name, bytes=n)
+        removed += n
     for t in tmp_dirs(cfg.cache_dir, cfg.jobs.tmp_dir):
         typer.echo(f"{'would remove' if dry_run else 'removing'} leftover {t.name}")
         if not dry_run:
             shutil.rmtree(t, ignore_errors=True)
-    typer.echo(f"{n_kept} converted copies kept ({kept / 2**30:.2f} GB)")
+    n_kept = len(stores) - len(unused)
+    typer.echo(f"{n_kept} converted copies kept" + (f" ({kept / 2**30:.2f} GB)" if dry_run else ""))
     typer.echo(
-        f"{n_removed} {'to remove' if dry_run else 'removed'}: "
+        f"{len(unused)} {'to remove' if dry_run else 'removed'}: "
         f"{'would free' if dry_run else 'freed'} {removed / 2**30:.2f} GB"
     )

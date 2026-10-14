@@ -65,6 +65,11 @@ class NeedsConversionError(Exception):
         super().__init__(code)
         self.code = code
 
+    @property
+    def log_code(self) -> str:
+        """As the server answers it (`needs_conversion:<reason>`): a code `known_code` knows."""
+        return f"needs_conversion:{self.code}"
+
 
 @dataclass
 class ObsValues:

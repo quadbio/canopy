@@ -139,6 +139,9 @@ class ElementError(BaseModel):
 class Fingerprint(BaseModel):
     fingerprint_version: int = FINGERPRINT_VERSION
     dataset_id: str
+    # What the version is tied to besides the content: "<root name>/<path in the root>" for a
+    # dataset of the index (moving the whole data folder keeps it); None: the real path
+    identity: str | None = None
     kind: DatasetKind
     path: str
     name: str

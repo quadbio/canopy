@@ -33,7 +33,7 @@ from typing import Any
 from canopy.config import Config
 from canopy.logs import NAME_FIELDS, default_log_dir
 from canopy.privacy import code_location, installation_salt, token
-from canopy.telemetry import plain_value
+from canopy.telemetry import LIBRARY_MESSAGES, plain_value
 
 # Fields holding free text in log lines: dropped at strict.
 TEXT_FIELDS = frozenset({"exc_message", "exception", "message", "c_message", "c_code", "c_kind"})
@@ -259,7 +259,8 @@ def _user_names(value: Any, out: set[str], key: str = "") -> None:
 def known_names(cfg: Config) -> set[str]:
     """Names that must never appear in a bundle: roots and their paths, every file, folder and
     name in the index, the user and the host, the configured folders and host names."""
-    names: set[str] = set()
+    names: set[str] = set()  # where things are and who runs them: always names
+    found: set[str] = set()  # strings from the datasets' fingerprints
     for r in cfg.data_roots:
         names.add(r.name)
         names.add(str(r.path))
@@ -272,14 +273,18 @@ def known_names(cfg: Config) -> set[str]:
     for row in _sql(cfg.state / "catalog.sqlite", "SELECT relpath, fingerprint FROM datasets"):
         names.update(Path(row["relpath"]).parts)
         if row["fingerprint"]:
-            _user_names(json.loads(row["fingerprint"]), names)
-    # very short or format-defined names would match everywhere: not names of the user's
+            _user_names(json.loads(row["fingerprint"]), found)
+    # very short or format-defined names would match everywhere: not names of the user's. A
+    # bare version is not a name when it comes from a file's contents (it would match the
+    # installed versions); a folder or host called so ("2024.03.12", "10.20.30.40") stays one
+    # (review H3 A-L2).
     from canopy.privacy import KEEP
 
-    return {
-        n
-        for n in names
-        if len(n) >= 4 and n not in KEEP and not n.isdigit() and not _VERSION.fullmatch(n)
+    def plain(n: str) -> bool:
+        return len(n) >= 4 and n not in KEEP and not n.isdigit()
+
+    return {n for n in names if plain(n)} | {
+        n for n in found if plain(n) and not _VERSION.fullmatch(n)
     }
 
 
@@ -379,17 +384,36 @@ CODE_FIELDS = frozenset(
 )
 
 
+# Browser facts (the browser's and the GPU's own wording) and code locations in the app's
+# bundle (`index-Bkj0RbvK.js:1:2345`): program text, never searched (review H3 A-M1).
+_ENV_FIELDS = frozenset({"c_browser", "c_gpu", "c_gpu_vendor", "c_gl_version"})
+_EXC_CLASS = re.compile(r"[A-Za-z_]\w*(?:Error|Exception|Warning)|Error")
+_FRAMES = re.compile(r"(?:[\w.-]+\.(?:js|mjs|ts|tsx):\d+:\d+ ?){1,3}|unknown")
+
+
 def _values(value: Any, out: list[str], key: str = "") -> None:
     """String values of a JSON document outside the program's own vocabulary fields. An event
     that is not a plain code (a library's message) is searched too."""
     if key == "event" and isinstance(value, str) and not _CODE.fullmatch(value):
         out.append(value)
         return
-    # only plain program words are exempt: a value with capitals, spaces or slashes in a
-    # vocabulary field is searched anyway (review A-L5); `packages` holds versions
-    if key in CODE_FIELDS and (
-        key == "packages" or not isinstance(value, str) or _CODE.fullmatch(value)
+    if key in _ENV_FIELDS or key == "packages":  # `packages` holds versions
+        return
+    if isinstance(value, str) and (
+        (key in ("c_where", "c_caller") and _FRAMES.fullmatch(value))
+        # an exception class ("Error", "TypeError"): program or library text
+        or (key in ("c_type", "exc_type", "error_type") and _EXC_CLASS.fullmatch(value))
+        or (key == "c_message" and value in LIBRARY_MESSAGES)
     ):
+        return
+    if key == "exc_frames" and isinstance(value, list):
+        # "pkg/mod.py:12:fn": the function name is the program's (as in crash files)
+        out.extend(str(v).rsplit(":", 1)[0] for v in value)
+        return
+    if key in CODE_FIELDS:
+        # only plain program words are exempt: anything else in a vocabulary field is searched,
+        # in lists and maps too (review A-L5, H3 A-L3)
+        _vocabulary(value, out)
         return
     if isinstance(value, str):
         out.append(value)
@@ -401,16 +425,36 @@ def _values(value: Any, out: list[str], key: str = "") -> None:
             _values(v, out, key)
 
 
+def _vocabulary(value: Any, out: list[str]) -> None:
+    if isinstance(value, str):
+        if not _CODE.fullmatch(value):
+            out.append(value)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _vocabulary(v, out)
+    elif isinstance(value, list):
+        for v in value:
+            _vocabulary(v, out)
+
+
 # A code location line of a crash file ("  pkg/mod.py:12 fn"): the function name is the program's
 # (a column called "summary" must not match `summary` in a stack, review A-H1).
 _CODE_LINE = re.compile(r"^(\s+\S+:\d+)\s+\S*$")
+_FIXED_HEADER = re.compile(
+    r"^\s*(Fatal Python error|Current thread|Thread 0x|Stack \(most recent|Extension modules|"
+    r"Segmentation fault|Bus error|Traceback \(most recent call last\))"
+)
 
 
 def _searchable(fname: str, data: bytes) -> str:
     text = data.decode(errors="replace")
     if fname.startswith("crash/"):
+        # code locations without their function names; the fault handler's fixed headers
+        # ("Fatal Python error", "Current thread …") are the program's (review H3 A-M1)
         return "\n".join(
-            m.group(1) if (m := _CODE_LINE.match(line)) else line for line in text.splitlines()
+            m.group(1) if (m := _CODE_LINE.match(line)) else line
+            for line in text.splitlines()
+            if not _FIXED_HEADER.match(line)
         )
     if not (fname.endswith(".json") or fname.endswith(".jsonl")):
         return text
@@ -432,7 +476,8 @@ def self_check(files: dict[str, bytes], names: set[str]) -> list[tuple[str, str]
     for fname, data in files.items():
         text = _searchable(fname, data)
         for n in pats:
-            if re.search(rf"(?<![A-Za-z0-9]){re.escape(n)}(?![A-Za-z0-9])", text):
+            # case-insensitive: tools and file systems lower-case names (review H3 A-L4)
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(n)}(?![A-Za-z0-9])", text, re.IGNORECASE):
                 hits.append((fname, n))
     return hits
 
@@ -473,7 +518,11 @@ def build_bundle(
             elif (f.name.startswith("stacks-") or f.name.endswith(".stderr.txt")) and (
                 f.stat().st_size  # every process leaves an empty one: only a written one is news
             ):
-                files[f"crash/{f.name}"] = _code_only(f.read_text(errors="replace")).encode()
+                # output with no code location or fault (e.g. a warning only) is no crash
+                # (review H3 A-L1)
+                reduced = _code_only(f.read_text(errors="replace"))
+                if reduced.strip():
+                    files[f"crash/{f.name}"] = reduced.encode()
     files["host.json"] = json.dumps(_host_facts(cfg, salt), indent=2, default=str).encode()
     files["jobs.json"] = json.dumps(_jobs(cfg, salt), indent=2, default=str).encode()
     files["catalog.json"] = json.dumps(_catalog(cfg, salt), indent=2, default=str).encode()

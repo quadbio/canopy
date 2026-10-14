@@ -79,7 +79,8 @@ def test_timed_logs_an_expected_refusal_as_info(cfg: Config) -> None:
     events = log_events()
     ev = next(e for e in events if e["event"] == "stage_refused")
     assert ev["level"] == "info" and ev["exc_type"] == "NeedsConversionError"
-    assert ev["code"] == "too_many_values"  # why it was refused (review A-M1)
+    # why it was refused (review A-M1), as the server answers it (H3 A-M3)
+    assert ev["code"] == "needs_conversion:too_many_values"
     assert "exc_frames" not in ev
     assert not any(e["event"] == "stage_failed" for e in events)
 
@@ -336,3 +337,42 @@ def test_a_refusal_with_a_name_as_its_message_logs_only_a_known_code(cfg: Config
         raise UnknownElementError("SECRETCOLUMN")
     ev = next(e for e in log_events() if e["event"] == "stage_refused")
     assert ev["code"] == "unknown_element" and "SECRETCOLUMN" not in str(ev)
+
+
+def test_every_code_the_server_answers_is_known() -> None:
+    """Codes in the server's replies are kept at strict (and logged on refusals) only when
+    `known_code` knows them: every literal in the source must be in the vocabulary, so a new code
+    cannot be forgotten (review H3 A-M3)."""
+    import re
+    from typing import get_args
+
+    from canopy.errors import NEEDS_CONVERSION_REASONS, known_code
+    from canopy.inspect.models import MatrixEncoding
+
+    backend = Path(__file__).parents[2] / "backend" / "canopy"
+    text = "\n".join(p.read_text() for p in backend.rglob("*.py"))
+    replies = re.findall(
+        r'(?:ApiError|error_response)\(\s*(?:request,\s*)?\d+,\s*f?"([^"]+)"', text
+    )
+    assert len(replies) > 20
+    for code in replies:
+        if "{" in code:
+            continue  # the formatted ones below
+        assert known_code(code), code
+    for reason in re.findall(r'NeedsConversionError\(\s*"([^"]+)"', text):
+        assert reason in NEEDS_CONVERSION_REASONS and known_code(f"needs_conversion:{reason}"), (
+            reason
+        )
+    for enc in get_args(MatrixEncoding):  # needs_conversion:matrix_{encoding}
+        assert known_code(f"needs_conversion:matrix_{enc}"), enc
+
+
+def test_a_refusal_logs_its_code_as_the_server_answers_it(cfg: Config) -> None:
+    """A stage whose fields hold a `code` of their own still logs the refusal's (H3 A-L9)."""
+    from canopy.data.reader import NeedsConversionError
+    from canopy.logs import timed
+
+    with pytest.raises(NeedsConversionError), timed("load_array", code="ignored"):
+        raise NeedsConversionError("legacy_layout")
+    refused = next(e for e in log_events() if e["event"] == "stage_refused")
+    assert refused["code"] == "needs_conversion:legacy_layout"

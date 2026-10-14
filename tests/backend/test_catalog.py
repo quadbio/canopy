@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import time
@@ -126,29 +127,52 @@ def test_rescans_are_incremental(cfg: Config, data: Path) -> None:
     assert _scan(cfg, full=True)["changed"] == 6
 
 
-def test_a_moved_root_is_inspected_again(cfg: Config, data: Path, tmp_path: Path) -> None:
-    """Moving a root's folder keeps its files' times, but the dataset ids hold the real path: the
-    next scan must inspect again, or every conversion refuses the stale id (S7b demo: the project
-    folder was renamed)."""
+def test_a_moved_root_keeps_its_versions(cfg: Config, data: Path, tmp_path: Path) -> None:
+    """A dataset's version is its root's name, its path in the root and its stamp (owner, host
+    test 3): moving or remounting the whole data folder keeps every version, so no conversion
+    is lost. (Before, the real path was part of it, and the S7b rename made every copy stale.)"""
     store = data / "s.zarr"
     ad.AnnData(X=np.ones((4, 2), np.float32)).write_zarr(store)
     tiny_h5ad(data / "a.h5ad")
     _scan(cfg)
+    before = _versions(cfg)
     moved = tmp_path / "moved_root"
     shutil.move(str(data), moved)
     cfg.data_roots[0].path = moved
-    r = _scan(cfg)
-    assert r["changed"] == 2
+    assert _scan(cfg)["unchanged"] == 2
+    assert _versions(cfg) == before
+
+
+def _versions(cfg: Config) -> dict[str, str]:
     with _db(cfg).connect() as con:
-        rows = {
+        return {
             x["relpath"]: x["version"] for x in con.execute("SELECT relpath, version FROM datasets")
         }
-    from canopy.inspect.core import dataset_id
 
-    assert rows["s.zarr"] == dataset_id(moved / "s.zarr") and rows["a.h5ad"] == dataset_id(
-        moved / "a.h5ad"
-    )
-    assert _scan(cfg)["unchanged"] == 2  # and then it is settled
+
+def test_an_index_of_an_earlier_release_keeps_its_converted_copies(cfg: Config, data: Path) -> None:
+    """Versions written by an earlier release (real paths) are inspected once more; a dataset whose
+    content did not change takes its converted copy along to the new version."""
+    from canopy.inspect.core import dataset_id, version_stamp
+
+    tiny_h5ad(data / "a.h5ad")
+    _scan(cfg)
+    new = _versions(cfg)["a.h5ad"]
+    old = dataset_id(data / "a.h5ad", version_stamp(data / "a.h5ad"))  # the earlier rule
+    assert old != new
+    with _db(cfg).connect() as con:
+        con.execute("UPDATE datasets SET version=?", (old,))
+    copy = cfg.cache_dir / old / "c0"
+    copy.mkdir(parents=True)
+    (copy / "manifest.json").write_text(json.dumps({"dataset_id": old}))
+    db = _db(cfg)
+    counts = scan(db, cfg.data_roots, cfg.catalog, cache_dir=cfg.cache_dir)
+    assert counts.changed == 1 and counts.adopted == 1
+    assert _versions(cfg)["a.h5ad"] == new
+    assert not (cfg.cache_dir / old).exists()
+    manifest = json.loads((cfg.cache_dir / new / "c0" / "manifest.json").read_text())
+    assert manifest["dataset_id"] == new
+    assert _scan(cfg)["unchanged"] == 1  # and then it is settled
 
 
 def test_unavailable_root_keeps_its_entries(cfg: Config, data: Path, tmp_path: Path) -> None:

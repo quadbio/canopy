@@ -50,7 +50,14 @@ class Catalog:
         if not self._lock.acquire(blocking=False):
             return False
         try:
-            scan(self.db, list(self.roots.values()), self.cfg.catalog, full=full, trigger=trigger)
+            scan(
+                self.db,
+                list(self.roots.values()),
+                self.cfg.catalog,
+                full=full,
+                trigger=trigger,
+                cache_dir=self.cfg.cache_dir,
+            )
         except Exception as e:  # logged in full by scan(); the scheduler must survive
             self.log.warning("catalog_scan_aborted", error=type(e).__name__)
         finally:

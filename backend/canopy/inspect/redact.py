@@ -51,6 +51,8 @@ def redact(fp: Fingerprint, level: str, salt: str) -> Fingerprint:
         raise ValueError("strict redaction needs a non-empty salt")
     d = fp.model_dump()
     d["path"] = token(d["path"], salt)
+    if d.get("identity"):
+        d["identity"] = token(d["identity"], salt)
     d["name"] = token(d["name"], salt)
     if d.get("anndata"):
         _anndata(d["anndata"], salt)

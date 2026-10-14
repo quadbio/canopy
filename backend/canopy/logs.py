@@ -444,16 +444,19 @@ def timed(stage: str, **fields: Any) -> Iterator[dict[str, Any]]:
         if getattr(e, "expected", False):
             from canopy.errors import known_code
 
-            code = getattr(e, "code", None)
+            code = getattr(e, "log_code", None) or getattr(e, "code", None)
             log.info(
                 "stage_refused",
-                stage=name,
-                ms=_ms(t0),
-                exc_type=type(e).__name__,
-                # the refusal's code (e.g. too_many_values), when it is one of the program's
-                code=code if isinstance(code, str) and known_code(code) else None,
-                **fields,
-                **extra,
+                # one dict: a `code` in the stage's fields must not clash (review H3 A-L9); the
+                # refusal's code (e.g. too_many_values) when it is one of the program's
+                **{
+                    **fields,
+                    **extra,
+                    "stage": name,
+                    "ms": _ms(t0),
+                    "exc_type": type(e).__name__,
+                    "code": code if isinstance(code, str) and known_code(code) else None,
+                },
             )
         else:
             log.exception(
