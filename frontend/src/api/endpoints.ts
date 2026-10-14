@@ -19,6 +19,9 @@ export interface DatasetDetail extends DatasetEntry {
   conversion: Conversion | null;
 }
 
+/** Which link this browser came with: "admin" (everything) or "member" (no cancelling). */
+export const me = () => getJson<{ access: 'admin' | 'member' | null }>('/api/me');
+
 export const catalog = {
   roots: () => getJson<RootEntry[]>('/api/catalog/roots'),
   folder: (root: string, path: string) => getJson<FolderListing>(url('/api/catalog/tree', { root, path })),

@@ -143,7 +143,7 @@ test('shift-click ticks every dataset between two clicks of the same list', asyn
   await freshPage(page);
   // the search results are one list (the example folders hold two datasets at most)
   await page.getByLabel('Search datasets').fill('h5ad');
-  const list = page.getByRole('tree', { name: 'Search results' });
+  const list = page.getByTestId('search-results');
   const ticks = list.getByTestId('dataset-tick');
   await expect(ticks).toHaveCount(3);
   const n = 3;
@@ -185,3 +185,15 @@ test('a dataset without the shared column shows its cells as NA', async ({ page 
 
 // Linked spatial views (two MERSCOPE regions) are tested at the end of browse.spec.ts: they
 // convert region_3, which a test there needs unconverted.
+
+test('two tabs: one saves the workspace, the other says so and can take over (review full-2 C-H2)', async ({ page, context }) => {
+  await freshPage(page);
+  const second = await context.newPage();
+  await second.goto('/');
+  await expect(second.getByTestId('other-tab-note')).toBeVisible();
+  await expect(page.getByTestId('other-tab-note')).toHaveCount(0);
+  await second.getByTestId('save-from-this-tab').click();
+  await expect(second.getByTestId('other-tab-note')).toHaveCount(0);
+  await expect(page.getByTestId('other-tab-note')).toBeVisible();
+  await second.close();
+});

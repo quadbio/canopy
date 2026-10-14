@@ -2,7 +2,7 @@
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
-import { catalog, datasets, jobs } from './endpoints';
+import { catalog, datasets, jobs, me } from './endpoints';
 import type { Job, SummaryQuery } from './types';
 import { timeAsync } from '../telemetry/telemetry';
 
@@ -31,6 +31,10 @@ export const useCatalogStatus = () =>
     queryFn: catalog.status,
     refetchInterval: (q) => (q.state.data?.scanning ? 1000 : 15_000),
   });
+
+/** "admin" or "member" (the link this browser came with); asked once a page. */
+export const useAccess = () =>
+  useQuery({ queryKey: ['me'], queryFn: me, staleTime: Infinity, retry: 1 }).data?.access ?? null;
 
 /** Query options for a dataset's metadata (shared by `useMeta` and the file browser's Open). */
 export const metaQuery = (id: string, table: string | null) => ({

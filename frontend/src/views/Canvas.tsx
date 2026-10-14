@@ -29,6 +29,7 @@ import { mergeLegends } from './linked';
 import { allowances, BudgetTuner, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
 import { atZoom, type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
+import { memberTitle, sharedPrefix } from './titles';
 import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
 import { type Polygon, useSelection } from './selection';
 
@@ -199,6 +200,10 @@ const ViewCell = memo(function ViewCell({
 }) {
   const select = useWorkspace((s) => s.select);
   const remove = useWorkspace((s) => s.removeView);
+  // a group member's title without what all members' titles share (review full-2 C-M5)
+  const groupPrefix = useWorkspace((s) =>
+    spec.group ? sharedPrefix(s.views.filter((v) => v.group === spec.group).map((v) => v.title)) : '',
+  );
   const chosen = useSelection((s) => s.selections[spec.id]?.count ?? null);
   const clearSelection = useSelection((s) => s.set);
   const t = viewType(spec.type);
@@ -237,7 +242,9 @@ const ViewCell = memo(function ViewCell({
           className="view-overlay"
           style={{ left: o.rect.x - cell.x, top: o.rect.y - cell.y, width: o.rect.width, height: o.rect.height }}
         >
-          {o.draw(o.state, o.rect, o.taken)}
+          <ErrorBoundary scope="view" fallback={() => null}>
+            {o.draw(o.state, o.rect, o.taken)}
+          </ErrorBoundary>
         </div>
       ))}
       {output?.content && output.status !== 'error' && (
@@ -253,8 +260,8 @@ const ViewCell = memo(function ViewCell({
         </div>
       )}
       <div className="view-header">
-        <button className="view-title" onClick={() => select(spec.id)} title={spec.title}>
-          {spec.title}
+        <button className="view-title" onClick={() => select(spec.id)} title={spec.title} aria-label={spec.title}>
+          {spec.group ? memberTitle(spec.title, groupPrefix) : spec.title}
         </button>
         {output?.caption && (
           <span className="view-caption" data-testid="view-caption">
@@ -305,13 +312,14 @@ const ViewCell = memo(function ViewCell({
         </div>
       )}
       {output?.status === 'error' && (
-        <div className="view-error" role="alert" data-testid="view-error">
+        // status, not alert: a 24-member group failing together would raise 24 alerts (C-L3)
+        <div className="view-error" role="status" data-testid="view-error">
           {output.error}
           {output.needsConversion && <Conversion datasetId={output.needsConversion} compact />}
         </div>
       )}
       {output?.problem && (
-        <div className="view-notice problem" role="alert" data-testid="view-problem">
+        <div className="view-notice problem" role="status" data-testid="view-problem">
           {output.problem.message}
           {output.problem.retry && (
             <button className="link" onClick={output.problem.retry}>
@@ -340,6 +348,28 @@ const ViewCell = memo(function ViewCell({
 });
 
 /** A lasso: a loop of rope with its tail (owner: the usual lasso icon). */
+/** What is left of a view cell whose drawing failed: its title and its close button. */
+function CellFailed({ spec, cell }: { spec: ViewSpec; cell: Cell }) {
+  const remove = useWorkspace((s) => s.removeView);
+  return (
+    <div className="view-cell" style={{ left: cell.x, top: cell.y, width: cell.width, height: cell.height }} data-testid="view-cell-failed">
+      <div className="view-header">
+        <span className="view-title" title={spec.title}>
+          {spec.title}
+        </span>
+        <span className="view-header-actions">
+          <button className="icon-button" onClick={() => remove(spec.id)} aria-label="Close view" title="Close view">
+            ×
+          </button>
+        </span>
+      </div>
+      <div className="view-error" role="status">
+        This view could not be drawn. Change a setting to try again, or close it.
+      </div>
+    </div>
+  );
+}
+
 function GearIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true">
@@ -432,7 +462,7 @@ function LassoOverlay({
       className="lasso-overlay"
       data-testid="lasso-overlay"
       role="application"
-      aria-label="Lasso: drag around cells to select them (Shift: add; Esc: stop)"
+      aria-label="Lasso: drag around cells with the mouse, pen or touch to select them (Shift: add; Esc: stop). To select by category, hide the other categories in the legend."
       style={{ left: cell.x, top, width: cell.width, height: cell.height - TITLE_ROW }}
       onPointerDown={(e) => {
         if (busy) return; // review H3 B-M3: two lassos over one slow read would overwrite each other
@@ -1187,7 +1217,7 @@ export function Canvas() {
       }}
     >
       {views.map((v) => (
-        <ErrorBoundary key={v.id} scope="view" fallback={(e) => <RunnerFailed id={v.id} error={e} />}>
+        <ErrorBoundary key={v.id} scope="view" resetKey={JSON.stringify(v.params)} fallback={(e) => <RunnerFailed id={v.id} error={e} />}>
           <ViewRunner spec={v} />
         </ErrorBoundary>
       ))}
@@ -1303,7 +1333,13 @@ export function Canvas() {
       ))}
       {views.map((v, i) =>
         cells[i] ? (
-          <ErrorBoundary key={v.id} scope="view" fallback={() => null}>
+          <ErrorBoundary
+            key={v.id}
+            scope="view"
+            resetKey={JSON.stringify(v.params)}
+            // the cell's own drawing failed: its title and close stay (review full-2 C-M4)
+            fallback={() => <CellFailed spec={v} cell={cells[i]!} />}
+          >
             <ViewCell
               spec={v}
               cell={cells[i]}

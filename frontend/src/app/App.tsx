@@ -12,6 +12,7 @@ import { event } from '../telemetry/telemetry';
 import { FileBrowser, sharedDefaults } from '../ui/FileBrowser';
 import { CloseAll } from '../ui/CloseAll';
 import { SHOW_SETTINGS_EVENT } from '../ui/panels';
+import { useTabs } from '../state/tabs';
 import { JobWatcher } from './JobWatcher';
 import { Canvas } from '../views/Canvas';
 import { viewType } from '../views/registry';
@@ -64,17 +65,39 @@ function CatalogStatus() {
   );
 }
 
+/** Another tab of this browser saves the workspace: this one's changes would overwrite it, so
+ * they are not saved until the user says so (review full-2 C-H2). */
+function OtherTabNote() {
+  const saving = useTabs((s) => s.saving);
+  const takeOver = useTabs((s) => s.takeOver);
+  if (saving) return null;
+  return (
+    <div className="other-tab-note" role="status" data-testid="other-tab-note">
+      Canopy is open in another tab of this browser, which saves the workspace: changes here are not kept after
+      a reload.{' '}
+      <button className="link" onClick={takeOver} data-testid="save-from-this-tab">
+        Save from this tab instead
+      </button>
+    </div>
+  );
+}
+
 function SettingsPanel() {
   const spec = useWorkspace((s) => s.views.find((v) => v.id === s.selected) ?? null);
+  const members = useWorkspace((s) => (spec?.group ? s.views.filter((v) => v.group === spec.group).length : 0));
   const t = spec ? viewType(spec.type) : undefined;
   return (
     <aside className="panel" aria-label="View settings">
       {spec && t ? (
         <>
-          <h3 className="panel-title" title={spec.title}>
-            {spec.title}
+          {/* a group's settings are the group's, not one member's (review full-2 C-H1) */}
+          <h3 className="panel-title" title={spec.group ? undefined : spec.title} data-testid="panel-title">
+            {spec.group ? `Linked · ${members} datasets` : spec.title}
           </h3>
-          <p className="muted small">{t.label}</p>
+          <p className="muted small">
+            {t.label}
+            {spec.group ? ` · own choices shown for ${spec.title}` : ''}
+          </p>
           {spec.group && <LinkedNote spec={spec} />}
           <t.Panel key={spec.id} spec={spec} />
           <ResetView key={`reset-${spec.id}`} spec={spec} />
@@ -238,6 +261,7 @@ export function App() {
       <JobWatcher />
       <FileBrowser />
       <main className="main">
+        <OtherTabNote />
         <Canvas />
       </main>
       <SettingsPanel />

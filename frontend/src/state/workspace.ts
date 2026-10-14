@@ -19,6 +19,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { viewType } from '../views/registry';
+import { mergeSaved, tabSaves } from './tabs';
 
 export interface ViewSpec<P = Record<string, unknown>> {
   id: string;
@@ -207,9 +208,13 @@ export function safeStorage(store: Pick<Storage, 'getItem' | 'setItem' | 'remove
   let timer: ReturnType<typeof setTimeout> | null = null;
   const flush = () => {
     timer = null;
+    if (!tabSaves()) {
+      pending.clear(); // another tab saves the workspace (review full-2 C-H2)
+      return;
+    }
     for (const [k, v] of pending) {
       try {
-        target.setItem(k, v);
+        target.setItem(k, k === STORAGE_KEY ? mergeSaved(v, target.getItem(k)) : v);
       } catch {
         target = memoryStorage; // quota exceeded or storage blocked: keep going in memory
         memoryStorage.setItem(k, v);
@@ -316,7 +321,9 @@ export const useWorkspace = create<Workspace>()(
           const views = s.views.map((x) => {
             if (x.id !== id && (!v.group || x.group !== v.group)) return x;
             const nv = { ...x, params: v.group ? groupParams(x.params, params, own, x.id === id) : params };
-            remembered = remember(remembered, nv);
+            // a group's settings are the group's: remembering them for every member filled the
+            // memory and gave a dataset opened alone the group's colours later (C-L4)
+            if (!nv.group) remembered = remember(remembered, nv);
             return nv;
           });
           return { views, remembered };

@@ -490,3 +490,10 @@ button.ghost.danger { color: var(--danger); border-color: var(--danger); }
 .tree { user-select: none; } /* shift-click ticks a range, not a text selection (H3 B-L6) */
 .lasso-hint { position: absolute; left: 8px; top: 4px; margin: 0; padding: 2px 6px; border-radius: var(--radius-sm); background: var(--surface); font-size: var(--text-xs); pointer-events: none; }
 .legend-na { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--text-muted); font-size: var(--text-xs); }
+
+.other-tab-note {
+  position: absolute; top: var(--space-2); left: 50%; transform: translateX(-50%); z-index: 20;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: var(--space-1) var(--space-3); font-size: 13px; max-width: min(640px, 90%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}

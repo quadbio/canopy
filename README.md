@@ -12,10 +12,14 @@ Follow **`docs/host/host-guide.md`**: a release archive (`pixi run -e dev releas
 page included), `pixi install --locked`, `config.host.example.toml`, start and stop, the SSH
 tunnel, and `canopy bundle` for diagnostics. In short:
 
-- **Access.** By default (`server.auth = "token"`) the server prints an access link with a
-  per-installation token when it starts; `canopy link --config …` prints it again. Opening it
-  stores the token in a cookie; requests without it are refused. Whoever has the link sees every
-  dataset in the data roots, with the rights of the user running the server.
+- **Access.** By default (`server.auth = "token"`) the server prints its **admin** link when it
+  starts; `canopy link --config …` prints it again, and `canopy link --member --config …` the
+  **member** link for lab members (everything but cancelling a conversion). Opening a link stores
+  its token in a cookie; requests without one are refused, and the log records which kind of link
+  each request came with (`access`). `--new` replaces a link's token, which revokes the old link
+  within seconds. Whoever has either link sees every dataset in the data roots. Data inside the
+  roots is never followed outside them: HDF5 external storage, external links and virtual
+  datasets, and symlinks out of a zarr store are refused (`links_outside`).
 - **Files.** Converted copies, index and logs are readable only by that user
   (`server.file_access = "private"`; `"group"` adds the Unix group).
 - **State on a local disk.** `state_dir` holds the index and job databases, the server lock, the
@@ -133,7 +137,9 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
   image and mask pyramids; each holds one source block, so this bounds memory and CPU on a shared
   host).
 - Each job runs in its own process and logs to `canopy-worker-<pid>.jsonl` next to the server's log.
-- One server per cache folder (`server.lock`). A converted dataset is converted again only with
+- One installation per cache folder: the cache names its owner (`canopy-owner.json`: the state
+  folder and host), and a server, `cache prune` or `catalog scan` of another installation refuses
+  it. One server per state folder (`server.lock`); `catalog scan` refuses while it runs. A converted dataset is converted again only with
   `"force": true`. Free disk is checked before a job (about 20 bytes per stored value).
 - Sizing: a conversion needs about 0.3 GB + 1.2–1.5 × `jobs.memory_gb` + its obs/var (about 80
   bytes per cell plus the columns). For atlases of 10⁷–10⁸ cells set `memory_gb` to 16–64.

@@ -54,8 +54,7 @@ function DatasetRow({ d, depth, list }: { d: DatasetEntry; depth: number; list: 
         onClick={() => select(d.id)}
         data-testid="dataset-row"
         title={`${d.path}${d.size_bytes !== null ? ` · ${formatBytes(d.size_bytes)}` : ''}`}
-        role="treeitem"
-        aria-selected={selected}
+        aria-pressed={selected}
       >
         <span className={`badge kind-${d.kind ?? 'none'}`}>{d.kind ? KIND_LABEL[d.kind] : d.state}</span>
         <span className="tree-name">{d.name}</span>
@@ -88,14 +87,13 @@ function Folder({ root, path, name, depth, count }: { root: string; path: string
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        role="treeitem"
       >
         <span className="chevron">{open ? '▾' : '▸'}</span>
         <span className="tree-name">{name}</span>
         <span className="tree-meta">{count}</span>
       </button>
       {open && (
-        <ul className="tree" role="group">
+        <ul className="tree">
           {q.isLoading && <li className="muted small" style={{ paddingLeft: 22 + depth * 14 }}>Loading…</li>}
           {q.error && <li className="error small">{String(q.error.message)}</li>}
           {q.data?.folders.map((f) => (
@@ -508,6 +506,8 @@ function LinkedOpen() {
   );
 }
 
+// The lists are plain lists of buttons: tree roles would promise arrow-key navigation (review
+// full-2 C-L1).
 export function FileBrowser() {
   const roots = useRoots();
   const [query, setQuery] = useState('');
@@ -533,7 +533,7 @@ export function FileBrowser() {
       </div>
       <div className="sidebar-tree">
         {q ? (
-          <ul className="tree" role="tree" aria-label="Search results">
+          <ul className="tree" aria-label="Search results" data-testid="search-results">
             {search.data?.length === 0 && <li className="muted small pad">No matches.</li>}
             {search.data?.map((d) => <DatasetRow key={d.id} d={d} depth={0} list={found} />)}
             {search.data?.length === 100 && (
@@ -541,7 +541,7 @@ export function FileBrowser() {
             )}
           </ul>
         ) : (
-          <ul className="tree" role="tree" aria-label="Data folders">
+          <ul className="tree" aria-label="Data folders">
             {roots.error && <li className="error small pad">{String(roots.error.message)}</li>}
             {roots.data?.length === 0 && <li className="muted small pad">No data roots configured.</li>}
             {roots.data?.map((r) => (

@@ -40,6 +40,7 @@ import { event } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ColourInput, Field, Help, type OptionGroup, Select } from '../ui/controls';
 import { GeneSearch } from '../ui/GeneSearch';
+import { unionColumns, useGroupGenes, useGroupMetas } from './groupMeta';
 import { groupScheme, type LinkedEntry, useLinked } from './linked';
 import type { ViewOutput } from './registry';
 
@@ -479,30 +480,39 @@ export function ColourFields({ spec }: { spec: ViewSpec<ColourParams> }) {
   const textColumn =
     p.colorBy?.kind === 'obs' && meta.data?.obs.find((c) => c.name === p.colorBy!.name && c.kind === 'string');
   const textLabels = useObsLabels(spec.datasetId, spec.table, textColumn ? textColumn.name : null, meta.data?.version);
+  // a linked group offers what any member has (review full-2 C-H1)
+  const metas = useGroupMetas(spec);
+  const groupGenes = useGroupGenes(spec, metas);
   if (!meta.data) return <p className="muted">{meta.error ? String(meta.error.message) : 'Loading…'}</p>;
   const m = meta.data;
+  const members = metas.length;
+  const columns = spec.group ? unionColumns(metas) : m.obs.map((column) => ({ column, k: 1 }));
+  const geneList = spec.group ? groupGenes : genes.data;
+  const inK = (k: number) => (spec.group && k < members ? ` · in ${k} of ${members}` : '');
   const geneChoice = p.colorBy?.kind === 'gene' ? p.colorBy : null;
-  const geneIdx = geneChoice && genes.data ? genes.data.names.indexOf(geneChoice.name) : -1;
+  const geneIdx = geneChoice && geneList ? geneList.names.indexOf(geneChoice.name) : -1;
 
   const colourGroups: OptionGroup[] = [
     {
       label: 'Categories',
-      options: m.obs
-        .filter((c) => colourable(c) && c.kind !== 'numeric')
-        .map((c) => ({
+      options: columns
+        .filter(({ column: c }) => colourable(c) && c.kind !== 'numeric')
+        .map(({ column: c, k }) => ({
           value: `obs:${c.name}`,
           label: c.name,
-          hint: c.kind === 'boolean' ? 'yes/no' : c.kind === 'string' ? 'text' : `${c.categories?.length}`,
+          hint: (c.kind === 'boolean' ? 'yes/no' : c.kind === 'string' ? 'text' : `${c.categories?.length}`) + inK(k),
         })),
     },
     {
       label: 'Numbers',
-      options: m.obs.filter((c) => c.kind === 'numeric').map((c) => ({ value: `obs:${c.name}`, label: c.name })),
+      options: columns
+        .filter(({ column: c }) => c.kind === 'numeric')
+        .map(({ column: c, k }) => ({ value: `obs:${c.name}`, label: c.name, ...(inK(k) ? { hint: inK(k).slice(3) } : {}) })),
     },
   ].filter((g) => g.options.length);
   if (geneChoice) {
     // the chosen gene, so the Colour by list can show it
-    const label = genes.data && geneIdx >= 0 ? geneLabel(genes.data, geneIdx) : geneChoice.name;
+    const label = geneList && geneIdx >= 0 ? geneLabel(geneList, geneIdx) : geneChoice.name;
     colourGroups.unshift({ label: 'Gene', options: [{ value: `gene:${geneChoice.name}`, label, hint: 'gene' }] });
   }
   // A new gene keeps the chosen matrix; the first time, X if it can be read, else the first
@@ -564,8 +574,8 @@ export function ColourFields({ spec }: { spec: ViewSpec<ColourParams> }) {
             </p>
             <Conversion key={spec.datasetId} datasetId={spec.datasetId} compact />
           </div>
-        ) : genes.data ? (
-          <GeneSearch genes={genes.data} onPick={pickGene} testId="gene-search" />
+        ) : geneList ? (
+          <GeneSearch genes={geneList} onPick={pickGene} testId="gene-search" />
         ) : (
           <p className="muted small">{genes.error ? String(genes.error.message) : 'Loading genes…'}</p>
         )}

@@ -4,6 +4,7 @@ import { hexToRgb } from '../colour/palettes';
 import { groupParams, membersOf, restoreViews, tilesTaken, useWorkspace } from '../state/workspace';
 import type { ColourLegendData } from './colouring';
 import { normaliseParams } from './embedding';
+import { mergeGeneLists, unionColumns } from './groupMeta';
 import { tileCells } from './layout';
 import { groupCategories, groupColours, groupRange, mergeLegends } from './linked';
 
@@ -176,5 +177,27 @@ describe('colours of a linked group', () => {
       ['NK', 2],
       ['T', 8],
     ]);
+  });
+});
+
+describe('a group offers what any member has (review full-2 C-H1)', () => {
+  const meta = (cols: string[]) =>
+    ({ obs: cols.map((name) => ({ name, kind: 'categorical', categories: ['a', 'b'] })) }) as unknown as import('../api/types').DatasetMeta;
+
+  it('columns of all members, with how many have each', () => {
+    const u = unionColumns([meta(['cell_type', 'leiden']), meta(['cell_type']), undefined]);
+    expect(u.map((x) => [x.column.name, x.k])).toEqual([
+      ['cell_type', 2],
+      ['leiden', 1],
+    ]);
+  });
+
+  it('genes of all members once, symbols kept', () => {
+    const g = mergeGeneLists([
+      { names: ['ENSG1', 'ENSG2'], symbols: ['CD3E', 'MS4A1'], symbol_column: 'gene_symbols', duplicates: 0, matrices: [] },
+      { names: ['ENSG2', 'Cd8a'], symbols: null, symbol_column: null, duplicates: 0, matrices: [] },
+    ]);
+    expect(g.names).toEqual(['ENSG1', 'ENSG2', 'Cd8a']);
+    expect(g.symbols).toEqual(['CD3E', 'MS4A1', 'Cd8a']);
   });
 });

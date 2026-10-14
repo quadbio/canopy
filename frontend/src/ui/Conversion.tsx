@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import { jobs } from '../api/endpoints';
-import { useDatasetDetail, useJob } from '../api/queries';
+import { useAccess, useDatasetDetail, useJob } from '../api/queries';
 import type { Job } from '../api/types';
 import { event } from '../telemetry/telemetry';
 import { Help } from './controls';
@@ -66,7 +66,7 @@ function elapsed(from: number | null): string {
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
 
-function Progress({ job, onCancel, spatial }: { job: Job; onCancel: () => void; spatial: boolean }) {
+function Progress({ job, onCancel, spatial }: { job: Job; onCancel: (() => void) | null; spatial: boolean }) {
   const pct = Math.round(job.progress * 100);
   const stages = spatial ? SPATIAL_STAGES : STAGES;
   const step = stages.findIndex(([k]) => k === job.stage);
@@ -92,9 +92,12 @@ function Progress({ job, onCancel, spatial }: { job: Job; onCancel: () => void; 
       <div className="progress" role="progressbar" aria-label="Conversion progress" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div className="progress-bar" style={{ width: `${pct}%` }} />
       </div>
-      <button className="link" onClick={onCancel}>
-        Cancel
-      </button>
+      {/* only the admin link may cancel (owner, full review 2) */}
+      {onCancel && (
+        <button className="link" onClick={onCancel} data-testid="conversion-cancel">
+          Cancel
+        </button>
+      )}
     </div>
   );
 }
@@ -129,6 +132,7 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
       setProblem(e instanceof ApiError ? e.message : String(e));
     }
   };
+  const access = useAccess();
   const cancel = async () => {
     if (!j) return;
     try {
@@ -142,7 +146,7 @@ export function Conversion({ datasetId, layers = [], compact = false }: { datase
   const kind = detail.data.kind;
   if (kind !== 'h5ad' && kind !== 'anndata_zarr' && kind !== 'spatialdata_zarr') return null;
 
-  if (active && j) return <Progress job={j} onCancel={() => void cancel()} spatial={kind === 'spatialdata_zarr'} />;
+  if (active && j) return <Progress job={j} onCancel={access === 'admin' ? () => void cancel() : null} spatial={kind === 'spatialdata_zarr'} />;
   if (conv.converted) {
     const from = conv.x_source && conv.x_source !== 'X' ? ` (values from ${conv.x_source.replace(/^layers\//, '')})` : '';
     return (

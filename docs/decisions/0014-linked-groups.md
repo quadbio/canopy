@@ -84,6 +84,10 @@ colours are used only when they agree across the datasets.
   (a wheel while a group loads). *Close all* with a group or several views open asks first, in
   place; it keeps the dataset details. Publishes of a group's colourings are applied once per
   frame. *Convert ticked* names conversions that failed and can stop waiting.
+- **Full review 2.** The settings of a group are the group's: titled "Linked · N datasets", with
+  Colour by, gene search and Split by offering every member's columns and genes ("in k of N").
+  Split by in a group stays within 96 panels in all. Member titles leave out the prefix all
+  members share. A group's settings are not remembered per member.
 - **Gear.** Every view (and a group) has a gear in its title row that shows its settings,
   unfolding the settings panel when it was folded away (clicking the title still works).
 

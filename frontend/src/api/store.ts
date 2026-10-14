@@ -358,7 +358,7 @@ export async function readRows(
   return { data: out, shape: width > 1 ? [n, width] : [n] };
 }
 
-/** The whole of a (small or medium) array, cached for the session. */
+/** The whole of a (small or medium) array, kept a minute after no view uses it. */
 export const useStoreArray = (version: string | undefined, path: string | null) =>
   useQuery({
     queryKey: ['store-array', version, path],

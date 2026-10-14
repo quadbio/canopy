@@ -11,6 +11,9 @@ interface Props {
   children: ReactNode;
   /** Rendered instead of the children after an error (views use it to offer "Close"). */
   fallback?: (error: Error) => ReactNode;
+  /** When it changes (e.g. the view's settings), an error is cleared and the children try again
+   * (review full-2 C-M4: picking another gene left "This view failed"). */
+  resetKey?: unknown;
 }
 
 export class ErrorBoundary extends Component<Props, { error: Error | null }> {
@@ -18,6 +21,10 @@ export class ErrorBoundary extends Component<Props, { error: Error | null }> {
 
   static getDerivedStateFromError(error: Error) {
     return { error };
+  }
+
+  componentDidUpdate(prev: Props) {
+    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null });
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {

@@ -73,7 +73,6 @@ const ARRAYS: Record<string, new (b: ArrayBuffer) => TypedArray> = {
   uint8: Uint8Array,
 };
 
-/** A binary array endpoint: little-endian data described by x-canopy-dtype / x-canopy-shape. */
 /** A binary reply; a copy from the browser cache without our headers (kept from an older
  * version of the server) is fetched again, bypassing the cache. */
 async function binaryResponse(path: string, fetchImpl: typeof fetch, init?: RequestInit): Promise<Response> {
@@ -84,6 +83,7 @@ async function binaryResponse(path: string, fetchImpl: typeof fetch, init?: Requ
   return res;
 }
 
+/** A binary array endpoint: little-endian data described by x-canopy-dtype / x-canopy-shape. */
 export async function getBinary(path: string, fetchImpl: typeof fetch = fetch, init?: RequestInit): Promise<BinaryArray> {
   const res = await binaryResponse(path, fetchImpl, init);
   if (!res.ok) return fail(res, path);

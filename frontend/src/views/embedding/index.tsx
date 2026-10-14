@@ -27,6 +27,7 @@ import {
   useColouring,
 } from '../colouring';
 import { drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
+import { GROUP_PANEL_CAP, unionColumns, useGroupMetas } from '../groupMeta';
 import { PlotCompanionField } from '../plot';
 import { type Bounds, MAIN_PANEL, type PanelOutput, panelLayerId, registerView, type ViewOutput } from '../registry';
 import { lassoInto, type Polygon } from '../selection';
@@ -499,9 +500,13 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
   const meta = useMeta(spec.datasetId, spec.table);
   const update = useWorkspace((s) => s.updateParams);
   const budget = useLod((s) => s.budget);
+  const metas = useGroupMetas(spec as unknown as ViewSpec);
   const p = spec.params;
   if (!meta.data) return <p className="muted">{meta.error ? String(meta.error.message) : 'Loading…'}</p>;
   const m = meta.data;
+  const members = metas.length;
+  // a group splits by what any member has (review full-2 C-H1)
+  const splitColumns = spec.group ? unionColumns(metas) : m.obs.map((column) => ({ column, k: 1 }));
   const emb = m.embeddings.find((e) => e.key === p.embedding);
   const dimOptions = Array.from({ length: emb?.dims ?? 2 }, (_, i) => ({ value: String(i), label: `${i + 1}` }));
 
@@ -546,7 +551,7 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
       )}
       <ColourFields spec={spec} />
       <PlotCompanionField spec={spec} />
-      {m.obs.some(splittable) && (
+      {splitColumns.some(({ column }) => splittable(column)) && (
         <Field
           label="Split by"
           help={
@@ -570,14 +575,25 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
               {
                 label: 'Columns',
                 options: [
-                  ...m.obs.filter(splittable).map((c) => ({
-                    value: c.name,
-                    label: c.name,
-                    hint: c.kind === 'boolean' ? 'yes/no' : `${c.categories!.length}`,
-                  })),
-                  ...m.obs
-                    .filter((c) => c.kind === 'categorical' && (c.categories?.length ?? 0) > MAX_PANELS)
-                    .map((c) => ({
+                  ...splitColumns
+                    .filter(({ column }) => splittable(column))
+                    .map(({ column: c, k }) => {
+                      const n = c.kind === 'boolean' ? 2 : c.categories!.length;
+                      // in a group: members × categories panels, capped (review full-2 C-H3)
+                      const over = !!spec.group && members * n > GROUP_PANEL_CAP;
+                      return {
+                        value: c.name,
+                        label: c.name,
+                        hint:
+                          (c.kind === 'boolean' ? 'yes/no' : `${n}`) +
+                          (over ? `: ${members} × ${n} panels, more than ${GROUP_PANEL_CAP}` : '') +
+                          (spec.group && k < members ? ` · in ${k} of ${members}` : ''),
+                        disabled: over,
+                      };
+                    }),
+                  ...splitColumns
+                    .filter(({ column: c }) => c.kind === 'categorical' && (c.categories?.length ?? 0) > MAX_PANELS)
+                    .map(({ column: c }) => ({
                       value: c.name,
                       label: c.name,
                       hint: `${c.categories!.length}: more than ${MAX_PANELS}`,

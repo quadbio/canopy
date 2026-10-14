@@ -450,3 +450,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   refits; Close all asks; convert ticked shows failures and can stop waiting.
 - 2026-10-14 Linux trial of e5af801 (R10): ALL CHECKS PASSED. S7, S8, S9 marked done; next is
   Checkpoint A (the owner uses the prototype; then decide stage 3).
+- 2026-10-14 Full cold review 2 (../reviews/code_review_full_2/; three reviewers, resumed once
+  after the usage limit): A security/ops 2 high, 6 medium, 9 low (files inside a data root could
+  read any file of the account; paths in strict logs); B data 2 high, 2 medium, 7 low (64-bit
+  label ids through float64; violins dropped low counts); C frontend 3 high, 7 medium, 6 low
+  (group settings were one member's; two tabs overwrite; unbounded split in groups). Owner:
+  admin and member links; capped integer genes; groundwork after Checkpoint A; the share above
+  0 more visible. Batch R11 DONE (../reviews/code_review_full_2/R11-fixes.md).

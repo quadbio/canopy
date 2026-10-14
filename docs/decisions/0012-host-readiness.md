@@ -71,3 +71,14 @@ access.
   tests with the examples, access token, private files under umask 022, cgroup v2 limit and
   headroom, data API, hang dump, bundle, clean stop, the budget-above-limit warning). Not
   covered: the real host's limits on a parent slice, network file systems, its size.
+
+## Revision after the second full review (2026-10-14, owner)
+- **Two links.** An admin link (everything) and a member link (everything but cancelling a
+  conversion; members may convert: one conversion per dataset runs at a time and everyone sees
+  it). The log records `access` per request; `canopy link --member --new` revokes the member link.
+- **Nothing outside a dataset is read through it** (`inspect/guard.py`): HDF5 external links,
+  external storage and virtual datasets, and symlinks out of zarr stores are refused
+  (`links_outside`).
+- **One installation per cache** (`canopy-owner.json`); `catalog scan` refuses while a server runs.
+- A stop signal without a recorded reason requeues a conversion; the guide uses `KillMode=mixed`
+  and `canopy stop`.

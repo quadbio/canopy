@@ -16,7 +16,7 @@ import {
 test('file browser lists the example datasets', async ({ page }) => {
   await freshPage(page);
   await expect(page.getByTestId('dataset-row')).toHaveCount(5); // data roots start expanded
-  await page.getByRole('treeitem', { name: /extracted \d+$/ }).click(); // collapse
+  await page.getByRole('button', { name: /extracted \d+$/ }).click(); // collapse
   await expect(page.getByTestId('dataset-row')).toHaveCount(3);
   await page.getByLabel('Search datasets').fill('region_1');
   await expect(page.getByTestId('dataset-row')).toHaveCount(1);
