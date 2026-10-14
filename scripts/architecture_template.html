@@ -119,6 +119,9 @@ table.api th, table.api td { text-align: left; padding: 8px 12px; border-bottom:
 table.api th { font: 600 var(--step--1) var(--font-body); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 table.api td:first-child, table.api td:nth-child(2) { font-family: var(--font-mono); white-space: nowrap; }
 table.api a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+table.compare td:first-child { white-space: normal; font-family: var(--font-body); font-weight: 600; min-width: 9rem; }
+table.compare td:nth-child(2), table.compare td:nth-child(3) { font-family: var(--font-body); white-space: normal; min-width: 16rem; }
+ul.facts { margin: 0; padding-left: 1.2em; max-width: 80ch; display: flex; flex-direction: column; gap: 4px; font-variant-numeric: tabular-nums; }
 footer { color: var(--muted); font-size: var(--step--1); border-top: 1px solid var(--line); padding-top: 16px; }
 
 @media (max-width: 760px) {
@@ -132,78 +135,83 @@ footer { color: var(--muted); font-size: var(--step--1); border-top: 1px solid v
   <header class="top">
     <span class="eyebrow">canopy · lab single-cell and spatial data browser</span>
     <h1>Architecture map</h1>
-    <p class="lede">How the code is organised after step S4, read straight from the source at commit <code>%%COMMIT%%</code>. The diagrams show the parts and the three main paths through them; the explorer lists every module with its classes, methods and functions, what each does, and which modules it uses and is used by.</p>
+    <p class="lede">How the code is organised at the end of stage 1 (steps S0–S9 and the review batches), read straight from the source at commit <code>%%COMMIT%%</code>. The diagrams show the parts and the main paths through them, the next section how loading and drawing are built for large data; the explorer lists every module with its classes, methods and functions, what each does, and which modules it uses and is used by.</p>
     <ul class="stats" id="stats"></ul>
   </header>
 
   <section id="overview">
     <span class="eyebrow">1 · The whole system</span>
     <h2>How the parts fit together</h2>
-    <p>Two processes talk over HTTP: the browser app and the <code>canopy serve</code> server. The server never sends file paths to the browser and never takes one from it; datasets are addressed by id. Every server part writes structured log lines, which are the only thing copied back from the host.</p>
+    <p>Three kinds of process work together: the browser app, the <code>canopy serve</code> server, and one worker process per running conversion. The server never sends file paths to the browser and never takes one from it: datasets are addressed by id, converted copies by version. A dataset is shown in one of two ways. The <b>preview</b> path reads the original file on the server, one element at a time. Once a dataset is <b>converted</b>, the browser reads the converted copy itself, by byte ranges, and the server only serves files. Every part writes structured log lines, which reach the developer only through the privacy-filtered bundle.</p>
     <div class="figure"><pre class="mermaid">
 flowchart TB
   subgraph B["Browser · frontend/src"]
     direction LR
-    FB["File browser<br/><small>ui/FileBrowser</small>"]
-    WS[("Workspace<br/><small>state/workspace</small>")]
-    PN["Settings panel<br/><small>app/App</small>"]
-    RUN["One ViewRunner per view<br/><small>views/Canvas</small>"]
-    VT["View type: embedding<br/><small>views/embedding</small>"]
-    REG["View registry<br/><small>views/registry</small>"]
-    Q["Query hooks + API client<br/><small>api/queries · api/client</small>"]
-    CW[["Colour worker<br/><small>colour/</small>"]]
-    OUT[("Layer outputs<br/><small>views/outputs</small>")]
-    DECK["One deck.gl canvas, grid of views<br/><small>views/Canvas</small>"]
+    FB["File browser: ticks, linked opening,<br/>Convert ticked<br/><small>ui/FileBrowser · ui/convertMany</small>"]
+    WS[("Workspace: views, groups,<br/>one saving tab<br/><small>state/workspace · state/tabs</small>")]
+    PN["Settings panel, gear<br/><small>app/App</small>"]
+    VT["View types: embedding · spatial · plot<br/><small>views/embedding · spatial · plot</small>"]
+    LK[("Linked groups: shared colours<br/><small>views/linked · groupMeta</small>")]
+    SEL[("Lasso selections<br/><small>views/selection</small>")]
+    LOD[("Level of detail: point budget<br/><small>views/lod</small>")]
+    Q["JSON + binary API client<br/><small>api/queries · api/client</small>"]
+    ST["Store reader: byte ranges,<br/>chunk cache<br/><small>api/store (zarrita, Viv)</small>"]
+    GPU["GPU colouring: one float per cell<br/><small>colour/gpu</small>"]
+    DECK["One deck.gl canvas,<br/>one viewport per panel<br/><small>views/Canvas</small>"]
     TEL["Telemetry<br/><small>telemetry/</small>"]
     FB --> WS
     PN --> WS
-    WS --> RUN --> VT
-    REG -.-> VT
+    WS --> VT
+    VT <--> LK
+    VT <--> SEL
+    LOD --> VT
     VT --> Q
-    VT --> CW
-    VT --> OUT --> DECK
+    VT --> ST
+    VT --> GPU --> DECK
   end
   subgraph S["Server · backend/canopy · canopy serve"]
     direction LR
-    MW["Middleware: request id, timing,<br/>error replies, gzip<br/><small>app</small>"]
+    MW["Middleware: admin/member link,<br/>host check, request id, timing,<br/>per-dataset limit, gzip<br/><small>app · auth</small>"]
     CAPI["Catalog API<br/><small>catalog/api</small>"]
-    DAPI["Dataset API<br/><small>data/api</small>"]
-    SAPI["Store files + Range<br/><small>stores</small>"]
-    TAPI["Telemetry intake<br/><small>telemetry</small>"]
-    CAT["Catalog service: scans, resolve<br/><small>catalog/service</small>"]
-    CR["Crawler<br/><small>catalog/crawl</small>"]
+    DAPI["Dataset API: meta, obs, obsm,<br/>genes, plot summaries<br/><small>data/api · data/summary</small>"]
+    SAPI["Store files, byte ranges<br/><small>stores</small>"]
+    JAPI["Jobs API<br/><small>jobs/api</small>"]
+    CAT["Catalog service + crawler<br/><small>catalog/service · crawl</small>"]
     DB[("SQLite index<br/><small>catalog/db</small>")]
-    CACHE["Dataset cache (LRU)<br/><small>data/cache</small>"]
-    RD["Readers: lazy / in memory<br/><small>data/reader</small>"]
-    INS["Inspector: fingerprints<br/><small>inspect/</small>"]
-    LOG[["Logging + privacy<br/><small>logs · privacy</small>"]]
-    MW --> CAPI & DAPI & SAPI & TAPI
-    CAPI --> CAT
-    DAPI --> CAT
+    CACHE["Dataset cache, memory budget<br/><small>data/cache</small>"]
+    RD["Readers: lazy, one element<br/>at a time<br/><small>data/reader · data/genes</small>"]
+    INS["Inspector: fingerprints,<br/>outside-link guard<br/><small>inspect/</small>"]
+    JM["Job manager: queue, memory<br/>reservations, watchdog<br/><small>jobs/manager</small>"]
+    MW --> CAPI & DAPI & SAPI & JAPI
+    CAPI --> CAT --> DB
+    CAT --> INS
     DAPI --> CACHE --> RD
-    CAT --> CR --> INS
-    CR --> DB
-    CAT --> DB
+    JAPI --> JM
+  end
+  subgraph W["Worker process per conversion · canopy.jobs.worker"]
+    CONV["Converters: out-of-core CSC,<br/>pyramids, polygon blocks,<br/>transcripts per gene<br/><small>convert/</small>"]
   end
   subgraph D["Disk"]
     direction LR
-    ROOTS[("Data roots<br/>h5ad · zarr stores")]
-    STORES[("Converted stores<br/>cache_dir/&lt;version&gt;/c0")]
-    LOGS[("Log files<br/>canopy-&lt;role&gt;-&lt;pid&gt;.jsonl")]
+    ROOTS[("Data roots<br/>h5ad · zarr · SpatialData")]
+    STORES[("Converted copies<br/>cache_dir/&lt;version&gt;/c0<br/>zarr v3, sharded, zstd")]
+    LOGS[("Logs · bundle")]
   end
-  Q -- "JSON + binary arrays" --> MW
+  Q -- "JSON + quantised binary" --> MW
+  ST -- "HTTP Range" --> SAPI
   TEL -- "timings, GPU facts" --> MW
-  CR -- "scandir, stat" --> ROOTS
-  INS -- "metadata only" --> ROOTS
-  RD -- "one element at a time" --> ROOTS
-  SAPI -- "byte ranges" --> STORES
-  LOG --> LOGS
+  JM -- "spawns" --> CONV
+  CONV -- "reads" --> ROOTS
+  CONV -- "writes, validates" --> STORES
+  CAT -- "scandir, stat" --> ROOTS
+  RD -- "metadata, columns, genes" --> ROOTS
+  SAPI -- "pread" --> STORES
     </pre></div>
-    <p class="figcaption">Solid arrows: calls or data flow. Dotted: the embedding view registers itself with the registry, which the file browser asks for default parameters when opening a dataset. Converted stores are served already (used by the S6 spatial view); the converter that writes them arrives in S5/S6.</p>
+    <p class="figcaption">Solid arrows: calls or data flow. The dataset API answers from the original files (preview) or from the converted copy, whichever the dataset has; images, cell outlines and transcripts are always read by the browser from the converted copy.</p>
   </section>
 
   <section id="paths">
-    <span class="eyebrow">2 · Three paths through the code</span>
+    <span class="eyebrow">2 · Four paths through the code</span>
     <h2>What happens, step by step</h2>
     <h3>Indexing the data roots</h3>
     <div class="figure" id="p-scan"><pre class="mermaid">
@@ -215,79 +223,130 @@ sequenceDiagram
   participant P as Inspect pool<br/>(4 threads)
   participant I as inspect_path()<br/>(inspect/core)
   participant D as CatalogDB<br/>(catalog/db)
-  Note over T: at start-up, every rescan_minutes,<br/>or POST /api/catalog/refresh
-  T->>S: scan(roots, trigger)
-  S->>D: start_scan · remove roots no longer configured
+  Note over T: at start-up, every rescan_minutes,<br/>or Refresh
+  T->>S: scan(roots)
   loop each data root
     S->>D: stamps(root): what was indexed last time
     S->>W: walk(root)
-    Note over W: os.scandir only · skips hidden + ignored<br/>symlinks must stay inside the root<br/>never descends into a zarr store
+    Note over W: os.scandir only, never inside a zarr store,<br/>symlinks must stay inside the root
     W-->>S: candidates (.h5ad files, zarr stores)
     S->>P: _check(candidate) for each
-    alt size/mtime stamp unchanged
-      P-->>S: unchanged (no file read)
+    alt same stamp and same version
+      P-->>S: unchanged (no file opened)
     else new or changed
-      P->>I: fingerprint (structure only, no values)
-      I-->>P: Fingerprint or error
-      P-->>S: row: state, reason, summary, fingerprint
+      P->>I: fingerprint: structure only, no values;<br/>outside links refused
+      I-->>P: Fingerprint (version = root name + path in root + stamp)
+      P-->>S: row; a changed id with the same content<br/>keeps its converted copy (adopt_store)
     end
     S->>D: upsert in batches · touch unchanged · remove unseen
   end
-  S->>D: finish_scan(counts)
-  Note over T,D: an unreadable root keeps its rows.<br/>Every step is logged with its timing.
     </pre></div>
     <h3>Opening a dataset and drawing it</h3>
     <div class="figure" id="p-open"><pre class="mermaid">
 sequenceDiagram
   autonumber
   actor U as You
-  participant FB as File browser<br/>(ui/FileBrowser)
-  participant WS as Workspace<br/>(state/workspace)
-  participant V as Embedding view hook<br/>(views/embedding)
-  participant API as Dataset API<br/>(data/api)
-  participant C as Catalog + cache<br/>(catalog/service · data/cache)
-  participant R as Reader<br/>(data/reader)
-  participant CW as Colour worker
-  participant DK as deck.gl canvas<br/>(views/Canvas)
-  U->>FB: select dataset, click Open
-  FB->>API: GET /api/datasets/{id}/meta
-  API->>C: get(id) · resolve(): path re-checked inside its root
-  C->>R: open once (lazy read, or whole file if legacy and small)
-  R-->>API: obs columns, categories, colours, embeddings
-  API-->>FB: DatasetMeta (JSON)
-  FB->>WS: addView(type, defaults from registry)
-  WS->>V: ViewRunner runs the view's hook
+  participant FB as File browser
+  participant V as View hook<br/>(views/embedding)
+  participant API as Dataset API
+  participant C as Dataset cache + reader
+  participant G as GPU (deck.gl)
+  U->>FB: Open (or tick several, Open linked)
+  FB->>API: GET /meta
+  API->>C: open once (lazy), describe columns
+  API-->>FB: columns, embeddings, genes access, version
+  FB->>V: add view, defaults from the view type
   par positions
-    V->>API: GET /obsm?key=X_umap&dims=0,1
-    API->>R: read 2 columns → float32
-    API-->>V: binary array (ETag, gzip)
+    V->>API: GET /obsm?key=X_umap
+    API-->>V: uint16 per column + offset/scale (half of float32)
   and colours
-    V->>API: GET /obs?column=celltype
-    API->>R: read 1 column → category codes
-    API-->>V: binary array
+    V->>API: GET /obs?column=cell_type
+    API-->>V: int8/int16 codes
   end
-  V->>CW: codes + palette + hidden categories
-  CW-->>V: RGBA per cell
-  V->>DK: publish layers + bounds
-  DK->>DK: fit the view to its cell, draw
-  Note over V,DK: telemetry: dataset_meta, embedding_loaded,<br/>colours_computed, view_ready (ms)
+  V->>G: positions + one float per cell (code or value)
+  Note over V,G: colour, palette, hidden categories:<br/>a 256-entry lookup texture and uniforms, no re-upload
+  U->>V: pick a gene
+  V->>API: GET /gene?i=…&q=16
+  API-->>V: sparse or dense, exact for counts (capped at 65,534)
+  V->>G: one buffer of floats
     </pre></div>
-    <h3>A log line, from event to file</h3>
+    <h3>Converting a dataset</h3>
+    <div class="figure" id="p-convert"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as You
+  participant API as Jobs API
+  participant M as Job manager
+  participant K as Worker process
+  participant S as Converted copy
+  U->>API: Convert for full speed (or Convert all N)
+  API->>M: submit: one per dataset version, queue limit
+  M->>M: wait for memory (budget, reservations, account limit)
+  M->>K: spawn with its own config file
+  K->>K: re-check the source (stamp, outside links)
+  K->>S: matrix to CSC out of core (spilled buckets),<br/>per-gene stats, stratified level-of-detail order,<br/>image pyramids, polygon blocks, transcripts by gene
+  K->>S: manifest, validation, then rename into place
+  M-->>U: done: the next request reads the copy
+    </pre></div>
+    <h3>A log line, from event to bundle</h3>
     <div class="figure" id="p-log"><pre class="mermaid">
 flowchart LR
-  E["log.info(event, fields)<br/>or a library's log line<br/>or a Python warning"] --> C1["merge context<br/>request_id / job id"]
-  C1 --> C2["add pid · role · build<br/>timestamp · level"]
-  C2 --> P{"privacy level"}
-  P -- debug --> F1["everything kept<br/>full traceback"]
-  P -- standard --> F2["names kept in name fields<br/>quoted text + paths in messages → tokens<br/>messages cut at 300 chars"]
-  P -- strict --> F3["every name field → salted token<br/>free text dropped<br/>exceptions: type + code lines only"]
-  F1 & F2 & F3 --> J["JSON line"] --> FILE[("canopy-&lt;role&gt;-&lt;pid&gt;.jsonl<br/>rotating, pruned after retention_days")]
-  T["timed('stage')"] -. "nested stage path,<br/>ms, RSS peak" .-> E
+  E["log.info(event, fields)<br/>or a library line or a warning"] --> C1["request id, pid, role, build,<br/>timestamp, access"]
+  C1 --> P{"privacy level"}
+  P -- debug --> F1["everything kept"]
+  P -- standard --> F2["names kept in name fields,<br/>quoted text and paths → tokens"]
+  P -- strict --> F3["every name field and *_path, *_key,<br/>*_name field → salted token;<br/>free text dropped"]
+  F1 & F2 & F3 --> FILE[("canopy-&lt;role&gt;-&lt;pid&gt;.jsonl")]
+  FILE --> B["canopy bundle: re-filtered to strict,<br/>searched for every name known on the host"]
+  B --> A["canopy analyse (developer):<br/>report against the targets"]
     </pre></div>
   </section>
 
+  <section id="scale">
+    <span class="eyebrow">3 · Built for scale and speed</span>
+    <h2>How loading and drawing stay fast as data grows</h2>
+    <p>The browsers the lab looked at before Canopy (cellxgene, cirrocumulus, SCope and Vitessce) each solve part of this. Canopy combines their best ideas and adds a few of its own, so that a 1–3 M cell atlas, a 55 GB h5ad and 20 spatial sections side by side stay interactive on one shared host. The comparisons below describe each tool's default design as read in its source (see the project's reports 01 and 09), not a benchmark between them.</p>
+
+    <h3>Loading data: what the server reads and sends</h3>
+    <div class="table-wrap"><table class="api compare">
+      <thead><tr><th>Step</th><th>Canopy</th><th>What others do</th></tr></thead>
+      <tbody>
+        <tr><td>Finding datasets</td><td>The crawler walks the data folders with <code>scandir</code> and fingerprints each file from its <b>metadata only</b> (no values). A rescan skips a file whose size and time stamp did not change, so a share with hundreds of datasets rescans in seconds.</td><td>cellxgene has no file list (one dataset per process; the gateway starts one per click). cirrocumulus registers datasets one by one. SCope lists a folder of loom files.</td></tr>
+        <tr><td>Opening a dataset</td><td>Nothing is loaded up front. A request reads <b>one element</b> (one obs column, two embedding columns, one gene) through h5py or zarr, from a dataset kept open in a cache with a memory budget and an idle timeout. Small files are read whole; datasets too large to read by column are converted.</td><td>cellxgene loads the whole AnnData into memory per process by default. cirrocumulus reads requested columns in backed mode (the closest to Canopy). Vitessce needs the data converted to zarr beforehand.</td></tr>
+        <tr><td>Reading a gene</td><td>The fingerprint says how a gene can be read (directly from CSC, from a matrix held in memory, or only after conversion) and how many bytes it costs, before anything is read. Converted copies store the matrix <b>by gene (CSC)</b> with per-gene statistics (non-zeros, mean, max, 99th percentile), so a gene of a 1.65 M cell atlas is one contiguous read.</td><td>cellxgene and cirrocumulus read a column of X in whatever layout the file has; a cell-wise (CSR) matrix means touching every row block.</td></tr>
+        <tr><td>Sending values</td><td>Binary, not JSON. Embeddings as <b>uint16</b> per column (half of float32, finer than a pixel). Genes <b>sparse or dense</b>, whichever is smaller, quantised to 16 bits with 0 and missing values exact, and whole-number counts exact up to 65,534. Category columns as int8/int16 codes. ETags let the browser reuse what it has.</td><td>cellxgene sends float32 columns as FlatBuffers. cirrocumulus answers each request with the columns asked for. Vitessce reads zarr chunks directly.</td></tr>
+        <tr><td>Big spatial data</td><td>The converted copy holds images as <b>OME-Zarr pyramids</b> (read tile by tile through Viv), cell outlines in <b>blocks of 4,096 with bounding boxes</b> (only the blocks in view are read; centres when zoomed out), and transcripts <b>grouped by gene</b> with a sampled level of detail. The browser reads these files itself with HTTP byte ranges into a chunk cache, so the server is only a file server for them.</td><td>Vitessce also reads SpatialData zarr and Viv tiles in the browser (Canopy uses Viv for images too). cellxgene, cirrocumulus and SCope do not show segmentation outlines or transcripts.</td></tr>
+        <tr><td>Converting large files</td><td>In a separate worker process with a memory reservation and a watchdog. The cell-wise matrix is turned gene-wise <b>out of core</b>: entries are sorted into gene buckets spilled to disk, so a 55 GB h5ad converts within a fixed memory (16 min on the host). Stores are zarr v3, sharded (64 chunks a file) and zstd-compressed, so network storage sees few large files.</td><td>SCope v2 converts uploads to TileDB-SOMA with Celery; Vitessce leaves conversion to the user (vitessce-python); cellxgene and cirrocumulus do not convert.</td></tr>
+        <tr><td>Plots</td><td>Violins, composition bars and density maps are computed on the server with <code>numpy.bincount</code> over integer codes (no per-cell data sent) and cached by ETag. Plots of a lasso selection are computed in the browser from values it already has.</td><td>cirrocumulus computes plots on the server too; cellxgene computes histograms in the browser from full columns.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Drawing: what the browser does per frame</h3>
+    <div class="table-wrap"><table class="api compare">
+      <thead><tr><th>Step</th><th>Canopy</th><th>What others do</th></tr></thead>
+      <tbody>
+        <tr><td>One canvas</td><td>All views and panels share <b>one WebGL context</b>: each panel is a deck.gl viewport on one canvas. Browsers allow only about 16 contexts, so this is what lets 24 linked datasets, each split into panels, draw at once.</td><td>A page with one canvas per view needs one WebGL context each and runs into that limit; cellxgene shows one embedding at a time.</td></tr>
+        <tr><td>Colour on the GPU</td><td>Each cell is <b>one float</b> on the GPU (a category code or a value); a 256-entry lookup texture and a range uniform turn it into a colour in the shader. Changing palette, colour map, range or hidden categories uploads nothing per cell. Colours follow the category <b>name</b> (a stable hash), so the same cell type has the same colour in every view and dataset.</td><td>cellxgene and cirrocumulus compute colours per cell in JavaScript (as Canopy did until step S4) and hand the renderer new colour arrays when the colouring changes.</td></tr>
+        <tr><td>Level of detail</td><td>Large datasets are reordered once: a <b>stratified sample first</b> (every category kept), then the rest. Any prefix is a fair sample, so drawing fewer cells means drawing a shorter prefix of the same GPU buffer. The canvas shares a budget of 1 M points among its views, gives more to views zoomed in, and lowers the budget when the input-to-draw delay shows the machine cannot keep up.</td><td>cellxgene and cirrocumulus draw every cell; with millions of cells, frame time grows with the cell count.</td></tr>
+        <tr><td>Linked views</td><td>A linked group shares one colour scheme, computed once per group and handed out as the same object while unchanged; views showing the same coordinates share one scale and pan together. Publishes are batched once per frame, so opening 20 views does not rebuild colours 20 × 20 times.</td><td>Vitessce links views through its coordination model; cellxgene and cirrocumulus show one dataset at a time.</td></tr>
+        <tr><td>Hover and lasso</td><td>Hover picking is gated while the pointer moves fast. The lasso tests points in the panel's own coordinates (spatial transforms included) against a mask in one pass; 215 k of 1.65 M cells select in 0.17 s.</td><td>cellxgene selects with crossfilter on full columns.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Measured on the lab's host</h3>
+    <p>From the three host tests (bundles of 2026-10-13 and 2026-10-14; Apple M2 laptop browser, server on the 144-core host):</p>
+    <ul class="facts">
+      <li><b>16.6 ms</b> median frame while moving with 2–4 views and 3.4 M cells (60 frames/s).</li>
+      <li><b>10–15 ms</b> frames while moving in linked groups of 19 and 21 spatial sections; about 20 ms for 19 linked embeddings.</li>
+      <li><b>0.17 s</b> median until a view is ready; embeddings of 0.5 M+ cells ready in 0.87 s for 90 % of views (target 3 s).</li>
+      <li>Gene requests answered in at most <b>225 ms</b> by the server (on local disks, 57 ms); 90 % of gene switches under 0.31 s for atlases above 1.2 M cells (target 1 s).</li>
+      <li>Lasso on 1.65 M cells: <b>23–165 ms</b>. Server memory at most <b>0.6 GB</b> while serving.</li>
+      <li>Conversions: spatial sections in 5–38 s at ≤ 3.4 GB; a 1.65 M cell h5ad in 10 min at 14 GB; a 55 GB h5ad in 16 min.</li>
+    </ul>
+  </section>
+
   <section id="deps">
-    <span class="eyebrow">3 · Who uses whom</span>
+    <span class="eyebrow">4 · Who uses whom</span>
     <h2>Module dependencies</h2>
     <p>Generated from the import statements. An arrow points from a module to a module it uses; a dotted arrow means it starts that module as a Web Worker. Click a box to open it in the explorer below.</p>
     <h3>Server (Python)</h3>
@@ -302,7 +361,7 @@ flowchart LR
   </section>
 
   <section id="explorer-section">
-    <span class="eyebrow">4 · Every module</span>
+    <span class="eyebrow">5 · Every module</span>
     <h2>Module explorer</h2>
     <p>Pick a module on the left, or search for a class, method or function name. Descriptions are the code's own docstrings and header comments. Colours mark the package.</p>
     <div class="legend-hues" id="hues"></div>
@@ -316,7 +375,7 @@ flowchart LR
   </section>
 
   <section id="api">
-    <span class="eyebrow">5 · The contract between browser and server</span>
+    <span class="eyebrow">6 · The contract between browser and server</span>
     <h2>HTTP API</h2>
     <div class="table-wrap"><table class="api"><thead><tr><th>Method</th><th>Path</th><th>Handler</th><th>What it does</th></tr></thead><tbody id="api-rows"></tbody></table></div>
   </section>
