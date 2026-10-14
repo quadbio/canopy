@@ -278,9 +278,10 @@ def _num(x: Any) -> str:
 
 
 def _table(head: list[str], rows: Iterable[list[str]]) -> list[str]:
-    out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    out += ["| " + " | ".join(r) + " |" for r in rows]
-    return out
+    body = ["| " + " | ".join(r) + " |" for r in rows]
+    if not body:
+        return ["(none)"]
+    return ["| " + " | ".join(head) + " |", "|" + "---|" * len(head), *body]
 
 
 def report(b: Bundle, m: dict[str, Any], prev: dict[str, Any] | None = None) -> str:
@@ -305,7 +306,10 @@ def report(b: Bundle, m: dict[str, Any], prev: dict[str, Any] | None = None) -> 
     if m["server_errors"]:
         problems.append(f"- **{m['server_errors']} server errors (5xx)**")
     if m["crash_files"]:
-        problems.append(f"- **Crash files with content:** {', '.join(m['crash_files'])}")
+        problems.append(
+            "- **Crash or stack-dump files with content** (a crash, a hang, a worker error, or "
+            f"a dump asked for with SIGUSR1): {', '.join(m['crash_files'])}"
+        )
     failed = {
         s: n for s, n in m["jobs"]["states"].items() if s not in ("done", "queued", "running")
     }

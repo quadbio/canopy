@@ -32,6 +32,9 @@ def test_selfcheck_reports_each_area_and_logs_no_names(cfg: Config, tmp_path: Pa
     (cfg.data_roots[0].path / "SECRETDIR").mkdir()
     (cfg.data_roots[0].path / "SECRETDIR" / "SECRETFILE.h5ad").write_bytes(b"\0" * (3 * 2**20))
     conf = _conf(cfg, tmp_path / "canopy.toml")
+    from canopy.config import MemoryConfig
+
+    cfg.memory = MemoryConfig(budget_gb=1, cache_gb=0.5)  # fits any test machine (4 GB trial)
     setup_logging(cfg.logging, role="cli", salt="x", to_console=False)
     checks = run(cfg, conf, read_mb=2)
     areas = {c.area for c in checks}
