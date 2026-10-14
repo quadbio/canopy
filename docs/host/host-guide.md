@@ -106,6 +106,20 @@ Canopy logs match what the host sets.
 
 ## 6. Start and stop
 
+First check the installation (it changes nothing but creating the folders the config names):
+
+```bash
+pixi run --frozen canopy selfcheck --config config.toml
+```
+
+Each line says `ok`, `WARN` or `FAIL`, in plain words: absolute folders in the config (§11);
+the cache, state and log folders writable, private to you, their file system and free space,
+file locks where the index lives; the memory budget and conversions against the account's limit
+(§5); each data root readable, with the speed of a test read (it reads up to 256 MB of one file
+there; `--read-mb 0` skips that); the port; the index and unused converted copies (§13). Fix
+what says `FAIL` before starting. Its results are logged as codes and numbers, so the next
+bundle carries them.
+
 Start it in a `tmux` session, so it keeps running after you log out:
 
 ```bash

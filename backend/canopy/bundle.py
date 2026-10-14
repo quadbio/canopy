@@ -372,6 +372,9 @@ CODE_FIELDS = frozenset(
         # settings logged at start-up: a folder called "private" or "token" must not match them
         "file_access",
         "auth",
+        # canopy selfcheck
+        "area",
+        "fstype",
     }
 )
 

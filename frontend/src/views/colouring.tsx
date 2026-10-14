@@ -283,7 +283,7 @@ export function useColouring(
   const geneIndexOf = useMemo(() => (genes.data ? new Map(genes.data.names.map((g, i) => [g, i])) : null), [genes.data]);
   const geneChoice = p.colorBy?.kind === 'gene' ? p.colorBy : null;
   const geneIndex = geneChoice && geneIndexOf ? (geneIndexOf.get(geneChoice.name) ?? null) : null;
-  const geneQ = useGene(datasetId, table, geneIndex, geneChoice?.matrix ?? 'X', version);
+  const geneQ = useGene(datasetId, table, geneIndex, geneChoice?.matrix ?? 'X', version, !!link);
   const gene = geneQ.data && geneQ.data.values.length === n ? geneQ.data : undefined;
   const values = obs.data && obs.data.data.length === n ? obs.data : undefined;
   // What the colour legend and tooltips call the colouring: a column, or a gene (its symbol).

@@ -200,7 +200,13 @@ and log duration, RSS at exit, change and peak. Python warnings are logged as `p
 To collect logs from a host, run `canopy bundle --config … --since-days 2`: one archive at
 strict privacy (re-filtered whatever level the runs used), with crash locations, environment,
 jobs and index summaries, checked for names known on the host before it is written. `canopy token
-find <h_…> --config …` (on the host) names what a token stands for.
+find <h_…> --config …` (on the host) names what a token stands for. `canopy selfcheck --config …`
+checks an installation in one go (config paths, folders: writable, private, file system, free
+space, locks; memory against the budget; each data root's read speed; the port; the index and
+unused converted copies) and logs only codes and numbers, so its results reach the next bundle.
+On the developer's computer, `canopy analyse <bundle> [--previous <bundle>] [--out report.md]`
+turns a bundle into a report: problems first, the performance targets, browser and server
+timings, memory, conversions and the index, and the change from an earlier bundle.
 
 **When the server seems stuck** (pages spin, nothing new in the log):
 - requests running longer than `server.slow_request_s` (20 s) are logged as `slow_request` every

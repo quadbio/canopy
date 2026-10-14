@@ -40,4 +40,8 @@ docker run --rm --platform linux/amd64 --memory "${MEMORY:-4g}" --cpus 4 \
 status=${PIPESTATUS[0]}
 echo
 cat "$out/summary.txt" 2>/dev/null || echo "linux-trial: no summary (the container stopped early)"
+# the trial's bundle as a report, as for a host bundle
+if [ -f "$out/bundle.tar.gz" ]; then
+  (cd "$repo" && pixi run -e dev canopy analyse "$out/bundle.tar.gz" --out "$out/report.md") || echo "linux-trial: analyse failed"
+fi
 exit "$status"

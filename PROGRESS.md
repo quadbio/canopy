@@ -420,3 +420,18 @@ Resume rule: read this file, then continue with the first unchecked step.
   Fixed: `cache prune` and `catalog scan` need the config (refuse otherwise); prune refuses a
   missing cache folder, names the cache folder and index it uses, and `--dry-run` lists every
   copy (kept, with the datasets using it, or to remove). Host guide §13, README.
+- 2026-10-14 Owner: host test good, no further bundle; next: a cold review of 0b0a822..a9a19c7
+  (../reviews/code_review_H3/, running), the S8 leftovers, the Linux trial, then Checkpoint A.
+- 2026-10-14 S8 leftovers: `canopy selfcheck --config` (config paths absolute; cache/state/log
+  folders writable, private, file system, free space, locks where the index is; memory budget and
+  conversions against the account limit; each data root listed and timed with a test read; the
+  port; the index; unused converted copies). Plain lines on the terminal, `selfcheck` events with
+  codes and numbers only (`area`, `fstype` are program fields for the bundle check). `canopy
+  analyse <bundle> [--previous] [--out]` on this Mac: problems first, the performance targets
+  (reports/09), browser and server timings, memory, conversions, index, change from an earlier
+  bundle; read in memory, never extracted. On the third host bundle it found what the manual
+  reading missed: genes in the 19-region group took 1.6 s per view (the views load at once;
+  server ≤ 225 ms each); gene loads in linked groups are now marked (`linked`) and reported
+  apart from the targets. Scripted test suites and a browser test page dropped (the host tests
+  covered them). Linux trial runs selfcheck (passes; fails on a budget above the 4 GB limit) and
+  analyses its bundle. Host guide §6, README.

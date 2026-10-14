@@ -100,6 +100,7 @@ export const useGene = (
   index: number | null,
   matrix: string,
   version: string | undefined,
+  linked = false, // a view of a linked group: its members load the gene at once (telemetry)
 ) =>
   useQuery({
     queryKey: ['gene', id, version, table, matrix, index],
@@ -107,6 +108,7 @@ export const useGene = (
       timeAsync('gene_loaded', () => datasets.gene(id, table, index!, matrix, signal), (g) => ({
         n: g.values.length,
         nnz: g.nnz,
+        linked: linked ? 1 : 0,
       })),
     enabled: index !== null && index >= 0 && !!version,
     staleTime: Infinity,

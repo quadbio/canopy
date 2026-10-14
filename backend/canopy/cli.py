@@ -278,16 +278,9 @@ def token_find(
 
 def _port_free(host: str, port: int) -> int | None:
     """None if the server can listen on host:port, else the errno."""
-    import socket
+    from canopy.selfcheck import port_free
 
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind((host, port))
-        except OSError as e:
-            return e.errno or -1
-    return None
+    return port_free(host, port)
 
 
 @app.command()
@@ -338,6 +331,55 @@ def bundle(
         f"wrote {path} ({path.stat().st_size // 1024} KB). Open it and read MANIFEST.md before"
     )
     typer.echo("copying it; it holds no names (checked), only codes, numbers and tokens.")
+
+
+@app.command()
+def selfcheck(
+    config: ConfigOpt = None,
+    read_mb: Annotated[
+        int, typer.Option("--read-mb", help="MB to read from each data root to time it (0: skip)")
+    ] = 256,
+) -> None:
+    """Check this installation: config paths, folders (writable, private, file system, free
+    space, locks), memory against the budget, data roots (readable, read speed), the port, the
+    index and unused converted copies. Exit code 1 if a check failed. Logs only codes and
+    numbers, so the results reach the next bundle."""
+    from canopy.selfcheck import run
+
+    path = _required(config)
+    cfg = _cli_logging(path)
+    assert cfg is not None
+    checks = run(cfg, path, read_mb)
+    mark = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
+    for c in checks:
+        typer.echo(f"{mark[c.status]}  {c.message}")
+    n = {s: sum(c.status == s for c in checks) for s in ("ok", "warn", "fail")}
+    typer.echo(f"\n{n['ok']} ok, {n['warn']} warnings, {n['fail']} failed")
+    if n["fail"]:
+        raise typer.Exit(1)
+
+
+@app.command()
+def analyse(
+    bundle: Annotated[Path, typer.Argument(exists=True, dir_okay=False, help="A bundle (.tar.gz)")],
+    previous: Annotated[
+        Path | None,
+        typer.Option(
+            "--previous", exists=True, dir_okay=False, help="An earlier bundle to compare"
+        ),
+    ] = None,
+    out: Annotated[Path | None, typer.Option("--out", help="Write the report here")] = None,
+) -> None:
+    """Report on a diagnostics bundle (on the developer's computer): problems, timings against
+    the performance targets, conversions, index, memory, browser measurements."""
+    from canopy.analyse import analyse as run
+
+    text = run(bundle, previous)
+    if out is None:
+        typer.echo(text)
+    else:
+        out.write_text(text)
+        typer.echo(f"wrote {out}")
 
 
 @app.command("link")

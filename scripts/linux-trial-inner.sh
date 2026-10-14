@@ -61,6 +61,9 @@ sed -e "s#/scratch/YOUR_USER/canopy#$run#g" \
   -e 's#^memory_gb = .*#memory_gb = 0.5#' -e 's#^memory_sample_interval = .*#memory_sample_interval = 2#' \
   config.host.example.toml >config.toml
 check "canopy link (config valid, prints the link)" bash -c 'pixi run --frozen canopy link --config config.toml | grep -q "token="'
+pixi run --frozen canopy selfcheck --config config.toml --read-mb 64 >/out/selfcheck.txt 2>&1
+check "canopy selfcheck: no failed check" bash -c 'tail -1 /out/selfcheck.txt | grep -q " 0 failed"'
+check "canopy selfcheck: sees the 4 GB container limit" grep -q "account's limit 4 GB" /out/selfcheck.txt
 
 # --- 6: start without a terminal (as under nohup or a service): no token in the output
 pixi run --frozen canopy serve --config config.toml >serve.out 2>&1 &
@@ -125,6 +128,7 @@ pixi run --frozen canopy serve --config config.toml >serve2.out 2>&1 &
 for _ in $(seq 1 120); do curl -sf http://127.0.0.1:8766/api/health >/dev/null && break; sleep 1; done
 pid2=$(cat "$run/state/server.lock")
 check "budget 8 GB under a 4 GB limit is warned about" bash -c "grep -q memory_budget_above_limit $run/logs/canopy-server-*.jsonl"
+check "canopy selfcheck fails on that budget" bash -c '! pixi run --frozen canopy selfcheck --config config.toml --read-mb 0 >/out/selfcheck2.txt 2>&1 && grep -q "FAIL  budget 8 GB" /out/selfcheck2.txt'
 kill "$pid2"
 for _ in $(seq 1 30); do kill -0 "$pid2" 2>/dev/null || break; sleep 1; done
 
