@@ -114,6 +114,31 @@ test('two datasets opened linked share settings, legend, zoom; the embedding sta
   expect(errors).toEqual([]);
 });
 
+test('a group zoomed while it loads keeps one scale; Close all asks first and keeps the details', async ({ page }) => {
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await tickRow(page, 'spatial.h5ad');
+  await tickRow(page, 'dissociated.h5ad');
+  await page.getByTestId('open-linked').click();
+  // a wheel turned before the views are fitted (review H3 B-M1)
+  const cells = page.getByTestId('view-cell');
+  await expect(cells).toHaveCount(2);
+  const box = (await cells.nth(0).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -200);
+  for (const k of [0, 1]) await expect(cells.nth(k)).toHaveAttribute('data-status', 'ready');
+  const z = async (k: number) => Number(await cells.nth(k).getAttribute('data-zoom'));
+  await expect.poll(async () => (await z(0)) - (await z(1))).toBeCloseTo(0, 2);
+  // Close all with a group open asks first, in place; the dataset clicked stays shown (B-L4)
+  await page.getByTestId('dataset-row').filter({ hasText: 'example_with_layers' }).click();
+  await page.getByTestId('open-blocked').getByRole('button', { name: 'Close all' }).click();
+  await expect(cells).toHaveCount(2);
+  await page.getByTestId('close-all-confirm').click();
+  await expect(cells).toHaveCount(0);
+  await expect(page.getByTestId('open-dataset')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test('shift-click ticks every dataset between two clicks of the same list', async ({ page }) => {
   await freshPage(page);
   // the search results are one list (the example folders hold two datasets at most)

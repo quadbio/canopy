@@ -48,3 +48,8 @@ becomes "is the cell in the selection or not". Filters and gene sets wait.
 - e2e `plot.spec.ts` "lasso": the path under the pointer; instruction before a selection; a
   lasso selects part of the cells; two bars; Shift adds; a gene gives two violins; a lasso
   around the whole view selects all 8 000 cells; clearing.
+
+## Revision after review H3 (2026-10-14)
+- A lasso whose cells cannot be read (e.g. the server restarting) says so under the overlay;
+  lasso mode stays on to draw again. While cells are read, no second lasso starts; a finished
+  read ends lasso mode only for its own view. A cancelled touch or pen stroke is dropped.

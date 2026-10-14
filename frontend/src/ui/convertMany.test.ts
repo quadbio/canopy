@@ -28,4 +28,18 @@ describe('convert ticked', () => {
     await vi.waitFor(() => expect(useConvertMany.getState().waiting).toEqual([]));
     expect(convert.mock.calls.map((c) => c[0])).toEqual(['a', 'bad', 'c', 'c', 'd']);
   });
+
+  it('stops waiting on request: the rest are not handed over', async () => {
+    vi.useFakeTimers();
+    convert.mockReset();
+    convert.mockImplementation(async () => {
+      throw new ApiError(429, '/x', null, { code: 'queue_full', message: 'full' });
+    });
+    useConvertMany.getState().add(['x', 'y'], new QueryClient());
+    await vi.waitFor(() => expect(convert).toHaveBeenCalledTimes(1));
+    useConvertMany.getState().stop();
+    expect(useConvertMany.getState().waiting).toEqual([]);
+    await vi.advanceTimersByTimeAsync(RETRY_MS * 3);
+    expect(convert).toHaveBeenCalledTimes(1);
+  });
 });

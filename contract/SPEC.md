@@ -53,8 +53,9 @@ stores. The v0.1 review decisions (§11) are unchanged. What changed and why:
   points/<points>/                 transcripts partitioned by feature (§8)
 ```
 
-- `dataset_id` comes from the source fingerprint: a hash of the real path plus, for a file, its
-  size and modification time, or, for a zarr store, the newest modification time of its groups
+- `dataset_id` comes from the source fingerprint: a hash of the dataset's place (its data root's
+  name and its path inside the root; the real path for a file outside any root) plus, for a file,
+  its size and modification time, or, for a zarr store, the newest modification time of its groups
   and metadata files. A changed source gets a new store. (Rewriting chunks of a zarr store in place
   without touching any metadata is not detected; such stores need a manual rebuild.)
 - A store is built in `<…>/c0.tmp-<random>/` and renamed to `c0/` only after `canopy validate`

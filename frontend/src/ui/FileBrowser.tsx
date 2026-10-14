@@ -17,8 +17,9 @@ import { viewTypes } from '../views/registry';
 import { formatBytes, formatCount, Help } from './controls';
 import { Conversion } from './Conversion';
 import { DatasetNotes, type Notice } from './notes';
+import { CloseAll } from './CloseAll';
 import { useConvertMany } from './convertMany';
-import { ticksFor } from './ticks';
+import { resetTickAnchor, ticksFor } from './ticks';
 
 const ACTIVE_JOB = new Set(['queued', 'running']);
 
@@ -292,21 +293,30 @@ export function sharedDefaults(metas: DatasetMeta[], first: Record<string, unkno
 
 /** Why opening is not possible now, and the way out: close all views. */
 function CloseFirst({ children, testId }: { children: string; testId: string }) {
-  const reset = useWorkspace((s) => s.reset);
   return (
     <div className="close-first" data-testid={testId}>
       <p className="muted small">{children}</p>
-      <button className="ghost" onClick={reset}>
-        Close all
-      </button>
+      <CloseAll />
     </div>
   );
 }
 
-/** `f` over the items, at most `n` at a time; every outcome, in order. */
+/** `f` over the items, at most `n` at a time (a pool: the next starts as soon as one ends, not
+ * after the slowest of a batch; review H3 B-L9); every outcome, in order. */
 async function inBatches<T, R>(items: T[], n: number, f: (x: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
-  const out: PromiseSettledResult<R>[] = [];
-  for (let i = 0; i < items.length; i += n) out.push(...(await Promise.allSettled(items.slice(i, i + n).map(f))));
+  const out: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        out[i] = { status: 'fulfilled', value: await f(items[i]) };
+      } catch (reason) {
+        out[i] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
   return out;
 }
 
@@ -322,6 +332,11 @@ function LinkedOpen() {
   const waiting = useConvertMany((s) => s.waiting);
   const failed = useConvertMany((s) => s.failed);
   const convertMany = useConvertMany((s) => s.add);
+  const stopWaiting = useConvertMany((s) => s.stop);
+  const clearTicks = () => {
+    tick(ticked, false);
+    resetTickAnchor();
+  };
   const details = useQueries({
     queries: ticked.map((id) => ({
       queryKey: ['dataset', id],
@@ -381,6 +396,7 @@ function LinkedOpen() {
       event('group_opened', null, { type, n: linked.length, skipped: skipped.length });
       if (skipped.length) setProblem(`Not opened: ${skipped.join(', ')}.`);
       tick(ticked, false);
+      resetTickAnchor();
     } catch (e) {
       setProblem(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -394,8 +410,10 @@ function LinkedOpen() {
   const toConvert = spatial
     .filter((d) => !d!.conversion?.converted && !waiting.includes(d!.id) && !ACTIVE_JOB.has(d!.conversion?.job?.state ?? ''))
     .map((d) => d!.id);
+  // refused by the server when asked (failedHere), or failed while converting (failedJobs)
   const failedHere = failed.filter((f) => ticked.includes(f.id));
-  const conversions = (toConvert.length > 0 || converting > 0 || failedHere.length > 0) && (
+  const failedJobs = spatial.filter((d) => !d!.conversion?.converted && d!.conversion?.job?.state === 'failed');
+  const conversions = (toConvert.length > 0 || converting > 0 || failedHere.length > 0 || failedJobs.length > 0) && (
     <div className="convert-ticked" data-testid="convert-ticked">
       {toConvert.length > 0 && (
         <p className="small">
@@ -407,14 +425,28 @@ function LinkedOpen() {
         </p>
       )}
       {converting > 0 && (
-        <p className="muted small" data-testid="convert-ticked-progress">
+        <p className="muted small" data-testid="convert-ticked-progress" role="status">
           Converting {converting}
           {waiting.length ? ` (${waiting.length} waiting for a place in the server’s queue)` : ''}; at most a few run at a time.
+          {waiting.length > 0 && (
+            <>
+              {' '}
+              <button className="link small" onClick={stopWaiting} data-testid="convert-ticked-stop">
+                Stop waiting
+              </button>
+            </>
+          )}
         </p>
       )}
       {failedHere.map((f) => (
-        <p key={f.id} className="error small">
+        <p key={f.id} className="error small" role="status">
           {qc.getQueryData<{ name: string }>(['dataset', f.id])?.name ?? f.id}: {f.message}
+        </p>
+      ))}
+      {failedJobs.map((d) => (
+        <p key={d!.id} className="error small" role="status">
+          {d!.name}: the conversion failed{d!.conversion?.job?.error ? ` (${d!.conversion.job.error})` : ''}. Its details say more; Convert tries
+          again.
         </p>
       ))}
     </div>
@@ -427,7 +459,7 @@ function LinkedOpen() {
         </h3>
         <CloseFirst testId="linked-blocked">Linked views open on an empty canvas: close the open views first.</CloseFirst>
         {conversions}
-        <button className="link small" onClick={() => tick(ticked, false)} data-testid="untick-all">
+        <button className="link small" onClick={clearTicks} data-testid="untick-all">
           Clear the ticks
         </button>
       </div>
@@ -464,7 +496,7 @@ function LinkedOpen() {
         >
           {busy && !allSpatial ? 'Opening…' : 'Open linked embeddings'}
         </button>
-        <button className="ghost" onClick={() => tick(ticked, false)} data-testid="untick-all">
+        <button className="ghost" onClick={clearTicks} data-testid="untick-all">
           Clear
         </button>
       </div>

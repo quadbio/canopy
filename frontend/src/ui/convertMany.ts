@@ -17,6 +17,8 @@ interface ConvertMany {
   /** Datasets the server refused (other than for a full queue), with its message. */
   failed: { id: string; message: string }[];
   add: (ids: string[], qc: QueryClient) => void;
+  /** Forgets the datasets not yet handed over (those handed over convert on). */
+  stop: () => void;
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -59,6 +61,11 @@ export const useConvertMany = create<ConvertMany>()((set, get) => {
       if (timer) clearTimeout(timer);
       timer = null;
       void feed(qc);
+    },
+    stop: () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      set({ waiting: [] });
     },
   };
 });

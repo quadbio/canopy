@@ -16,7 +16,7 @@
 import { type Layer, OrthographicView, type PickingInfo } from '@deck.gl/core';
 import { PathLayer } from '@deck.gl/layers';
 import DeckGL from '@deck.gl/react';
-import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
@@ -28,7 +28,7 @@ import { type Cell, type Insets, type OrthoState, resizeView, tileCells } from '
 import { mergeLegends } from './linked';
 import { allowances, BudgetTuner, snappedExtent, useLod, visibleShare } from './lod';
 import { useViewOutputs } from './outputs';
-import { type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
+import { atZoom, type FitLayout, fitLayout, linkedStates, panelRects } from './panels';
 import { type Bounds, type Link, ownerOf, panelKey, panelsOf, type ViewOutput, viewType } from './registry';
 import { type Polygon, useSelection } from './selection';
 
@@ -402,8 +402,15 @@ function LassoOverlay({
 }) {
   const [points, setPoints] = useState<Polygon>([]);
   const path = useRef<Polygon>([]); // the stroke as it is drawn (state may lag behind, B-L1)
-  const [missed, setMissed] = useState(false);
+  // a hint under the lasso: it started outside every panel, or the cells could not be read
+  const [hint, setHint] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false); // the cells inside are being read: no second lasso
   const drawing = useRef(false);
+  const stop = () => {
+    drawing.current = false;
+    path.current = [];
+    setPoints([]);
+  };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -428,9 +435,10 @@ function LassoOverlay({
       aria-label="Lasso: drag around cells to select them (Shift: add; Esc: stop)"
       style={{ left: cell.x, top, width: cell.width, height: cell.height - TITLE_ROW }}
       onPointerDown={(e) => {
+        if (busy) return; // review H3 B-M3: two lassos over one slow read would overwrite each other
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         drawing.current = true;
-        setMissed(false);
+        setHint(null);
         path.current = [at(e)];
         setPoints(path.current);
       }}
@@ -443,14 +451,28 @@ function LassoOverlay({
         setPoints(path.current);
       }}
       onPointerUp={(e) => {
-        drawing.current = false;
+        if (!drawing.current) return;
         const done = path.current;
-        path.current = [];
-        setPoints([]);
-        if (done.length >= 3) void onDone(done, e.shiftKey).then((used) => setMissed(!used));
+        stop();
+        if (done.length < 3) return;
+        setBusy(true);
+        onDone(done, e.shiftKey)
+          .then((used) => setHint(used ? null : 'Start the lasso inside a panel.'))
+          // a read that failed (e.g. the server restarting): said here, lasso mode stays on
+          // to try again (review H3 B-M3)
+          .catch((err: unknown) => setHint(`The cells could not be read (${err instanceof Error ? err.message : String(err)}); draw again, or Esc.`))
+          .finally(() => setBusy(false));
       }}
+      // a gesture the browser took over (touch, pen) or a lost capture ends the stroke (B-L8)
+      onPointerCancel={stop}
+      onLostPointerCapture={() => drawing.current && stop()}
+      aria-busy={busy}
     >
-      {missed && <p className="lasso-hint" data-testid="lasso-hint">Start the lasso inside a panel.</p>}
+      {(hint || busy) && (
+        <p className="lasso-hint" data-testid="lasso-hint" role="status">
+          {busy ? 'Selecting…' : hint}
+        </p>
+      )}
       <svg width="100%" height="100%">
         <polyline points={points.map(([x, y]) => `${x - cell.x},${y - top}`).join(' ')} className="lasso-path" data-testid="lasso-path" />
       </svg>
@@ -481,11 +503,9 @@ const GroupTile = memo(function GroupTile({
   const removeGroup = useWorkspace((s) => s.removeGroup);
   const updateParams = useWorkspace((s) => s.updateParams);
   const unlocked = first.params.unlocked === true;
-  // locking again links the views showing the same coordinates, from one fitted scale (owner)
-  const toggleLock = () => {
-    updateParams(first.id, { unlocked: !unlocked });
-    if (unlocked) onFit(group);
-  };
+  // locking again links the views showing the same coordinates, from one fitted scale (owner;
+  // the canvas refits a group whenever it is locked again, also by Reset: review H3 B-L1)
+  const toggleLock = () => updateParams(first.id, { unlocked: !unlocked });
   const t = viewType(first.type);
   const compact = tile.width < COMPACT_WIDTH;
   const output = useMemo<ViewOutput>(() => ({ layers: [], bounds: null, status: 'ready', legend }), [legend]);
@@ -509,8 +529,9 @@ const GroupTile = memo(function GroupTile({
           <button
             className={`icon-button${unlocked ? ' on' : ''}`}
             onClick={toggleLock}
-            aria-pressed={!unlocked}
-            aria-label={unlocked ? 'Lock zoom and pan' : 'Unlock zoom and pan'}
+            // one fixed label, pressed (and highlighted) while unlocked (review H3 B-L5)
+            aria-pressed={unlocked}
+            aria-label="Move each view on its own"
             title={
               unlocked
                 ? 'Each view zooms and pans on its own. Click to link the views showing the same coordinates again (they return to one fitted scale).'
@@ -724,20 +745,36 @@ export function Canvas() {
   const drawn = useRef<Set<string>>(new Set());
   const frames = useRef(new FrameStats());
   const tuner = useRef(new BudgetTuner());
-  // the display's frame interval, measured once while nothing moves (judges slow and fast)
+  const inputAt = useRef(0); // when the first input of the frame being drawn came
+  // the display's frame interval (judges slow and fast): measured once the page has settled
+  // (not while it loads), and again on another screen (a change of pixel ratio or size)
   useEffect(() => {
-    const ts: number[] = [];
     let id = 0;
-    const step = (t: number) => {
-      ts.push(t);
-      if (ts.length < 21) id = requestAnimationFrame(step);
-      else {
-        const gaps = ts.slice(1).map((x, i) => x - ts[i]).sort((a, b) => a - b);
-        tuner.current.setPeriod(gaps[10]);
-      }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const measure = () => {
+      cancelAnimationFrame(id);
+      const ts: number[] = [];
+      const step = (t: number) => {
+        ts.push(t);
+        if (ts.length < 21) id = requestAnimationFrame(step);
+        else {
+          const gaps = ts.slice(1).map((x, i) => x - ts[i]).sort((a, b) => a - b);
+          tuner.current.setPeriod(gaps[10]);
+        }
+      };
+      id = requestAnimationFrame(step);
     };
-    id = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(id);
+    const later = () => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, 2000);
+    };
+    later();
+    window.addEventListener('resize', later);
+    return () => {
+      cancelAnimationFrame(id);
+      clearTimeout(timer);
+      window.removeEventListener('resize', later);
+    };
   }, []);
   const moving = useRef(0); // until when the canvas counts as moving (pan, zoom)
   const draggingNow = useRef(false);
@@ -779,7 +816,9 @@ export function Canvas() {
   useEffect(() => {
     const updates: Record<string, OrthoState> = {};
     units.forEach(({ unit, members, l: whole }) => {
-      const user = touched.current.has(unit);
+      // moved by the user: only once something of it was fitted (a wheel turned while the views
+      // still load is no position to keep; review H3 B-M1)
+      const user = touched.current.has(unit) && members.some((m) => m.keys.some((k) => fits.current[k]));
       const needs = new Set<Layout>();
       const resized: { key: string; rect: Cell }[] = [];
       const insetsOf = (l: Layout) => `${JSON.stringify(l.fitInsets)}|${l.sameScale}|${l.sameCoordinates}`;
@@ -808,24 +847,30 @@ export function Canvas() {
         } else {
           // the group was moved: a refitted view takes the scale of the others showing the same
           // coordinates (their fits stay, so linking stays smooth) and joins them where they are;
-          // with none, it is fitted on its own
+          // with none (every view of its coordinates is new), the views of those coordinates are
+          // fitted together, at one scale (review H3 B-M1); a view of an unlocked group alone
+          const alone: Layout[] = [];
           for (const l of needs) {
-            const own = fitLayout(l);
             const peer = l.free
               ? undefined
               : members.find((m) => m.scaleKey === l.scaleKey && !needs.has(m) && fits.current[m.keys[0]] && viewStates[m.keys[0]]);
             if (!peer) {
-              Object.assign(fits.current, own);
-              Object.assign(updates, own);
+              alone.push(l);
               continue;
             }
             const zoom = fits.current[peer.keys[0]].zoom;
-            const mine = Object.fromEntries(Object.entries(own).map(([k, st]) => [k, { ...st, zoom }]));
+            // the target is worked out again at the peers' zoom: insets shift it by zoom
+            // (review H3 B-L2)
+            const mine = atZoom(l, zoom);
             Object.assign(fits.current, mine);
             const ref = peer.keys[0];
             const joined = linkedStates('pan+zoom', ref, viewStates[ref], mine, fits.current);
             for (const k of Object.keys(mine)) updates[k] = joined[k];
           }
+          const together = fitGroup(alone.filter((l) => !l.free));
+          for (const l of alone.filter((x) => x.free)) Object.assign(together, fitLayout(l));
+          Object.assign(fits.current, together);
+          Object.assign(updates, together);
         }
         for (const l of needs) {
           l.keys.forEach((key, j) => {
@@ -846,14 +891,29 @@ export function Canvas() {
     if (Object.keys(updates).length) setViewStates((s) => ({ ...s, ...updates }));
   }, [units]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fit = (unit: string) => {
-    const u = units.find((x) => x.unit === unit);
+  // stable (the memoised cells and group tiles take it): reads the current units from a ref,
+  // or every pan frame would redraw every cell and the group's legend (review H3 B-M4)
+  const unitsRef = useRef(units);
+  useLayoutEffect(() => {
+    unitsRef.current = units;
+  }, [units]);
+  const fit = useCallback((unit: string) => {
+    const u = unitsRef.current.find((x) => x.unit === unit);
     if (!u) return;
     touched.current.delete(unit);
     const states = u.members.length === 1 ? fitLayout(u.l) : fitGroup(u.members);
     Object.assign(fits.current, states);
     setViewStates((s) => ({ ...s, ...states }));
-  };
+  }, []);
+
+  // a group locked again (its button, or Reset to defaults) returns to one fitted scale
+  const wasUnlocked = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    const now: Record<string, boolean> = {};
+    for (const v of views) if (v.group) now[v.group] = v.params.unlocked === true;
+    for (const [g, unlocked] of Object.entries(now)) if (wasUnlocked.current[g] && !unlocked) fit(g);
+    wasUnlocked.current = now;
+  }, [views, fit]);
 
   const deckViews = useMemo(
     () =>
@@ -1065,7 +1125,7 @@ export function Canvas() {
       getViewports: () => { id: string; x: number; y: number; width: number; height: number; unproject: (p: number[]) => number[] }[];
     } | undefined;
     if (!out?.lasso || !deck) {
-      setLassoing(null);
+      setLassoing((cur) => (cur === id ? null : cur));
       return true;
     }
     const [sx, sy] = screen[0];
@@ -1079,8 +1139,9 @@ export function Canvas() {
     const keep = add && old && old.key === out.lasso.key && old.mask.length === out.lasso.n;
     const mask = keep ? old.mask.slice() : new Uint8Array(out.lasso.n);
     const t0 = performance.now();
-    const added = await out.lasso.select(panel, poly, mask);
-    setLassoing(null);
+    const added = await out.lasso.select(panel, poly, mask); // a failure goes to the overlay
+    // only this view's lasso mode ends: another view's may have been turned on meanwhile
+    setLassoing((cur) => (cur === id ? null : cur));
     // the view may have closed while the cells were read (spatial: their centres, B-L3)
     if (!useWorkspace.getState().views.some((v) => v.id === id)) return true;
     const count = (keep ? old.count : 0) + added;
@@ -1152,6 +1213,7 @@ export function Canvas() {
             if (interactionState && Object.values(interactionState).some(Boolean)) {
               touched.current.add(unit);
               moving.current = performance.now() + 300; // the frames of this move (and its end)
+              if (!inputAt.current) inputAt.current = performance.now();
             }
             // in a linked group, only the views showing the same coordinates move together: a
             // UMAP and spatial coordinates have nothing in common (and y points the other way);
@@ -1189,16 +1251,20 @@ export function Canvas() {
           onClick={(info) => info.viewport && select(ownerOf(info.viewport.id).view)}
           onAfterRender={() => {
             const isMoving = performance.now() < moving.current;
-            const gap = frames.current.frame(isMoving, () => ({
+            frames.current.frame(isMoving, () => ({
               views: views.length,
               cells: totalCells,
               budget,
               mpx: Math.round((size.width * size.height * window.devicePixelRatio ** 2) / 1e5) / 10,
             }));
-            // only while it is dragged with the whole budget on screen: then points are the
-            // cost (a wheel's frames come at the wheel's pace, B-M2)
-            if (isMoving && draggingNow.current && totalCells > budget) {
-              const next = tuner.current.frame(gap, budget);
+            // the time from a move's first input to its frame on screen: short when drawing keeps
+            // up, however slowly the pointer moves; long when inputs queue behind slow frames
+            // (the gap between frames would measure the pointer's pace; review H3 B-M2)
+            const latency = inputAt.current ? performance.now() - inputAt.current : 0;
+            inputAt.current = 0;
+            // only while it is dragged with the whole budget on screen: then points are the cost
+            if (isMoving && draggingNow.current && totalCells > budget && latency > 0) {
+              const next = tuner.current.frame(latency, budget);
               if (next !== null) {
                 event('lod_budget', null, { from: budget, to: next, cells: totalCells, views: views.length });
                 setBudget(next);

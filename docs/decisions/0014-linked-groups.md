@@ -78,6 +78,12 @@ colours are used only when they agree across the datasets.
   offers to convert them all. The browser hands them to the server in order; when its queue is
   full (`jobs.max_queued`, `queue_full`) it tries again every 10 s, for as long as the page is
   open. At most `jobs.max_running` run at a time, as for single conversions.
+- **Review H3.** The lock is one toggle, "Move each view on its own", pressed while unlocked; a
+  group locked again by any route (also Reset to defaults) returns to one fitted scale. Views
+  needing a fit together when no other view of their coordinates has one are fitted together
+  (a wheel while a group loads). *Close all* with a group or several views open asks first, in
+  place; it keeps the dataset details. Publishes of a group's colourings are applied once per
+  frame. *Convert ticked* names conversions that failed and can stop waiting.
 - **Gear.** Every view (and a group) has a gear in its title row that shows its settings,
   unfolding the settings panel when it was folded away (clicking the title still works).
 

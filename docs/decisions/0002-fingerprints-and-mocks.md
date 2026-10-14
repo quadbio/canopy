@@ -20,7 +20,9 @@ file's structure before reading it.
    - SpatialData: images/labels (axes, pyramid levels, chunks, dtype, channel names, transforms),
      points/shapes (row counts, columns and arrow types, feature/instance keys, geometry types,
      transforms), tables (as AnnData + region/region_key/instance_key), coordinate systems.
-   - `dataset_id` = hash(real path, mtime of the file or the store's root metadata).
+   - `dataset_id` = hash(real path, mtime of the file or the store's root metadata). Since
+     2026-10-14 (owner, host test 3) a dataset of the index uses its data root's name and path in
+     the root instead of the real path (ADR 0012, revision).
    - `warnings`: structural facts that change serving (CSR matrix, non-float X, no pyramid,
      single-chunk image, points without feature_key).
 2. **Privacy levels** (`canopy.inspect.redact`): `standard` keeps names; `strict` replaces every

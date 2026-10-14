@@ -800,7 +800,7 @@ test('two regions converted at once and opened as linked spatial views; unlockin
   // unlocked: each view zooms on its own (owner, host test 3)
   const lock = page.getByTestId('group-lock');
   await lock.click();
-  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
   const z1 = await z(1);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -300);
@@ -808,10 +808,20 @@ test('two regions converted at once and opened as linked spatial views; unlockin
   expect(await z(1)).toBeCloseTo(z1, 3);
   // locked again: back to one fitted scale, and linked
   await lock.click();
-  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(() => z(0)).toBeCloseTo(fitted, 2);
   await expect.poll(() => z(1)).toBeCloseTo(fitted, 2);
   await page.mouse.wheel(0, -200);
   await expect.poll(async () => (await z(1)) - (await z(0))).toBeCloseTo(0, 3);
+  // unlocked, moved apart, then Reset to defaults: locked again, back to one fitted scale (H3 B-L1)
+  await lock.click();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(async () => Math.abs((await z(0)) - (await z(1)))).toBeGreaterThan(0.2);
+  await cells.nth(0).locator('.view-title').click();
+  await page.getByRole('button', { name: 'Reset to defaults' }).click();
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => z(0)).toBeCloseTo(fitted, 2);
+  await expect.poll(() => z(1)).toBeCloseTo(fitted, 2);
   expect(errors).toEqual([]);
 });

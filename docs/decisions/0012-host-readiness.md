@@ -48,6 +48,13 @@ access.
 - **Version hash by real path** (review A-n9): a share mounted at another path orphans
   converted copies (then pruned). Rare on one host; changing the version scheme would invalidate
   every store. Revisit if the host's mounts move.
+  **Revised 2026-10-14 (owner, review H3 design note):** the version is the data root's *name*,
+  the path inside the root and the stamp (`Fingerprint.identity`), so moving or remounting the
+  whole data folder keeps every conversion. Moving a dataset inside the root still makes a new
+  version. Upgrading: the first scan re-inspects each dataset once and renames an unchanged
+  dataset's converted copy to its new version (`adopt_store`, `store_adopted`), so nothing is
+  converted again; an older release cannot find those copies afterwards. Standalone
+  `canopy inspect` keeps the real path.
 - **Reverse-proxy sub-path** (C-m4): the app assumes it is served at `/`; with the SSH tunnel it
   is. Revisit for a stage-2 shared deployment behind the institute gateway.
 - **Shapes and the transcript sort read whole** (ADR 0011): estimated honestly; streaming is the

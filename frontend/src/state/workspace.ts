@@ -329,7 +329,9 @@ export const useWorkspace = create<Workspace>()(
       select: (id) => set({ selected: id }),
       selectDataset: (id) => set({ browserSelection: id }),
       // (ticks stay: closing the views is the way to open the ticked datasets linked)
-      reset: () => set({ views: [], selected: null, browserSelection: null }),
+      // the dataset clicked in the browser stays: closing the views is often the way to open it
+      // (review H3 B-L4)
+      reset: () => set({ views: [], selected: null }),
     }),
     {
       name: STORAGE_KEY,

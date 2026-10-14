@@ -206,8 +206,8 @@ export function representativeOrder(subset: Int32Array, n: number): Int32Array {
   return order;
 }
 
-/** Lowers (or raises again) the canvas budget from frame intervals measured while the canvas
- * moves at its full budget. Every SAMPLE frames: below ~40 fps (median over SLOW_MS) the budget
+/** Lowers (or raises again) the canvas budget from input-to-draw delays (a move's first input to
+ * its frame on screen) measured while the canvas is dragged at its full budget. Every SAMPLE frames: below ~40 fps (median over SLOW_MS) the budget
  * shrinks in proportion, down to MIN_BUDGET; at a steady 60 fps (median and 95th percentile
  * within FAST_MS) it grows by a quarter, up to CANVAS_BUDGET. Returns the new budget, or null. */
 export class BudgetTuner {

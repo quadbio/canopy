@@ -39,17 +39,39 @@ interface LinkedStore {
   publish: (group: string, view: string, entry: LinkedEntry | null) => void;
 }
 
+// Publishes are applied together once per frame: while a group of N views loads, each would
+// otherwise change the group's scheme and rebuild every view's colours, N² times (H3 B-L3).
+let pending: { group: string; view: string; entry: LinkedEntry | null }[] = [];
+let scheduled = false;
+const nextFrame = (f: () => void) =>
+  typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 0);
+
 export const useLinked = create<LinkedStore>()((set) => ({
   entries: {},
-  publish: (group, view, entry) =>
-    set((s) => {
-      const g = { ...(s.entries[group] ?? {}) };
-      if (entry) g[view] = entry;
-      else delete g[view];
-      const entries = { ...s.entries, [group]: g };
-      if (!Object.keys(g).length) delete entries[group]; // a closed group (B-L6)
-      return { entries };
-    }),
+  publish: (group, view, entry) => {
+    pending.push({ group, view, entry });
+    if (scheduled) return;
+    scheduled = true;
+    nextFrame(() => {
+      const batch = pending;
+      pending = [];
+      scheduled = false;
+      set((s) => {
+        const entries = { ...s.entries };
+        for (const { group: g, view: v, entry: e } of batch) {
+          const views = { ...(entries[g] ?? {}) };
+          if (e) views[v] = e;
+          else delete views[v];
+          entries[g] = views;
+          if (!Object.keys(views).length) {
+            delete entries[g]; // a closed group (B-L6), and its schemes (H3 B-L3)
+            for (const k of [...lastScheme.keys()]) if (k.startsWith(`${g}|`)) lastScheme.delete(k);
+          }
+        }
+        return { entries };
+      });
+    });
+  },
 }));
 
 export const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -219,7 +241,10 @@ export function groupScheme(
   ]);
   const last = lastScheme.get(id);
   const out = last && last.sig === sig ? last.scheme : scheme;
+  lastScheme.delete(id); // re-inserted: the map's order is the order of use
   lastScheme.set(id, { sig, scheme: out });
+  // a group's colourings over a session (every gene viewed): only the recent ones are kept
+  while (lastScheme.size > 200) lastScheme.delete(lastScheme.keys().next().value!);
   cache.set(id, out);
   return out;
 }

@@ -10,6 +10,7 @@ import { metaQuery, useCatalogStatus } from '../api/queries';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { FileBrowser, sharedDefaults } from '../ui/FileBrowser';
+import { CloseAll } from '../ui/CloseAll';
 import { SHOW_SETTINGS_EVENT } from '../ui/panels';
 import { JobWatcher } from './JobWatcher';
 import { Canvas } from '../views/Canvas';
@@ -140,13 +141,7 @@ function ResetView({ spec }: { spec: ViewSpec }) {
 }
 
 function ResetWorkspace() {
-  const reset = useWorkspace((s) => s.reset);
-  const n = useWorkspace((s) => s.views.length);
-  return (
-    <button className="ghost" onClick={reset} disabled={!n} title="Close all views and start empty">
-      Close all
-    </button>
-  );
+  return <CloseAll title="Close all views and start empty" />;
 }
 
 /** Side panels (datasets, settings) shown or folded away, remembered in this browser; folded

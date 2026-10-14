@@ -69,6 +69,18 @@ function unionOf(boxes: (Bounds | null)[]): Bounds | null {
 
 /** Fitted view states of all panels of a view; with `sameScale` they share the smallest zoom;
  * with `sameCoordinates` every panel shows the union of the panels' data. */
+/** A layout's panels centred on their data at a given zoom (to join others at their scale): the
+ * inset shift depends on the zoom, so the target is worked out at that zoom. */
+export function atZoom(l: FitLayout, zoom: number): Record<string, OrthoState> {
+  const out: Record<string, OrthoState> = {};
+  const up = (l.fitInsets.top ?? 0) / 2 / 2 ** zoom;
+  l.keys.forEach((key, j) => {
+    const b = l.bounds[j];
+    if (b) out[key] = { target: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2 + (l.flipY ? -up : up), 0], zoom };
+  });
+  return out;
+}
+
 export function fitLayout(l: FitLayout): Record<string, OrthoState> {
   if (l.sameCoordinates) {
     const all = unionOf(l.bounds);

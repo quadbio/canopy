@@ -435,3 +435,16 @@ Resume rule: read this file, then continue with the first unchecked step.
   apart from the targets. Scripted test suites and a browser test page dropped (the host tests
   covered them). Linux trial runs selfcheck (passes; fails on a budget above the 4 GB limit) and
   analyses its bundle. Host guide §6, README.
+- 2026-10-14 Linux trial (release 4c263e5): every install check passed, incl. selfcheck (passes;
+  fails on a budget above the 4 GB limit) and the analyser on its bundle; one backend test
+  assumed the default 8 GB budget (fixed, e07df40).
+- 2026-10-14 H3 cold review (../reviews/code_review_H3/): A backend/ops 1 high (prune deletes
+  every copy when its index is new or empty), 3 medium, 9 low, a design note (versions by real
+  path); B frontend 0 high, 4 medium, 9 low. Owner: fix all; Close all confirms; versions
+  relative to the data folder. Batch R10 DONE (../reviews/code_review_H3/R10-fixes.md): safe
+  prune; version = root name + path in root + stamp, earlier copies carried over on the first
+  scan; bundle check spares program text, ignores case, checks lists; config required for
+  bundle/link/token find; complete code vocabulary with a test over the source; fixed-shape
+  telemetry fields; one scale for groups zoomed while loading; tuner on input-to-draw delay;
+  lasso failures shown; stable fit (no redraw of every cell per pan frame); relock by Reset
+  refits; Close all asks; convert ticked shows failures and can stop waiting.

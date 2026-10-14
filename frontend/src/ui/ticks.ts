@@ -15,7 +15,7 @@ export function ticksFor(list: readonly string[], id: string, shift: boolean): s
   return list.slice(Math.min(a, b), Math.max(a, b) + 1);
 }
 
-/** For tests. */
+/** Forgets the range's start: when the ticks are cleared (and for tests; review H3 B-L6). */
 export function resetTickAnchor() {
   anchor = null;
 }
