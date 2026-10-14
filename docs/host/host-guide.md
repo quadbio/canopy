@@ -269,7 +269,11 @@ both: every converted copy whose version the index no longer knows, and conversi
    or press *Refresh* at the top of the page, so that the index has the new versions.
 2. Stop the server (`Ctrl-C` in its tmux window, or `systemctl --user stop canopy`): the command
    refuses while a server uses the cache.
-3. See what would go, with sizes, then remove it:
+3. See what would go, with sizes, then remove it. Always give `--config config.toml`: without
+   it the command refuses (older releases looked at an empty `cache` folder in the current
+   directory and said "would free 0.00 GB"). The dry run first names the cache folder and the
+   index it uses, then lists every converted copy: `keep` with the dataset that uses it, or
+   `would remove`. The dataset names are shown on your terminal only.
 
    ```bash
    cd /scratch/$USER/canopy/canopy-<release>

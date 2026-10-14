@@ -557,11 +557,41 @@ def test_cache_prune_removes_stores_of_unknown_versions(cfg: Config) -> None:
         f'path = "{cfg.data_roots[0].path}"\n[logging]\ndir = "{cfg.logging.dir}"\n'
     )
     # the test's own server holds the cache lock in this process, so prune may run here
+    version = c.get(f"/api/catalog/datasets/{id}").json()["version"]
+    # a dry run lists every copy: kept (and for which dataset) or to remove (host test 3)
+    out = CliRunner().invoke(cli, ["cache", "prune", "--dry-run", "--config", str(conf)])
+    assert out.exit_code == 0, out.output
+    assert str(cfg.cache_dir) in out.output
+    assert f"keep         {version}" in out.output and "data/m.h5ad" in out.output
+    assert "would remove 0123456789abcdef" in out.output
+    assert "1 converted copies kept" in out.output and "1 to remove" in out.output
+    assert old.parent.exists()
     out = CliRunner().invoke(cli, ["cache", "prune", "--config", str(conf)])
     assert out.exit_code == 0, out.output
     assert not old.parent.exists()
-    version = c.get(f"/api/catalog/datasets/{id}").json()["version"]
     assert has_store(cfg.cache_dir, version)
+
+
+def test_cache_prune_and_scan_need_the_installations_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a config they would look at a `cache` folder in the current directory, made on the
+    spot, and report "would free 0.00 GB" (host test 3): they refuse instead."""
+    from typer.testing import CliRunner
+
+    from canopy.cli import app as cli
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CANOPY_CONFIG", raising=False)
+    for args in (["cache", "prune", "--dry-run"], ["catalog", "scan"]):
+        out = CliRunner().invoke(cli, args)
+        assert out.exit_code == 2 and "--config" in out.output
+    assert not (tmp_path / "cache").exists()
+    conf = tmp_path / "c.toml"
+    conf.write_text('cache_dir = "nowhere"\n')
+    out = CliRunner().invoke(cli, ["cache", "prune", "--dry-run", "--config", str(conf)])
+    assert out.exit_code == 1 and "does not exist" in out.output
+    assert not (tmp_path / "nowhere").exists()
 
 
 def test_a_job_larger_than_the_host_fails_and_does_not_block_others(

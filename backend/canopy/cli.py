@@ -365,6 +365,20 @@ def _cli_logging(config: Path | None) -> Config | None:
     return cfg
 
 
+def _required(config: Path | None) -> Path:
+    """Commands that act on an installation's cache and index need its config: without one, the
+    defaults would point at a `cache` folder in the current directory (an empty one, made on the
+    spot), and the command would report on that instead."""
+    if config is None:
+        typer.echo(
+            "error: which installation? Give its config: --config config.toml (or set "
+            "CANOPY_CONFIG)",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return config
+
+
 def _salt(cfg: Config | None) -> str:
     return installation_salt(cfg.state if cfg else default_log_dir().parent)
 
@@ -527,7 +541,8 @@ def catalog_scan(
     from canopy.catalog import CatalogDB, scan
     from canopy.catalog.db import DB_FILE
 
-    cfg = _cli_logging(config) or _load(None)
+    cfg = _cli_logging(_required(config))
+    assert cfg is not None
     db = CatalogDB(cfg.state / DB_FILE)
     counts = scan(db, cfg.data_roots, cfg.catalog, full=full, trigger="cli")
     typer.echo(json.dumps(counts.as_dict(), indent=2))
@@ -540,40 +555,64 @@ app.add_typer(cache_app, name="cache")
 @cache_app.command("prune")
 def cache_prune(
     config: ConfigOpt = None,
-    dry_run: Annotated[bool, typer.Option(help="Only list what would be removed")] = False,
+    dry_run: Annotated[
+        bool, typer.Option(help="Only list the converted copies: kept (and why) or removed")
+    ] = False,
 ) -> None:
     """Remove converted stores of dataset versions the catalog no longer knows (old versions of
-    changed files, removed files) and leftovers of failed conversions. Refuses while a server
+    changed, moved or removed files) and leftovers of failed conversions. Refuses while a server
     uses the cache."""
     import shutil
 
     from canopy.catalog import Catalog
     from canopy.jobs.manager import CacheInUseError, lock_cache, tmp_dirs
 
-    cfg = _cli_logging(config) or _load(None)
+    # checked before logging starts: that writes the installation's salt into the state folder
+    # (by default the cache folder), which would make the folder this checks for
+    cache_dir = _load(_required(config)).cache_dir
+    if not cache_dir.is_dir():
+        typer.echo(f"error: the cache folder {cache_dir} does not exist", err=True)
+        raise typer.Exit(1)
+    cfg = _cli_logging(config)
+    assert cfg is not None
     try:
         lock_cache(cfg.state)
     except CacheInUseError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
-    versions = Catalog(cfg).db.versions()
+    users = Catalog(cfg).db.version_users()
+    typer.echo(f"cache folder {cfg.cache_dir}; index {cfg.state / 'catalog.sqlite'}")
+    typer.echo(f"{len(users)} dataset versions in the index")
     log = get_logger("canopy.cache")
-    removed = 0
+    removed = kept = 0
+    n_removed = n_kept = 0
     for d in sorted(p for p in cfg.cache_dir.iterdir() if p.is_dir()):
         if not any(d.glob("c*/manifest.json")) and not any(d.glob("c*.tmp-*")):
             continue  # not a store folder (logs, tmp, jobs, …)
-        if d.name in versions:
-            continue
         size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        if d.name in users:
+            kept += size
+            n_kept += 1
+            if dry_run:  # names on the owner's terminal only, never in a log
+                typer.echo(
+                    f"keep         {d.name} {size / 2**30:7.2f} GB  {', '.join(users[d.name])}"
+                )
+            continue
         typer.echo(
-            f"{'would remove' if dry_run else 'removing'} store {d.name} ({size / 2**30:.2f} GB)"
+            f"{'would remove' if dry_run else 'removing'} {d.name} {size / 2**30:7.2f} GB  "
+            "(no dataset in the index at this version)"
         )
         if not dry_run:
             shutil.rmtree(d, ignore_errors=True)
             log.info("store_pruned", version=d.name, bytes=size)
         removed += size
+        n_removed += 1
     for t in tmp_dirs(cfg.cache_dir, cfg.jobs.tmp_dir):
         typer.echo(f"{'would remove' if dry_run else 'removing'} leftover {t.name}")
         if not dry_run:
             shutil.rmtree(t, ignore_errors=True)
-    typer.echo(f"{'would free' if dry_run else 'freed'} {removed / 2**30:.2f} GB")
+    typer.echo(f"{n_kept} converted copies kept ({kept / 2**30:.2f} GB)")
+    typer.echo(
+        f"{n_removed} {'to remove' if dry_run else 'removed'}: "
+        f"{'would free' if dry_run else 'freed'} {removed / 2**30:.2f} GB"
+    )

@@ -143,9 +143,12 @@ command line. The index is `<cache_dir>/catalog.sqlite` and can be deleted at an
 - SpatialData whose transcripts have no declared gene column and several candidates: the
   conversion fails with "Could not tell which transcript column holds the genes" and the
   details then ask for the column name (API: `{"feature_key": "<column>"}`).
-- `canopy cache prune [--dry-run]` removes converted stores of dataset versions the catalog no
-  longer knows (changed or removed files) and leftovers of failed conversions; run it with the
-  server stopped.
+- `canopy cache prune --config FILE [--dry-run]` removes converted stores of dataset versions
+  the catalog no longer knows (changed, moved or removed files) and leftovers of failed
+  conversions; run it with the server stopped. `--dry-run` lists every converted copy: kept (with
+  the datasets using it) or to remove. It and `canopy catalog scan` need the installation's
+  config (`--config` or `CANOPY_CONFIG`): without it they would look at an empty `cache` folder in
+  the current directory.
 
 ## Frontend
 

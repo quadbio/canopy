@@ -162,6 +162,16 @@ class CatalogDB:
                 r[0] for r in con.execute("SELECT version FROM datasets WHERE version IS NOT NULL")
             }
 
+    def version_users(self) -> dict[str, list[str]]:
+        """Dataset version -> the datasets (`root/relpath`) of the index at that version."""
+        out: dict[str, list[str]] = {}
+        with self.connect() as con:
+            for r in con.execute(
+                "SELECT version, root, relpath FROM datasets WHERE version IS NOT NULL"
+            ):
+                out.setdefault(r["version"], []).append(f"{r['root']}/{r['relpath']}")
+        return out
+
     # ------------------------------------------------------------ scans
     def start_scan(self, trigger: str, full: bool) -> int:
         with self.connect() as con:

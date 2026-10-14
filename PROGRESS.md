@@ -413,3 +413,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   spatial datasets (fed to the server's queue, retried when full); a gear in every view's and
   group's title row (unfolds the settings panel). Host guide §13: `canopy cache prune` after
   moves. ADR 0014 revised.
+- 2026-10-14 Owner: `canopy cache prune --dry-run` said "would free 0.00 GB" after a folder
+  rename. A read-only listing on the host (bundles/prune_log.txt, names: not to be copied) found
+  29 of 54 converted copies unused (≈ 58 GB), so prune had looked elsewhere: without `--config`
+  it fell back to the defaults, a `cache` folder in the current directory, made on the spot.
+  Fixed: `cache prune` and `catalog scan` need the config (refuse otherwise); prune refuses a
+  missing cache folder, names the cache folder and index it uses, and `--dry-run` lists every
+  copy (kept, with the datasets using it, or to remove). Host guide §13, README.
