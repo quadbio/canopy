@@ -22,6 +22,7 @@ export const STRING_FIELDS = [
   'status',
   'layer',
   'where',
+  'caller',
   'build',
   'browser',
   'view',
@@ -56,11 +57,22 @@ export function messageCode(msg: string): string {
 
 /** Where an error was thrown: the top frame of its stack as `file:line:col` in the bundle. */
 export function where(stack: string | undefined): string {
+  return frames(stack)[0] ?? 'unknown';
+}
+
+/** The two frames below the top one (the top is often inside a library): what called it. */
+export function caller(stack: string | undefined): string {
+  const below = frames(stack).slice(1, 3);
+  return below.length ? code(below.join(' ')) : 'unknown';
+}
+
+function frames(stack: string | undefined): string[] {
+  const out: string[] = [];
   for (const line of (stack ?? '').split('\n')) {
     const m = /([^/\s(]+\.(?:js|ts|tsx|mjs)):(\d+):(\d+)/.exec(line);
-    if (m) return code(`${m[1]}:${m[2]}:${m[3]}`);
+    if (m) out.push(code(`${m[1]}:${m[2]}:${m[3]}`));
   }
-  return 'unknown';
+  return out;
 }
 
 /** Browser family and major version, from the user agent (e.g. "Chrome 140"). */
@@ -154,6 +166,7 @@ export function installErrorReporting() {
       type: code(err?.name ?? 'Error'),
       message: messageCode(String(err?.message ?? '')),
       where: where(err?.stack),
+      caller: caller(err?.stack),
     });
   };
   window.addEventListener('error', (e) => report('js_error', e.error ?? { name: 'Error', message: e.message }));

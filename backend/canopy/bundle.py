@@ -47,7 +47,11 @@ _STACK_LINE = re.compile(
 
 def _strictify(value: Any, salt: str, key: str = "") -> Any:
     """A log value at strict: name fields tokenised (nested), free text dropped."""
-    if key in ("c_code", "c_kind") and isinstance(value, str) and plain_value(key[2:], value):
+    if (
+        key in ("c_code", "c_kind", "c_message")
+        and isinstance(value, str)
+        and plain_value(key[2:], value)
+    ):
         return value  # as the server keeps them at strict (telemetry.py)
     if key in TEXT_FIELDS:
         return "(dropped)"
@@ -365,6 +369,9 @@ CODE_FIELDS = frozenset(
         "what",
         "privacy_of_runs",
         "packages",
+        # settings logged at start-up: a folder called "private" or "token" must not match them
+        "file_access",
+        "auth",
     }
 )
 
@@ -460,7 +467,9 @@ def build_bundle(
                 files[f"logs/{f.name}"] = text.encode()
                 if dropped:
                     notes.append(f"{f.name}: {dropped} non-JSON lines left out")
-            elif f.name.startswith("stacks-") or f.name.endswith(".stderr.txt"):
+            elif (f.name.startswith("stacks-") or f.name.endswith(".stderr.txt")) and (
+                f.stat().st_size  # every process leaves an empty one: only a written one is news
+            ):
                 files[f"crash/{f.name}"] = _code_only(f.read_text(errors="replace")).encode()
     files["host.json"] = json.dumps(_host_facts(cfg, salt), indent=2, default=str).encode()
     files["jobs.json"] = json.dumps(_jobs(cfg, salt), indent=2, default=str).encode()

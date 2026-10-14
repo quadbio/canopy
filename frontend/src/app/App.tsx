@@ -10,6 +10,7 @@ import { metaQuery, useCatalogStatus } from '../api/queries';
 import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { FileBrowser, sharedDefaults } from '../ui/FileBrowser';
+import { SHOW_SETTINGS_EVENT } from '../ui/panels';
 import { JobWatcher } from './JobWatcher';
 import { Canvas } from '../views/Canvas';
 import { viewType } from '../views/registry';
@@ -160,9 +161,10 @@ function useSidePanels() {
     }
     return { datasets: true, settings: window.innerWidth >= 1200 };
   });
-  const toggle = (k: 'datasets' | 'settings') =>
+  const set = (k: 'datasets' | 'settings', on: (was: boolean) => boolean) =>
     setShown((s) => {
-      const next = { ...s, [k]: !s[k] };
+      if (on(s[k]) === s[k]) return s;
+      const next = { ...s, [k]: on(s[k]) };
       try {
         localStorage.setItem('canopy-panels', JSON.stringify(next));
       } catch {
@@ -170,6 +172,13 @@ function useSidePanels() {
       }
       return next;
     });
+  const toggle = (k: 'datasets' | 'settings') => set(k, (was) => !was);
+  // a view's gear shows the settings
+  useEffect(() => {
+    const on = () => set('settings', () => true);
+    window.addEventListener(SHOW_SETTINGS_EVENT, on);
+    return () => window.removeEventListener(SHOW_SETTINGS_EVENT, on);
+  }, []);
   return [shown, toggle] as const;
 }
 

@@ -256,3 +256,29 @@ what you do, then make the bundle (section 8) and send it with this list.
 - [ ] `canopy bundle` written without `--accept-name`? If not: what kind of value matched, in
       which file (not the name): ___
 - [ ] Anything that looked wrong or was slow (time, what, what was on screen): ___
+
+## 13. Cleaning up old converted copies
+
+A converted copy belongs to one version of a dataset. When a dataset changes, or is **moved or
+renamed** (its path is part of its version), the next scan indexes it as a new version, and it
+is converted again when you ask; the copy of the old version stays in the cache folder, unused.
+So do the leftovers of conversions that failed or were stopped. `canopy cache prune` removes
+both: every converted copy whose version the index no longer knows, and conversion leftovers.
+
+1. Let the server see the change first: wait for the hourly rescan (`[catalog] rescan_minutes`),
+   or press *Refresh* at the top of the page, so that the index has the new versions.
+2. Stop the server (`Ctrl-C` in its tmux window, or `systemctl --user stop canopy`): the command
+   refuses while a server uses the cache.
+3. See what would go, with sizes, then remove it:
+
+   ```bash
+   cd /scratch/$USER/canopy/canopy-<release>
+   pixi run --frozen canopy cache prune --config config.toml --dry-run
+   pixi run --frozen canopy cache prune --config config.toml
+   ```
+
+4. Start the server again (section 6).
+
+Only copies of versions the index no longer has are removed: a dataset that is still where it
+was keeps its copy. A data root removed from `config.toml` takes its datasets out of the index at
+the next scan, so their copies go too; put the root back before pruning if you want to keep them.

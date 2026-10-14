@@ -236,13 +236,21 @@ type Sel = (zarr.Slice | number | null)[] | undefined;
 /** A selection of an array (ranged reads of the chunks it touches). */
 export async function readArray(version: string, path: string, selection?: Sel, opts: Opts = {}): Promise<Chunk> {
   const arr = await open(version, path);
-  return (await zarr.get(arr, selection as never, { opts })) as unknown as Chunk;
+  return empty(arr) ?? ((await zarr.get(arr, selection as never, { opts })) as unknown as Chunk);
 }
 
 /** A whole array, with one request per (shard) file instead of one per chunk. */
 export async function readWhole(version: string, path: string, opts: Opts = {}): Promise<Chunk> {
   const arr = await zarr.open.v3(zarr.root(new WholeFileStore(storeUrl(version))).resolve(path), { kind: 'array' });
-  return (await zarr.get(arr, undefined as never, { opts })) as unknown as Chunk;
+  return empty(arr) ?? ((await zarr.get(arr, undefined as never, { opts })) as unknown as Chunk);
+}
+
+/** zarrita refuses to read an array with no elements ("Input contains an empty iterator"); an
+ * element with no rows is valid, so it reads as empty. */
+function empty(arr: { shape: number[]; dtype: unknown }): Chunk | null {
+  if (!arr.shape.includes(0)) return null;
+  const Ctor = TYPED[arr.dtype as string] ?? Float32Array;
+  return { data: new Ctor(0), shape: arr.shape.slice() };
 }
 
 export async function readAttrs(version: string, path: string): Promise<Record<string, unknown>> {

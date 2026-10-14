@@ -114,6 +114,25 @@ test('two datasets opened linked share settings, legend, zoom; the embedding sta
   expect(errors).toEqual([]);
 });
 
+test('shift-click ticks every dataset between two clicks of the same list', async ({ page }) => {
+  await freshPage(page);
+  // the search results are one list (the example folders hold two datasets at most)
+  await page.getByLabel('Search datasets').fill('h5ad');
+  const list = page.getByRole('tree', { name: 'Search results' });
+  const ticks = list.getByTestId('dataset-tick');
+  await expect(ticks).toHaveCount(3);
+  const n = 3;
+  await ticks.nth(0).click();
+  await ticks.nth(n - 1).click({ modifiers: ['Shift'] });
+  for (let k = 0; k < n; k += 1) await expect(ticks.nth(k)).toBeChecked();
+  await expect(page.getByTestId('linked-open')).toContainText(`${n} datasets ticked`);
+  // a shift-click from an unticked one unticks the range
+  await ticks.nth(n - 1).click();
+  await ticks.nth(1).click({ modifiers: ['Shift'] });
+  await expect(ticks.nth(0)).toBeChecked();
+  for (let k = 1; k < n; k += 1) await expect(ticks.nth(k)).not.toBeChecked();
+});
+
 test('a dataset without the shared column shows its cells as NA', async ({ page }) => {
   const errors = collectErrors(page);
   await freshPage(page);

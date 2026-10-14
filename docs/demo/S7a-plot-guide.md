@@ -14,7 +14,7 @@ The plot belongs to the view you open: its first feature is always the view's **
 | 4 | In the embedding's legend, click a cell type; then pick a colour for one | Its violin disappears with its cells; click again to bring it back. The violin follows the picked colour. |
 | 5 | **Plot against** → `sample` | Composition: one bar per cell type, stacked by sample (80 samples); hover a piece. Hide a cell type in the embedding's legend: its bar goes too. |
 | 6 | Embedding **Colour by** → `total_counts`; **Plot against**: gene `Monocyte_m1` | The plot's first feature follows: a scatter of total_counts × Monocyte_m1 with axes, filling the plot's width; zoom and pan move the axes; hover a point. |
-| 7 | Click the plot's title to see its own settings: **Draw** → *Density map*; tick a log scale | Its settings show the first feature (not choosable) and the plot's options. The same cells as a map of how many fall in each square (computed on the server; used automatically above 1 M cells). |
+| 7 | Click the plot's gear (⚙ in its title row) to see its own settings: **Draw** → *Density map*; tick a log scale | Its settings show the first feature (not choosable) and the plot's options. The same cells as a map of how many fall in each square (computed on the server; used automatically above 1 M cells). |
 | 8 | Back on the embedding, untick **Plot against…**; tick it again, then close the embedding (×) | Unticking closes the plot; closing the embedding closes its plot too. Also try it in a spatial view (**spatial.h5ad**). |
 
 A column with more than 1 000 categories (e.g. a cell id) is not offered for Colour by or Plot

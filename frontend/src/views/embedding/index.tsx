@@ -94,6 +94,7 @@ export function normaliseParams(raw: unknown): EmbeddingParams | null {
     splitBy: typeof r.splitBy === 'string' && r.splitBy ? r.splitBy : null,
     panelFit: PANEL_FITS.includes(r.panelFit as PanelFit) ? (r.panelFit as PanelFit) : r.sameScale === false ? 'fill' : null,
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
+    unlocked: r.unlocked === true ? true : undefined,
   };
 }
 

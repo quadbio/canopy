@@ -61,6 +61,7 @@ export interface ColourParams {
   sortByValue: boolean; // numbers: draw higher values on top
   hover: boolean; // show the value of the cell under the pointer
   legendCollapsed?: boolean;
+  unlocked?: boolean; // a linked group's views zoom and pan each on its own (shared by the group)
   [key: string]: unknown;
 }
 

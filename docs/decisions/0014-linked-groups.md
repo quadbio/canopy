@@ -66,6 +66,21 @@ colours are used only when they agree across the datasets.
   handed out while nothing changed, so views do not rebuild colour tables when another view
   reports the same facts.
 
+## Revision after host test 3 (2026-10-14, owner)
+- **Lock.** The group's title row has a lock: locked (the default) as above; unlocked, every view
+  zooms and pans on its own (also views showing the same coordinates). Locking again links the
+  views showing the same coordinates and returns them to one fitted scale. The setting
+  (`unlocked`) is shared by the group and saved with the workspace.
+- **Shift-click ticking.** A shift-click on a tick ticks (or unticks, following the clicked one)
+  every dataset of the same list (folder or search results) between it and the last tick
+  clicked.
+- **Convert ticked.** When ticked spatial datasets have no converted copy, the ticked panel
+  offers to convert them all. The browser hands them to the server in order; when its queue is
+  full (`jobs.max_queued`, `queue_full`) it tries again every 10 s, for as long as the page is
+  open. At most `jobs.max_running` run at a time, as for single conversions.
+- **Gear.** Every view (and a group) has a gear in its title row that shows its settings,
+  unfolding the settings panel when it was folded away (clicking the title still works).
+
 ## Evidence
 - `src/views/linked.test.ts`: shared settings and own keys, a group only on an empty canvas and
   nothing beside it, plots take no tile, restore (a group alone, 9 tiles), a group of one,
@@ -78,4 +93,8 @@ colours are used only when they agree across the datasets.
   shared, the embedding per dataset, linked zoom, removing one); a dataset without the column
   shows NA. At the end of `browse.spec.ts` (it converts region_3): two MERSCOPE regions as
   linked spatial views at one scale, zoomed together (their `leiden` colours disagree:
-  regenerated).
+  regenerated); since host test 3 both are converted with *Convert all 2*, unlocked (one zooms
+  alone) and locked again (both back at the fitted scale, linked).
+- Host test 3: `src/ui/ticks.test.ts`, `src/ui/convertMany.test.ts` (order, a full queue retried,
+  a refusal named); e2e `linked.spec.ts` shift-click in the search results (tick and untick a
+  range); e2e `plot.spec.ts` the plot's gear with the settings panel folded away.

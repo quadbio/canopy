@@ -393,3 +393,23 @@ Resume rule: read this file, then continue with the first unchecked step.
 - 2026-10-13 Owner: local demo issues fixed; next the third host test. Host guide §12 checklist
   (upgrade, conversion of indexed datasets, linked spatial views at 10–20 regions, frames on the
   external display, lasso at 1.7 M cells, bundle). Release built for it.
+- 2026-10-14 Third host bundle (release 1b5f2a67e0; 144 cores, 3 TB, xfs, no cgroup limit; one
+  name let through with `--accept-name`). Healthy: 34 conversions all done, no crashes (the 74
+  crash files are empty); 21 older-format (zarr v2) SpatialData stores converted and opened (one
+  reader UserWarning each; 4 dropped polygon holes); the 1.65 M-cell h5ad 10 min / 14 GB, the
+  55 GB one 16 min; spatial 5–38 s, ≤ 3.4 GB; server RSS ≤ 0.6 GB. Linked groups of 19 and 21
+  spatial regions and 19 embeddings on 2560 × 1318: moving 10–15 ms (spatial), ~20 ms
+  (embeddings), stalls to ~190 ms while tiles and outlines load; budget never lowered. Views ready
+  0.17 s median, 3.8 s at most in the big groups. Lasso at 1.65 M: 23–165 ms. Found: two
+  unhandled browser errors after opening two regions linked: Viv reads a tile starting past the
+  image's right/bottom edge as an empty slice, which zarrita refuses ("Input contains an empty
+  iterator"), and Viv only passes over its own bounds errors; the bundle check refused a folder
+  called "private" (the start-up line's `file_access` setting); empty crash files listed.
+- 2026-10-14 Host test 3 batch (owner: all; clean-up in the docs only): tiles outside an image
+  refused before reading (and quietly); zero-length arrays read as empty; errors report two
+  caller frames and keep known library messages at strict; `file_access`/`auth` are program
+  fields for the check; empty crash files left out. Group lock (unlock: views move alone; lock:
+  back to one fitted scale, linked); shift-click range ticking; *Convert all N* for ticked
+  spatial datasets (fed to the server's queue, retried when full); a gear in every view's and
+  group's title row (unfolds the settings panel). Host guide §13: `canopy cache prune` after
+  moves. ADR 0014 revised.

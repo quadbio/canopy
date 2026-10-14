@@ -22,6 +22,7 @@ import { useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
+import { showSettings } from '../ui/panels';
 import type { ColourLegendData } from './colouring';
 import { type Cell, type Insets, type OrthoState, resizeView, tileCells } from './layout';
 import { mergeLegends } from './linked';
@@ -42,6 +43,7 @@ interface Layout extends FitLayout {
   cell: Cell; // keys: panel keys (deck.gl view ids); fitInsets: per panel
   unit: string; // what is fitted, moved and linked together: the view, or its linked group
   scaleKey: string; // views of a group with the same key are fitted at one scale
+  free: boolean; // a view of an unlocked group: zoomed and panned on its own
   link: Link;
   titles: (string | undefined)[];
   fitKey: string | undefined;
@@ -69,6 +71,7 @@ function layoutOf(spec: ViewSpec, cell: Cell, out: ViewOutput | undefined): Layo
     cell,
     unit: spec.group ?? spec.id,
     scaleKey: out?.scaleKey ?? spec.id,
+    free: !!spec.group && spec.params.unlocked === true,
     keys: panels.map((p) => panelKey(spec.id, p.id)),
     rects: panelRects(panels.length, cell, { top: TITLE_ROW, right }),
     fitInsets: withMargins(many ? { top: PANEL_TITLE } : { top: TITLE_ROW, right }, out?.margins),
@@ -280,6 +283,7 @@ const ViewCell = memo(function ViewCell({
               <LassoIcon />
             </button>
           )}
+          {!spec.group && <SettingsButton id={spec.id} label={spec.type === 'plot' ? 'Plot settings' : 'View settings'} />}
           {!spec.group && (
             <button className="icon-button" onClick={() => onFit(spec.id)} aria-label="Fit to data" title="Fit to data">
               ⤢
@@ -336,6 +340,43 @@ const ViewCell = memo(function ViewCell({
 });
 
 /** A lasso: a loop of rope with its tail (owner: the usual lasso icon). */
+function GearIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6.9 1.5h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.3v1.4l1.4 1.3-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9 1.4-1.3V7.3L2.4 6l1.1-1.9 1.8.6 1.2-.7z" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
+  );
+}
+
+/** The gear of a view's (or a group's) title row: its settings, in the panel at the right. */
+function SettingsButton({ id, label }: { id: string; label: string }) {
+  const select = useWorkspace((s) => s.select);
+  return (
+    <button
+      className="icon-button"
+      onClick={() => {
+        select(id);
+        showSettings();
+      }}
+      aria-label={label}
+      title={label}
+      data-testid="view-settings"
+    >
+      <GearIcon />
+    </button>
+  );
+}
+
+function LockIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <rect x="3" y="7.5" width="10" height="7" rx="1.5" />
+      <path d={open ? 'M5.5 7.5V5a2.5 2.5 0 0 1 4.9-.7' : 'M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5'} />
+    </svg>
+  );
+}
+
 function LassoIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
@@ -438,6 +479,13 @@ const GroupTile = memo(function GroupTile({
 }) {
   const select = useWorkspace((s) => s.select);
   const removeGroup = useWorkspace((s) => s.removeGroup);
+  const updateParams = useWorkspace((s) => s.updateParams);
+  const unlocked = first.params.unlocked === true;
+  // locking again links the views showing the same coordinates, from one fitted scale (owner)
+  const toggleLock = () => {
+    updateParams(first.id, { unlocked: !unlocked });
+    if (unlocked) onFit(group);
+  };
   const t = viewType(first.type);
   const compact = tile.width < COMPACT_WIDTH;
   const output = useMemo<ViewOutput>(() => ({ layers: [], bounds: null, status: 'ready', legend }), [legend]);
@@ -458,6 +506,21 @@ const GroupTile = memo(function GroupTile({
           </span>
         )}
         <span className="view-header-actions">
+          <button
+            className={`icon-button${unlocked ? ' on' : ''}`}
+            onClick={toggleLock}
+            aria-pressed={!unlocked}
+            aria-label={unlocked ? 'Lock zoom and pan' : 'Unlock zoom and pan'}
+            title={
+              unlocked
+                ? 'Each view zooms and pans on its own. Click to link the views showing the same coordinates again (they return to one fitted scale).'
+                : 'Views showing the same coordinates zoom and pan together. Click to move each on its own.'
+            }
+            data-testid="group-lock"
+          >
+            <LockIcon open={unlocked} />
+          </button>
+          <SettingsButton id={first.id} label="Settings of the linked views" />
           <button className="icon-button" onClick={() => onFit(group)} aria-label="Fit to data" title="Fit to data">
             ⤢
           </button>
@@ -748,7 +811,9 @@ export function Canvas() {
           // with none, it is fitted on its own
           for (const l of needs) {
             const own = fitLayout(l);
-            const peer = members.find((m) => m.scaleKey === l.scaleKey && !needs.has(m) && fits.current[m.keys[0]] && viewStates[m.keys[0]]);
+            const peer = l.free
+              ? undefined
+              : members.find((m) => m.scaleKey === l.scaleKey && !needs.has(m) && fits.current[m.keys[0]] && viewStates[m.keys[0]]);
             if (!peer) {
               Object.assign(fits.current, own);
               Object.assign(updates, own);
@@ -1089,10 +1154,16 @@ export function Canvas() {
               moving.current = performance.now() + 300; // the frames of this move (and its end)
             }
             // in a linked group, only the views showing the same coordinates move together: a
-            // UMAP and spatial coordinates have nothing in common (and y points the other way)
+            // UMAP and spatial coordinates have nothing in common (and y points the other way);
+            // in an unlocked group, each view on its own
             const u = units.find((x) => x.unit === unit);
             const mineL = u?.members.find((m) => m.keys.includes(viewId));
-            const l = u && mineL && u.members.length > 1 ? combined(u.members.filter((m) => m.scaleKey === mineL.scaleKey)) : u?.l;
+            const l =
+              u && mineL && u.members.length > 1
+                ? mineL.free
+                  ? mineL
+                  : combined(u.members.filter((m) => m.scaleKey === mineL.scaleKey))
+                : u?.l;
             setViewStates((s) => {
               if (!l || l.keys.length < 2) return { ...s, [viewId]: { target, zoom } };
               const mine = Object.fromEntries(l.keys.filter((k) => s[k]).map((k) => [k, s[k]]));

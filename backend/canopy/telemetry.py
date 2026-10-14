@@ -9,7 +9,8 @@ Events carry numbers and short codes only, never names or values. The server enf
 - at `strict` privacy the text fields are dropped (only their presence is kept): a message can
   hold a name; the code location (`where`) and the build still identify the failure. `code` and
   `kind` are kept when they are the program's own (`too_many_values`,
-  `needs_conversion:legacy_layout`, `gene`; see `plain_value`);
+  `needs_conversion:legacy_layout`, `gene`), and `message` when it is a library's fixed text
+  (`LIBRARY_MESSAGES`); see `plain_value`;
 - any other string is dropped and counted.
 Rates: `RATE_PER_MINUTE` per browser session, `ADDRESS_PER_MINUTE` per client address and
 `GLOBAL_PER_MINUTE` in all, so one client cannot flood the log; the rest are dropped and counted
@@ -39,6 +40,7 @@ CODE_FIELDS = frozenset(
         "status",
         "layer",  # deck.gl layer class
         "where",  # bundle file:line:col of an error
+        "caller",  # the next two frames of its stack (`where` is often inside a library)
         "build",  # frontend build id
         "browser",  # browser family and major version
         "view",  # the view's random id
@@ -57,12 +59,30 @@ TEXT_FIELDS = frozenset({"message", "code", "kind"})
 CLIENT_KINDS = frozenset(
     {"h5ad", "anndata_zarr", "spatialdata_zarr", "obs", "gene", "none", "violin", "bars", "density"}
 )
-CODE_LIKE_FIELDS = frozenset({"code", "kind"})
+# Messages of the libraries in the frontend bundle, as the browser reduces them (`messageCode`):
+# fixed text, kept at strict (a message is otherwise dropped, as it can hold a name).
+LIBRARY_MESSAGES = frozenset(
+    {
+        "Input contains an empty iterator.",  # zarrita: a read of an empty array or slice
+        "slice step cannot be zero",
+        "The operation was aborted.",
+        "signal is aborted without reason",
+        "Failed to fetch",
+        "Load failed",
+        "NetworkError when attempting to fetch resource.",
+    }
+)
+CODE_LIKE_FIELDS = frozenset({"code", "kind", "message"})
 
 
 def plain_value(key: str, v: str) -> bool:
-    """Whether a `code` or `kind` value is the program's own vocabulary (kept at strict)."""
-    return known_code(v) if key == "code" else key == "kind" and v in CLIENT_KINDS
+    """Whether a `code`, `kind` or `message` value is the program's or a library's own fixed
+    text (kept at strict)."""
+    if key == "code":
+        return known_code(v)
+    if key == "kind":
+        return v in CLIENT_KINDS
+    return key == "message" and v in LIBRARY_MESSAGES
 
 
 STRING_FIELDS = CODE_FIELDS | TEXT_FIELDS  # the frontend's list must match (test)

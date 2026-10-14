@@ -145,6 +145,28 @@ def test_common_words_as_names_do_not_refuse_the_bundle(
     assert out.exists()
 
 
+def test_settings_at_start_up_do_not_match_folders_called_like_them(
+    cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The start-up line logs `file_access="private"` and `auth="token"`: folders called so are
+    names, the settings are not (host test 3). Empty crash files are left out."""
+    rows = [
+        {"relpath": "private/a.h5ad", "fingerprint": None},
+        {"relpath": "token/b.h5ad", "fingerprint": None},
+    ]
+    monkeypatch.setattr(bundle_mod, "_sql", lambda db, q: rows if "fingerprint" in q else [])
+    assert {"private", "token"} <= known_names(cfg)
+    setup_logging(cfg.logging, role="server", salt="x", to_console=False)
+    with TestClient(create_app(cfg, background=False)):
+        pass
+    (cfg.logging.dir / "stacks-7.txt").write_text("")
+    out, _ = build_bundle(cfg, tmp_path / "b.tar.gz", since_days=1)
+    with tarfile.open(out) as tar:
+        names = tar.getnames()
+        manifest = tar.extractfile("canopy-bundle/MANIFEST.md").read().decode()  # type: ignore[union-attr]
+    assert not any("stacks-7" in n for n in names) and "stacks-7" not in manifest
+
+
 def test_dated_and_versioned_names_stay_names(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
     """Only a bare version number is not a name; a dated folder is (review A-H2)."""
     rows = [{"relpath": "2024.03.12-patient07/v2.1-lab/0.8.0/x.h5ad", "fingerprint": None}]

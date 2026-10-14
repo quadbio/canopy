@@ -99,8 +99,12 @@ test('plot against a second feature: follows the embedding colour, closes with i
   expect(await colourShare(page, cell, pink, 40, { x0: 0, x1: margin - 0.005 })).toBe(0); // none beyond it
   await cell.getByLabel('Fit to data').click();
 
-  // the plot's own settings: the first feature is shown, not chosen; the same as a density map
-  await cell.locator('.view-title').click();
+  // the plot's own settings, from its gear (owner, host test 3), also with the panel folded away:
+  // the first feature is shown, not chosen; the same as a density map
+  await page.getByTestId('toggle-settings').click();
+  await expect(page.getByRole('complementary', { name: 'View settings' })).toBeHidden();
+  await cell.getByRole('button', { name: 'Plot settings' }).click();
+  await expect(page.getByRole('complementary', { name: 'View settings' })).toBeVisible();
   await expect(page.getByTestId('plot-first')).toContainText('total_counts');
   await expect(page.getByTestId('plot-x')).toHaveCount(0);
   await page.getByTestId('plot-numbers-as').click();

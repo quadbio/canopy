@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { browser, deckErrorFields, messageCode, where } from './telemetry';
+import { browser, caller, deckErrorFields, messageCode, where } from './telemetry';
 
 describe('deck errors in telemetry', () => {
   it('keep the layer class and the message, never layer ids (they hold element names)', () => {
@@ -23,6 +23,8 @@ describe('telemetry codes', () => {
     const stack = 'TypeError: x\n    at f (http://127.0.0.1:8765/assets/index-AbC123.js:1:2345)\n    at g (x.js:2:3)';
     expect(where(stack)).toBe('index-AbC123.js:1:2345');
     expect(where(undefined)).toBe('unknown');
+    expect(caller(stack)).toBe('x.js:2:3');
+    expect(caller(undefined)).toBe('unknown');
   });
   it('browser family and major version', () => {
     expect(browser('Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML) Chrome/140.0.1 Safari/537.36')).toBe('Chrome 140');

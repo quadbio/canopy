@@ -765,25 +765,23 @@ async function tickRow(page: Page, name: string) {
   await row.locator('..').getByTestId('dataset-tick').check();
 }
 
-/** Converts a SpatialData store if needed (the test server starts with an empty cache). */
-async function convertedStore(page: Page, name: string) {
-  await page.getByTestId('dataset-row').filter({ hasText: name }).click();
-  const open = page.getByTestId('open-spatial');
-  const convert = page.getByTestId('convert');
-  await expect(open.or(convert)).toBeVisible({ timeout: 20_000 });
-  if (await convert.isVisible()) await convert.click();
-  await expect(open).toBeVisible({ timeout: 120_000 });
-}
-
-test('two regions opened as linked spatial views', async ({ page }) => {
+test('two regions converted at once and opened as linked spatial views; unlocking and locking the zoom', async ({ page }) => {
   test.setTimeout(300_000);
   const errors = collectErrors(page);
   await freshPage(page);
-  await convertedStore(page, 'region_1');
-  await convertedStore(page, 'region_3');
   await tickRow(page, 'region_1');
   await tickRow(page, 'region_3');
-  await page.getByTestId('open-linked-spatial').click();
+  // the ticked spatial datasets without a converted copy are converted at once (host test 3)
+  const panel = page.getByTestId('linked-open');
+  const openLinked = page.getByTestId('open-linked-spatial');
+  const convertAll = page.getByTestId('convert-ticked-button');
+  await expect(openLinked.or(convertAll)).toBeVisible({ timeout: 20_000 });
+  if (await convertAll.isVisible()) {
+    await convertAll.click();
+    await expect(panel.getByTestId('convert-ticked-progress')).toBeVisible();
+  }
+  await expect(openLinked).toBeVisible({ timeout: 180_000 });
+  await openLinked.click();
   const cells = page.getByTestId('view-cell');
   await expect(cells).toHaveCount(2);
   for (const k of [0, 1]) await expect(cells.nth(k)).toHaveAttribute('data-status', 'ready', { timeout: 60_000 });
@@ -793,10 +791,27 @@ test('two regions opened as linked spatial views', async ({ page }) => {
   await page.screenshot({ path: 'test-results/screens/linked-spatial.png' });
   // fitted at one scale, zoomed together
   const z = async (k: number) => Number(await cells.nth(k).getAttribute('data-zoom'));
-  expect(await z(0)).toBeCloseTo(await z(1), 3);
+  const fitted = await z(0);
+  expect(fitted).toBeCloseTo(await z(1), 3);
   const box = (await cells.nth(0).boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -300);
+  await expect.poll(async () => (await z(1)) - (await z(0))).toBeCloseTo(0, 3);
+  // unlocked: each view zooms on its own (owner, host test 3)
+  const lock = page.getByTestId('group-lock');
+  await lock.click();
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  const z1 = await z(1);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(() => z(0)).toBeGreaterThan(z1 + 0.3);
+  expect(await z(1)).toBeCloseTo(z1, 3);
+  // locked again: back to one fitted scale, and linked
+  await lock.click();
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => z(0)).toBeCloseTo(fitted, 2);
+  await expect.poll(() => z(1)).toBeCloseTo(fitted, 2);
+  await page.mouse.wheel(0, -200);
   await expect.poll(async () => (await z(1)) - (await z(0))).toBeCloseTo(0, 3);
   expect(errors).toEqual([]);
 });

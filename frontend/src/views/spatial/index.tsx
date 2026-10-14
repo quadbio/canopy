@@ -56,6 +56,7 @@ import { PlotCompanionField } from '../plot';
 import { useLod } from '../lod';
 import { type Bounds, MAIN_PANEL, panelKey, panelLayerId, registerView, type ViewOutput } from '../registry';
 import { lassoInto, type Polygon } from '../selection';
+import { guardTiles } from './tiles';
 
 export interface ChannelSetting {
   on: boolean;
@@ -263,6 +264,7 @@ function normaliseParams(raw: unknown): SpatialParams | null {
         : {},
     pointSize: num(r.pointSize, 0.5, 10, 1.5),
     legendCollapsed: typeof r.legendCollapsed === 'boolean' ? r.legendCollapsed : undefined,
+    unlocked: r.unlocked === true ? true : undefined,
   };
 }
 
@@ -419,7 +421,7 @@ function useSpatialView(spec: ViewSpec<SpatialParams>): ViewOutput {
       // our store: no browser cache (B-B2), retries, counted reads, no zarr v2 probes
       const r = await loadOmeZarrFromStore(elementStore(version!, imageEntry!.path) as never);
       event('image_opened', performance.now() - t0, { levels: r.data.length });
-      return r.data;
+      return guardTiles(r.data);
     },
     enabled: !!imageEntry && !!version,
     staleTime: Infinity,

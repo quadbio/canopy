@@ -17,10 +17,15 @@ import { viewTypes } from '../views/registry';
 import { formatBytes, formatCount, Help } from './controls';
 import { Conversion } from './Conversion';
 import { DatasetNotes, type Notice } from './notes';
+import { useConvertMany } from './convertMany';
+import { ticksFor } from './ticks';
+
+const ACTIVE_JOB = new Set(['queued', 'running']);
 
 const KIND_LABEL: Record<string, string> = { h5ad: 'h5ad', anndata_zarr: 'zarr', spatialdata_zarr: 'spatial' };
 
-function DatasetRow({ d, depth }: { d: DatasetEntry; depth: number }) {
+/** `list`: the tickable datasets of the list this row is in (folder or search), for shift-click. */
+function DatasetRow({ d, depth, list }: { d: DatasetEntry; depth: number; list: string[] }) {
   const selected = useWorkspace((s) => s.browserSelection === d.id);
   const select = useWorkspace((s) => s.selectDataset);
   const ticked = useWorkspace((s) => s.ticked.includes(d.id));
@@ -34,9 +39,11 @@ function DatasetRow({ d, depth }: { d: DatasetEntry; depth: number }) {
           className="tick"
           style={{ left: 6 + depth * 14 }}
           checked={ticked}
-          onChange={(e) => tick([d.id], e.target.checked)}
+          // a click (or Space) toggles; with shift, the range from the last clicked tick follows
+          onClick={(e) => tick(ticksFor(list, d.id, e.shiftKey), e.currentTarget.checked)}
+          onChange={() => undefined}
           aria-label={`Tick ${d.name} to open it linked with others`}
-          title="Tick several datasets to open them as linked views"
+          title="Tick several datasets to open them as linked views (shift-click: all between this and the last one clicked)"
           data-testid="dataset-tick"
         />
       )}
@@ -93,7 +100,7 @@ function Folder({ root, path, name, depth, count }: { root: string; path: string
           {q.data?.folders.map((f) => (
             <Folder key={f.path} root={root} path={f.path} name={f.name} depth={depth + 1} count={f.n_datasets} />
           ))}
-          {q.data?.datasets.map((d) => <DatasetRow key={d.id} d={d} depth={depth + 1} />)}
+          {q.data?.datasets.map((d) => <DatasetRow key={d.id} d={d} depth={depth + 1} list={here} />)}
         </ul>
       )}
     </li>
@@ -312,8 +319,18 @@ function LinkedOpen() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const waiting = useConvertMany((s) => s.waiting);
+  const failed = useConvertMany((s) => s.failed);
+  const convertMany = useConvertMany((s) => s.add);
   const details = useQueries({
-    queries: ticked.map((id) => ({ queryKey: ['dataset', id], queryFn: () => catalog.dataset(id), staleTime: 60_000 })),
+    queries: ticked.map((id) => ({
+      queryKey: ['dataset', id],
+      queryFn: () => catalog.dataset(id),
+      staleTime: 60_000,
+      // while it converts: until its converted copy is there
+      refetchInterval: (q: { state: { data?: { conversion?: { job: { state: string } | null } | null } } }) =>
+        ACTIVE_JOB.has(q.state.data?.conversion?.job?.state ?? '') ? 5_000 : false,
+    })),
   }).map((q) => q.data);
   if (!ticked.length) return null;
   const open = async (type: 'embedding' | 'spatial') => {
@@ -371,6 +388,37 @@ function LinkedOpen() {
     }
   };
   const allSpatial = details.every((d) => d?.kind === 'spatialdata_zarr' && d.conversion?.converted);
+  // spatial views need a converted copy: the ticked spatial datasets without one, converted at once
+  const spatial = details.filter((d) => d?.kind === 'spatialdata_zarr');
+  const converting = spatial.filter((d) => waiting.includes(d!.id) || ACTIVE_JOB.has(d!.conversion?.job?.state ?? '')).length;
+  const toConvert = spatial
+    .filter((d) => !d!.conversion?.converted && !waiting.includes(d!.id) && !ACTIVE_JOB.has(d!.conversion?.job?.state ?? ''))
+    .map((d) => d!.id);
+  const failedHere = failed.filter((f) => ticked.includes(f.id));
+  const conversions = (toConvert.length > 0 || converting > 0 || failedHere.length > 0) && (
+    <div className="convert-ticked" data-testid="convert-ticked">
+      {toConvert.length > 0 && (
+        <p className="small">
+          {toConvert.length} of the ticked spatial datasets {toConvert.length === 1 ? 'has' : 'have'} no converted copy yet (spatial
+          views need one).{' '}
+          <button className="link" onClick={() => convertMany(toConvert, qc)} data-testid="convert-ticked-button">
+            Convert {toConvert.length === 1 ? 'it' : `all ${toConvert.length}`}
+          </button>
+        </p>
+      )}
+      {converting > 0 && (
+        <p className="muted small" data-testid="convert-ticked-progress">
+          Converting {converting}
+          {waiting.length ? ` (${waiting.length} waiting for a place in the server’s queue)` : ''}; at most a few run at a time.
+        </p>
+      )}
+      {failedHere.map((f) => (
+        <p key={f.id} className="error small">
+          {qc.getQueryData<{ name: string }>(['dataset', f.id])?.name ?? f.id}: {f.message}
+        </p>
+      ))}
+    </div>
+  );
   if (anyOpen) {
     return (
       <div className="details linked-open" data-testid="linked-open">
@@ -378,6 +426,7 @@ function LinkedOpen() {
           {ticked.length} dataset{ticked.length === 1 ? '' : 's'} ticked
         </h3>
         <CloseFirst testId="linked-blocked">Linked views open on an empty canvas: close the open views first.</CloseFirst>
+        {conversions}
         <button className="link small" onClick={() => tick(ticked, false)} data-testid="untick-all">
           Clear the ticks
         </button>
@@ -419,6 +468,7 @@ function LinkedOpen() {
           Clear
         </button>
       </div>
+      {conversions}
       {ticked.length < 2 && <p className="muted small">Tick at least one more dataset to open them linked.</p>}
       {tooMany && <p className="error small">At most {MAX_GROUP} datasets can be linked.</p>}
       {problem && <p className="error small">{problem}</p>}
@@ -435,6 +485,7 @@ export function FileBrowser() {
     return () => clearTimeout(t);
   }, [query]);
   const search = useSearch(q);
+  const found = (search.data ?? []).filter((d) => d.state === 'inspected').map((d) => d.id);
   const selected = useWorkspace((s) => s.browserSelection);
 
   return (
@@ -452,7 +503,7 @@ export function FileBrowser() {
         {q ? (
           <ul className="tree" role="tree" aria-label="Search results">
             {search.data?.length === 0 && <li className="muted small pad">No matches.</li>}
-            {search.data?.map((d) => <DatasetRow key={d.id} d={d} depth={0} />)}
+            {search.data?.map((d) => <DatasetRow key={d.id} d={d} depth={0} list={found} />)}
             {search.data?.length === 100 && (
               <li className="muted small pad">Showing the first 100 matches; type more to narrow down.</li>
             )}

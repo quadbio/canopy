@@ -259,7 +259,6 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
             # created before file_access applied, or by hand: other users may read them
             log.warning("folders_readable_by_others", folders=open_to_others)
         # a budget above what this process may ever have (the machine's memory, or a cgroup
-        # limit, e.g. per user): loads would be admitted that the kernel then kills
         # limit, e.g. per user): loads would be admitted that the kernel then kills. Conversion
         # workers may each grow 0.5 × memory_gb + 1 GB past their reservation before they are
         # stopped (review A-L2).
