@@ -13,9 +13,9 @@ Resume rule: read this file, then continue with the first unchecked step.
 - [x] S4 Vertical slice (loader, API, skeleton, file browser, embedding view) → demo (awaiting user review)
 - [x] S5 Genes + AnnData converter + jobs + memory guard
 - [x] S6 Spatial ingest + spatial view + section grid → demo
-- [ ] S7 Workspace + colours + search + filters (started: plot view done, ADR 0013)
-- [ ] S8 Diagnostics tools → user checks bundles against the data policy
-- [ ] S9 Packaging + runbook + Linux dry run → Checkpoint A
+- [x] S7 Workspace + colours + search + filters — done 2026-10-14 (deferred: filters, gene sets, export, server-side shared workspaces)
+- [x] S8 Diagnostics tools — done 2026-10-14 (bundle, selfcheck, analyse; scripted suites and test page dropped)
+- [x] S9 Packaging + runbook + Linux dry run — done 2026-10-14 (trial of e5af801: all checks passed) → Checkpoint A next
 
 ## Log
 
@@ -448,3 +448,5 @@ Resume rule: read this file, then continue with the first unchecked step.
   telemetry fields; one scale for groups zoomed while loading; tuner on input-to-draw delay;
   lasso failures shown; stable fit (no redraw of every cell per pan frame); relock by Reset
   refits; Close all asks; convert ticked shows failures and can stop waiting.
+- 2026-10-14 Linux trial of e5af801 (R10): ALL CHECKS PASSED. S7, S8, S9 marked done; next is
+  Checkpoint A (the owner uses the prototype; then decide stage 3).
