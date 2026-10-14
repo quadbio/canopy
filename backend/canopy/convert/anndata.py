@@ -492,6 +492,8 @@ def _colours(root: Any, obs: pd.DataFrame, warnings: list[str]) -> dict[str, Any
         s = obs[col]
         if isinstance(s.dtype, pd.CategoricalDtype):
             n = len(s.cat.categories)
+        elif pd.api.types.is_bool_dtype(s.dtype):
+            n = 2  # false, true: as the preview colours them (review full-2 B-L2)
         elif s.dtype == object or pd.api.types.is_string_dtype(s.dtype):
             n = int(s.dropna().nunique())
         else:
@@ -519,12 +521,19 @@ def _obsm(
     out: dict[str, int] = {}
     for k, (key, dims) in enumerate(keys.items()):
         node = root["obsm"][key]
+        frame: np.ndarray | None = None
         if not hasattr(node, "shape"):  # a data frame or a sparse matrix
-            kind = dict(getattr(node, "attrs", {})).get("encoding-type", "")
-            warnings.append(
-                "obsm_sparse_skipped" if "matrix" in str(kind) else "obsm_frame_skipped"
-            )
-            continue
+            kind = str(dict(getattr(node, "attrs", {})).get("encoding-type", ""))
+            if kind == "dataframe":
+                # its numeric columns, as the preview shows them (review full-2 B-L3)
+                df: pd.DataFrame = read_elem(node)
+                num = df.select_dtypes("number")
+                if num.shape[1] >= 2:
+                    frame = num.to_numpy(dtype=np.float32)
+                    dims = frame.shape[1]
+            if frame is None:
+                warnings.append("obsm_sparse_skipped" if "matrix" in kind else "obsm_frame_skipped")
+                continue
         a = obsm.create_array(
             key,
             shape=(info.n_obs, dims),
@@ -535,7 +544,7 @@ def _obsm(
         a.attrs.update(ANNDATA_ARRAY)
         for s in range(0, info.n_obs, OBSM_CHUNK * 4):
             e = min(s + OBSM_CHUNK * 4, info.n_obs)
-            a[s:e] = np.asarray(node[s:e], dtype=np.float32)
+            a[s:e] = frame[s:e] if frame is not None else np.asarray(node[s:e], dtype=np.float32)
         out[key] = dims
         progress((k + 1) / max(len(keys), 1))
     skipped = set(info.obsm) - set(keys)

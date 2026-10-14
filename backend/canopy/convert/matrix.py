@@ -262,8 +262,12 @@ class CscWriter:
             return
         same = cols[1:] == cols[:-1]
         if np.any(rows[1:][same] == rows[:-1][same]):
+            # a malformed matrix: the preview adds them (as scipy does), the converter refuses
+            # and says how to repair the file (review full-2 B-L5)
             raise ConversionError(
-                "duplicate_entries", "the matrix stores some cells twice for the same gene"
+                "duplicate_entries",
+                "the matrix stores some cells twice for the same gene; repair it with "
+                "adata.X.sum_duplicates() and save the file again",
             )
 
     def _stats(

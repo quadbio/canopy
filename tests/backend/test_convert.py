@@ -689,3 +689,26 @@ def test_cache_prune_never_trusts_a_missing_new_or_empty_index(cfg: Config, tmp_
     assert all(s.exists() for s in stores)
     assert "would remove" in prune("--dry-run")
     assert prune("--yes").startswith("0:") and not any(s.exists() for s in stores)
+
+
+def test_yes_no_colours_and_table_embeddings_survive_conversion(cfg: Config) -> None:
+    """A bool column's `uns` colours and a data-frame embedding were lost on conversion while
+    the preview showed them (review full-2 B-L2, B-L3)."""
+    a = ad.AnnData(X=np.ones((N, 3), np.float32))
+    a.obs["flag"] = np.arange(N) % 2 == 0
+    a.uns["flag_colors"] = ["#ff0000", "#00ff00"]
+    a.obsm["X_frame"] = pd.DataFrame(
+        {"u": np.arange(N, dtype=float), "v": -np.arange(N, dtype=float), "s": ["x"] * N},
+        index=a.obs_names,
+    )
+    a.write_h5ad(cfg.data_roots[0].path / "f.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "f.h5ad")
+    job = c.post(f"/api/datasets/{id}/convert", json={}).json()
+    assert _wait(c, job["id"], c.app)["state"] == "done"
+    m = c.get(f"/api/datasets/{id}/meta").json()
+    flag = next(col for col in m["obs"] if col["name"] == "flag")
+    assert [x.lower() for x in flag["colors"]] == ["#ff0000", "#00ff00"]
+    assert "X_frame" in [e["key"] for e in m["embeddings"]]
+    r = c.get(f"/api/datasets/{id}/obsm", params={"key": "X_frame"})
+    assert r.status_code == 200

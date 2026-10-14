@@ -106,6 +106,9 @@ def violin(cat: Feature, num: Feature, bins: int = 64, log1p: bool = False) -> d
                     "q3": q3,
                     "mean": float(g.mean(dtype=np.float64)),
                     "frac_above_zero": float((r > 0).mean()),
+                    # cells at exactly 0: drawn apart, so the bin holding 0 keeps its small
+                    # positive values in the outline (review full-2 B-H2)
+                    "n_zero": int((r == 0).sum()),
                 }
             )
         else:
@@ -121,6 +124,8 @@ def violin(cat: Feature, num: Feature, bins: int = 64, log1p: bool = False) -> d
         "groups": groups,
         "n_missing_value": missing,
         "n_missing_category": int((~in_cat).sum()),
+        # a log scale draws values below 0 at 0 (scaled data): said, not silent (B-L4)
+        "n_below_zero_at_zero": int(((vals < 0) & ok).sum()) if log1p else 0,
     }
 
 

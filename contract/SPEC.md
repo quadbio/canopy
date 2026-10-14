@@ -180,6 +180,10 @@ hint), `rgb`, `transforms`.
 
 ## 6. Labels (segmentation masks)
 
+> **Browser status (2026-10-14, review full-2 B-L6):** labels are converted and stored as below,
+> but the browser does not draw them yet; a dataset whose cells exist only as a mask shows no
+> cells in the spatial view. Planned with the stage-3 spatial work.
+
 | Item | Rule |
 |---|---|
 | Format | OME-NGFF 0.5 multiscale labels, axes `y, x`, with NGFF `image-label` metadata **[v0.2]**; the `labels/` group lists its members in `ome.labels`, so NGFF tools recognise them as labels |
@@ -277,7 +281,8 @@ sorted the same way:
   `has_z`, `z_range` (min, max), `z_planes` (sorted distinct z values when there are at most 256,
   e.g. MERSCOPE z-stacks; otherwise null), `bbox`, `n_overview` **[v0.2]**, `lod_cap` **[v0.2]**
   (100,000), `table`, `transforms`.
-- **Display is 2-D.** `z` is never used for placement; it drives a **z filter** in the browser:
+- **Display is 2-D.** `z` is never used for placement; it is meant to drive a **z filter** in
+  the browser (not built yet: all planes are drawn together; review full-2 B-L6):
   the user picks one or more z-planes (when `z_planes` is set) or a z range, and only points
   inside it are drawn (GPU filter on the loaded points; no re-read from the server).
 

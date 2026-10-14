@@ -272,7 +272,31 @@ def _instance_rows(
     """Table rows of the instances of the source `elements`: instance id → row."""
     rows = _rows_of_regions(obs, region, elements)
     ids = obs[instance_key].to_numpy()[rows]
-    return {_plain(v): int(r) for v, r in zip(ids, rows, strict=True)}
+    out = {_plain(v): int(r) for v, r in zip(ids, rows, strict=True)}
+    if len(out) < len(rows):
+        # one instance id on several rows: the last one is used (said, not silent: B-L7)
+        get_logger("canopy.convert").warning(
+            "duplicate_instance_ids", duplicates=len(rows) - len(out), rows=len(rows)
+        )
+    return out
+
+
+def _label_id(k: Any) -> int | None:
+    """A label value from a table's instance id: a positive whole number, exactly (an int, a
+    float holding one below 2**53, or a string of digits), else None."""
+    if isinstance(k, bool):
+        return None
+    if isinstance(k, int | np.integer):
+        v = int(k)
+    elif isinstance(k, float | np.floating):
+        if not float(k).is_integer() or not 0 < float(k) < 2**53:
+            return None
+        v = int(k)
+    elif isinstance(k, str) and k.strip().isdigit():
+        v = int(k.strip())
+    else:
+        return None
+    return v if 0 < v < 2**64 else None
 
 
 def _plain(v: Any) -> Any:
@@ -468,15 +492,11 @@ def _write_labels(
         tname, obs, region = table
         rows_of = _instance_rows(obs, region["instance_key"], region, [source])
         lk = np.full(max_label + 1, -1, dtype=np.int32)
-        keys = np.array(list(rows_of.keys()), dtype=object)
-        rows = np.array(list(rows_of.values()), dtype=np.int64)
-        try:
-            vals = pd.to_numeric(pd.Series(keys), errors="coerce").to_numpy(np.float64)
-        except (TypeError, ValueError):
-            vals = np.full(len(keys), np.nan)
-        ok = np.isfinite(vals) & (vals > 0)
-        v = vals[ok].astype(np.uint64)
-        r = rows[ok]
+        # ids as exact integers: through float64 a 64-bit id (MERSCOPE's ~3.4e18) is rounded to a
+        # multiple of 512, so labels lose their row or take another cell's (review full-2 B-H1)
+        pairs = [(i, r) for k, r in rows_of.items() if (i := _label_id(k)) is not None]
+        v = np.array([i for i, _ in pairs], dtype=np.uint64)
+        r = np.array([r for _, r in pairs], dtype=np.int64)
         if original is not None:
             k = np.searchsorted(original, v)
             hit = (k < len(original)) & (original[np.minimum(k, len(original) - 1)] == v)
@@ -486,7 +506,13 @@ def _write_labels(
             lk[v[hit].astype(np.int64)] = r[hit]
         array(aux, "row", lk)
         table_name, lookup = tname, f"aux/labels/{name}/row"
-        extra.update(linked_fraction=round(float((lk[1:] >= 0).mean()) if max_label else 0.0, 4))
+        linked = float((lk[1:] >= 0).mean()) if max_label else 0.0
+        extra.update(linked_fraction=round(linked, 4))
+        if max_label and linked < 0.5:
+            # most labels without a row: a wrong instance key or region (said, not silent)
+            get_logger("canopy.convert").warning(
+                "labels_mostly_unlinked", linked_fraction=round(linked, 4), n_labels=n_labels
+            )
     return LabelsEntry(
         path=f"labels/{name}",
         levels=levels,

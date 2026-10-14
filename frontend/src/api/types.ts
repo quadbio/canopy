@@ -102,6 +102,8 @@ export interface GeneVector {
   max: number;
   p99: number; // 99th percentile of the non-zero values
   nnz: number;
+  /** Counts above the code range are sent as this value: it means "this or more". */
+  capped?: number;
 }
 
 export interface DatasetMeta {
@@ -163,6 +165,7 @@ export interface ViolinGroup {
   q3?: number;
   mean?: number;
   frac_above_zero?: number;
+  n_zero?: number; // cells at exactly 0 (drawn apart from the outline)
 }
 export type PlotSummary =
   | {
@@ -174,6 +177,7 @@ export type PlotSummary =
       groups: ViolinGroup[];
       n_missing_value: number;
       n_missing_category: number;
+      n_below_zero_at_zero?: number; // on a log scale, drawn at 0
     }
   | { kind: 'bars'; rows: string[]; columns: string[]; counts: number[][]; n_missing: number }
   | {

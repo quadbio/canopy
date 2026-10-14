@@ -325,15 +325,27 @@ def test_memory_busy_is_a_503(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_quantisation_is_exact_for_integers_and_zero() -> None:
-    codes, offset, scale = quantise(np.array([0, 2, 3, 5000], dtype=np.float32))
+    codes, offset, scale, capped = quantise(np.array([0, 2, 3, 5000], dtype=np.float32))
     assert (offset, scale) == (0.0, 1.0) and list(codes) == [0, 2, 3, 5000]
     vals = np.array([-1.3, 0, 0.7, np.inf, -np.inf, np.nan], dtype=np.float32)
-    codes, offset, scale = quantise(vals)
+    codes, offset, scale, capped = quantise(vals)
     back = offset + codes.astype(np.float64) * scale
     assert back[1] == 0.0  # zero exact even with negative values
     assert abs(back[0] + 1.3) <= scale / 2 and abs(back[2] - 0.7) <= scale / 2
     assert back[3] == pytest.approx(0.7, abs=scale) and back[4] == pytest.approx(-1.3, abs=scale)
-    assert codes[5] == genes_mod.MISSING_CODE
+    assert codes[5] == genes_mod.MISSING_CODE and not capped
+
+
+def test_counts_above_the_code_range_stay_exact_up_to_the_cap() -> None:
+    """Counts with one cell at 100,000 decoded 1 and 2 alike (review full-2 B-M1): integers from 0
+    are exact up to 65,534, larger ones are sent as 65,534 and the reply says so (owner)."""
+    vals = np.array([0, 1, 2, 3, 65_000, 100_000, np.nan], dtype=np.float32)
+    codes, offset, scale, capped = quantise(vals)
+    assert capped and offset == 0.0 and scale == 1.0
+    assert codes.tolist() == [0, 1, 2, 3, 65_000, 65_534, 65_535]
+    e = encode(GeneValues(7, np.arange(7), vals), quantise_values=True)
+    assert e.headers["x-canopy-capped"] == "65534.0"
+    assert "x-canopy-capped" not in encode(GeneValues(3, np.arange(3), vals[:3]), True).headers
 
 
 def test_encoding_round_trips_sparse_dense_and_missing() -> None:

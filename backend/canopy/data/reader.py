@@ -117,7 +117,13 @@ def to_obs_values(raw: Any) -> ObsValues:
             codes[mask] = -1
             return ObsValues("boolean", codes, ["false", "true"])
         if pd.api.types.is_numeric_dtype(raw.dtype):
-            return ObsValues("numeric", raw.to_numpy(dtype=np.float32, na_value=np.nan))
+            wide = raw.to_numpy(dtype=np.float64, na_value=np.nan)
+            # nullable whole numbers beyond float32's exact range: float64, as for plain ints
+            # (review full-2 B-L1)
+            big = pd.api.types.is_integer_dtype(raw.dtype) and bool(
+                np.nanmax(np.abs(wide), initial=0) >= 2**24
+            )
+            return ObsValues("numeric", wide.astype("<f8" if big else "<f4"))
         raw = np.asarray(raw, dtype=object)
     arr = np.asarray(raw)
     if arr.dtype.kind == "b":

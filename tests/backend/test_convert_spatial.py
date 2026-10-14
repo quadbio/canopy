@@ -349,6 +349,41 @@ def test_sparse_and_uint64_labels_relabel_with_lookup(tmp_path: Path) -> None:
     np.testing.assert_array_equal(lv1, lv0[::2, ::2])
 
 
+def test_consecutive_64_bit_ids_link_to_their_own_rows(tmp_path: Path) -> None:
+    """MERSCOPE-like ids (~3.4e18, consecutive) were matched through float64 and all lost
+    their rows, or took a neighbour's near a multiple of 512 (review full-2 B-H1)."""
+    import anndata as ad
+    import pandas as pd
+    from spatialdata import SpatialData
+    from spatialdata.models import Labels2DModel, TableModel
+
+    base = 3384541700046099964  # around a multiple of 512
+    ids = [base + i for i in range(8)]
+    mask = np.zeros((100, 100), np.uint64)
+    for i, v in enumerate(ids):
+        mask[i * 10 : i * 10 + 5, 0:5] = v
+    obs = pd.DataFrame(
+        {"region": pd.Categorical(["m"] * 8), "id": np.array(ids[::-1], np.uint64)},
+        index=[f"c{i}" for i in range(8)],
+    )
+    table = TableModel.parse(
+        ad.AnnData(X=np.ones((8, 2), np.float32), obs=obs),
+        region="m",
+        region_key="region",
+        instance_key="id",
+    )
+    src = tmp_path / "m.zarr"
+    SpatialData(
+        labels={"m": Labels2DModel.parse(mask, dims=("y", "x"))}, tables={"table": table}
+    ).write(src)
+    r = _convert(src, tmp_path)
+    root = zarr.open_group(r.store, mode="r")  # type: ignore[attr-defined]
+    orig = root["aux/labels/m/original_id"][...].tolist()
+    row = root["aux/labels/m/row"][...].tolist()
+    # label k (original id ids[k-1]) → the table row holding that id (the table is reversed)
+    assert [row[orig.index(v)] for v in ids] == list(range(7, -1, -1))
+
+
 def test_large_image_levels_are_sharded(tmp_path: Path) -> None:
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel

@@ -28,6 +28,7 @@ export function useBox<T extends HTMLElement>() {
 
 // Room for the axes around a chart's plotting area (the bottom grows with turned labels).
 export const MARGIN = { left: 56, right: 16, top: 16, bottom: 72 };
+const ABOVE_ROW = 30; // the row of "above 0" dots and numbers above violins
 const LABEL_CHARS = 22;
 const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
@@ -145,22 +146,31 @@ export function Violins({
     shown.map((x) => x.c),
     slot,
   );
-  const height = Math.max(box.height - MARGIN.top - bottom, 60);
+  // the share of cells above 0 gets a row of its own above the violins: a dot whose area is the
+  // share, and the number (owner, full review 2: it was easy to miss)
+  const above = showAboveZero ? ABOVE_ROW : 0;
+  const height = Math.max(box.height - MARGIN.top - bottom - above, 60);
   const [lo, hi] = summary.range;
   const y = (v: number) => MARGIN.top + (1 - (v - lo) / (hi - lo || 1)) * height;
   const step = (hi - lo) / summary.bins;
   const full = slot * 0.42;
   // a gene's zeros fall in the bin holding 0: drawn as a flat bar whose width is the share of
-  // cells at 0, so the outline above is scaled to the expressing cells and stays readable
+  // cells at exactly 0, so the outline above is scaled to the expressing cells and stays
+  // readable. The bin's positive values (0 < v < its upper edge) stay in the outline (review
+  // full-2 B-H2: they were dropped, two thirds of the expressing cells of a counts gene).
   const zeroBin = zeroSpike && lo <= 0 && hi > 0 ? Math.min(Math.floor((-lo / (hi - lo)) * summary.bins), summary.bins - 1) : -1;
+  // statistics on a log scale are of log1p values: shown as values again (quantiles commute
+  // with the transform; review full-2 B-M2)
+  const shown_ = (v: number) => tickLabel(summary.log1p ? Math.expm1(v) : v);
   return (
     <div ref={ref} className="chart" data-testid="violins">
       {box.width > 0 && (
         <svg width={Math.max(width, box.width)} height={box.height} role="img" aria-label={`Violins of ${yLabel} by ${xLabel}`}>
+          <g transform={`translate(0,${above})`}>
           <YAxis lo={lo} hi={hi} log1p={summary.log1p} height={height} label={yLabel} />
           {shown.map(({ c, g }, i) => {
             const cx = MARGIN.left + (i + 0.5) * slot;
-            const hist = g.hist.map((v, k) => (k === zeroBin ? 0 : v));
+            const hist = outlineCounts(g.hist, zeroBin, g.n_zero);
             const peak = Math.max(...hist, 1);
             // the outline covers only the bins this group has (no hairline through others)
             const first = hist.findIndex((v) => v > 0);
@@ -171,12 +181,12 @@ export function Violins({
             const left = run.map((k) => `${cx - half(k)},${y(lo + (k + 0.5) * step)}`).reverse();
             const ends =
               run.length > 0 ? { from: `${cx},${y(lo + first * step)}`, to: `${cx},${y(lo + (last + 1) * step)}` } : null;
-            const zeros = zeroBin >= 0 ? 1 - (g.frac_above_zero ?? 0) : 0;
+            const zeros = zeroBin >= 0 ? (g.n_zero !== undefined && g.n ? g.n_zero / g.n : 1 - (g.frac_above_zero ?? 0)) : 0;
             const colour = css(colours.get(c));
             return (
               <g key={c} data-testid="violin">
                 <title>
-                  {`${c}: ${g.n.toLocaleString()} cells · median ${tickLabel(g.median ?? 0)} · quartiles ${tickLabel(g.q1 ?? 0)}–${tickLabel(g.q3 ?? 0)} · ${percent(g.frac_above_zero ?? 0)} above 0`}
+                  {`${c}: ${g.n.toLocaleString()} cells · median ${shown_(g.median ?? 0)} · quartiles ${shown_(g.q1 ?? 0)}–${shown_(g.q3 ?? 0)} · ${percent(g.frac_above_zero ?? 0)} above 0`}
                 </title>
                 {ends && (
                   <polygon
@@ -204,18 +214,34 @@ export function Violins({
                 )}
                 {g.median !== undefined && <line x1={cx - 5} x2={cx + 5} y1={y(g.median)} y2={y(g.median)} stroke="var(--surface)" strokeWidth={2} />}
                 {showAboveZero && (
-                  <text className="axis-note" x={cx} y={MARGIN.top - 4} textAnchor="middle">
-                    {percent(g.frac_above_zero ?? 0)}
-                  </text>
+                  <g transform={`translate(0,${-above})`} data-testid="above-zero">
+                    <circle cx={cx} cy={11} r={Math.max(Math.sqrt(g.frac_above_zero ?? 0) * 10, (g.frac_above_zero ?? 0) > 0 ? 1.5 : 0)} fill={colour} />
+                    <text className="above-zero" x={cx} y={MARGIN.top + above - 6} textAnchor="middle">
+                      {percent(g.frac_above_zero ?? 0)}
+                    </text>
+                  </g>
                 )}
               </g>
             );
           })}
           <CategoryAxis labels={shown.map((x) => x.c)} slot={slot} top={MARGIN.top + height} height={bottom} label={xLabel} />
+          {(summary.n_below_zero_at_zero ?? 0) > 0 && (
+            <text className="axis-note" x={MARGIN.left + 4} y={MARGIN.top + 10} data-testid="below-zero-note">
+              {`${summary.n_below_zero_at_zero!.toLocaleString()} values below 0 drawn at 0 (log scale)`}
+            </text>
+          )}
+          </g>
         </svg>
       )}
     </div>
   );
+}
+
+/** The counts a gene's violin outline is drawn from: the bin holding 0 keeps its positive values
+ * (its count less the cells at exactly 0, which are drawn apart). Without `nZero` (an older
+ * server) the whole bin is left out, as before. */
+export function outlineCounts(hist: number[], zeroBin: number, nZero: number | undefined): number[] {
+  return hist.map((v, k) => (k === zeroBin ? (nZero !== undefined ? Math.max(v - nZero, 0) : 0) : v));
 }
 
 // ---------------------------------------------------------------- stacked bars

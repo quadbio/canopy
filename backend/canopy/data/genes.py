@@ -235,15 +235,20 @@ def quantise_columns(a: np.ndarray) -> tuple[np.ndarray, list[float], list[float
     return codes, offsets, scales
 
 
-def quantise(vals: np.ndarray) -> tuple[np.ndarray, float, float]:
-    """uint16 codes, offset and scale. Integers within 65,534 of each other are exact (scale 1);
-    otherwise 0 falls exactly on a code. NaN is MISSING_CODE; ±inf the end codes."""
+def quantise(vals: np.ndarray) -> tuple[np.ndarray, float, float, bool]:
+    """uint16 codes, offset, scale and whether values were capped. Integers within 65,534 of
+    each other are exact (scale 1); non-negative integers beyond that stay exact up to 65,534 and
+    larger ones are sent as 65,534, "capped" (owner, full review 2: counts 1 and 2 decoded alike
+    when one cell had 100,000; such cells are rare). Otherwise 0 falls exactly on a code. NaN is
+    MISSING_CODE; ±inf the end codes."""
     finite = vals[np.isfinite(vals)]
     lo = float(finite.min()) if len(finite) else 0.0
     hi = float(finite.max()) if len(finite) else 0.0
     lo, hi = min(lo, 0.0), max(hi, 0.0)  # 0 inside the range, so it can be exact
     top = MISSING_CODE - 1
-    if len(finite) and np.all(finite == np.round(finite)) and hi - lo <= top:
+    integers = bool(len(finite)) and bool(np.all(finite == np.round(finite)))
+    capped = integers and lo == 0.0 and hi > top
+    if integers and (hi - lo <= top or capped):
         offset, scale = lo, 1.0
     else:
         scale = (hi - lo) / (top - 1) if hi > lo else 1.0  # one spare step for the anchoring
@@ -253,7 +258,7 @@ def quantise(vals: np.ndarray) -> tuple[np.ndarray, float, float]:
         q = np.rint((np.nan_to_num(vals, nan=0.0, posinf=hi, neginf=lo) - offset) / scale)
     codes[:] = np.clip(q, 0, top)
     codes[np.isnan(vals)] = MISSING_CODE
-    return codes, offset, scale
+    return codes, offset, scale, capped
 
 
 def encode(g: GeneValues, quantise_values: bool) -> Encoded:
@@ -279,8 +284,10 @@ def encode(g: GeneValues, quantise_values: bool) -> Encoded:
     }
     payload: np.ndarray
     if quantise_values:
-        payload, offset, scale = quantise(vals)
+        payload, offset, scale, capped = quantise(vals)
         headers |= {"x-canopy-offset": repr(offset), "x-canopy-scale": repr(scale)}
+        if capped:  # the top code stands for "this or more"
+            headers["x-canopy-capped"] = repr(float(MISSING_CODE - 1))
     else:
         payload = np.ascontiguousarray(vals, dtype="<f4")
     headers["x-canopy-dtype"] = payload.dtype.name

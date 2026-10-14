@@ -117,6 +117,8 @@ export function selectionViolin(values: ArrayLike<number>, mask: Uint8Array, log
   const vals = [new Float32Array(sizes[0]), new Float32Array(sizes[1])];
   const hist = [new Array<number>(bins).fill(0), new Array<number>(bins).fill(0)];
   const above = [0, 0];
+  const zeros = [0, 0];
+  let below = 0;
   const sums = [0, 0];
   const fill = [0, 0];
   for (let i = 0; i < values.length; i += 1) {
@@ -127,6 +129,8 @@ export function selectionViolin(values: ArrayLike<number>, mask: Uint8Array, log
     vals[g][fill[g]++] = tv;
     hist[g][Math.min(bins - 1, Math.max(0, Math.floor(((tv - lo) / (hi - lo)) * bins)))] += 1;
     if (v > 0) above[g] += 1;
+    else if (v === 0) zeros[g] += 1;
+    else if (log1p) below += 1;
     sums[g] += tv;
   }
   const groups: ViolinGroup[] = [0, 1].map((g) => {
@@ -140,6 +144,7 @@ export function selectionViolin(values: ArrayLike<number>, mask: Uint8Array, log
       q3: quantile(s, 0.75),
       mean: sums[g] / sizes[g],
       frac_above_zero: above[g] / sizes[g],
+      n_zero: zeros[g],
     };
   });
   return {
@@ -151,6 +156,7 @@ export function selectionViolin(values: ArrayLike<number>, mask: Uint8Array, log
     groups,
     n_missing_value: missing,
     n_missing_category: 0,
+    n_below_zero_at_zero: below,
   };
 }
 

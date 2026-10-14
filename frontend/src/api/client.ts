@@ -141,7 +141,8 @@ export function decodeGene(buf: ArrayBuffer, header: (name: string) => string | 
     values = new Float32Array(n);
     for (let k = 0; k < nnz; k += 1) values[idx[k]] = vals[k];
   }
-  return { values, min: num('min'), max: num('max'), p99: num('p99'), nnz };
+  const capped = header('x-canopy-capped');
+  return { values, min: num('min'), max: num('max'), p99: num('p99'), nnz, ...(capped !== null ? { capped: Number(capped) } : {}) };
 }
 
 export async function getGene(path: string, init?: RequestInit): Promise<GeneVector> {

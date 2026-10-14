@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DatasetMeta } from '../../api/types';
 import { viewType } from '../registry';
-import { categoryAxisHeight, shortLabel } from './charts';
+import { categoryAxisHeight, outlineCounts, shortLabel } from './charts';
 import { companionParams, defaultFeatures, featureKind, plotKind, SCATTER_MAX, scatterPositions } from '.';
 
 const meta = {
@@ -74,5 +74,15 @@ describe('category labels', () => {
     const long = categoryAxisHeight(['a very long category label number 1'], 30);
     expect(long).toBeGreaterThan(categoryAxisHeight(['short'], 30));
     expect(long).toBeLessThanOrEqual(140);
+  });
+});
+
+describe('gene violins', () => {
+  it('keep the small positive values of the bin holding 0 (review full-2 B-H2)', () => {
+    // a counts gene: 3,980 cells at 0 and 4,043 at 1-3 share bin 0 (max 200, 64 bins)
+    const hist = [8023, 900, 500, 0, 1];
+    expect(outlineCounts(hist, 0, 3980)).toEqual([4043, 900, 500, 0, 1]);
+    expect(outlineCounts(hist, 0, undefined)).toEqual([0, 900, 500, 0, 1]); // an older server
+    expect(outlineCounts(hist, -1, 3980)).toEqual(hist); // not a gene: nothing apart
   });
 });

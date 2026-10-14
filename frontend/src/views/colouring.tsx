@@ -429,7 +429,9 @@ export function useColouring(
     if (missingHere) return `${p.colorBy!.name}: NA (not in this dataset)`;
     if (gene && colourName) {
       const v = gene.values[i];
-      return `${colourName}: ${isMissing(v) ? 'NA' : formatValue(v)}`;
+      // counts above 65,534 come capped: said so, not as an exact number (review full-2 B-M1)
+      const shown = gene.capped !== undefined && v >= gene.capped ? `≥ ${gene.capped.toLocaleString()}` : formatValue(v);
+      return `${colourName}: ${isMissing(v) ? 'NA' : shown}`;
     }
     if (!column || !values) return null;
     const v = values.data[i];

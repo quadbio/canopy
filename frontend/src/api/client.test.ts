@@ -47,6 +47,15 @@ describe('decodeGene', () => {
     expect(g.nnz).toBe(3);
   });
 
+  it('carries the cap of counts above the code range (review full-2 B-M1)', () => {
+    const buf = new Uint16Array([1, 2, 65534]).buffer;
+    const h = { 'x-canopy-encoding': 'dense', 'x-canopy-n': '3', 'x-canopy-nnz': '3', 'x-canopy-dtype': 'uint16', 'x-canopy-offset': '0', 'x-canopy-scale': '1' };
+    const g = decodeGene(buf, headers({ ...h, 'x-canopy-capped': '65534.0' }));
+    expect(Array.from(g.values)).toEqual([1, 2, 65534]);
+    expect(g.capped).toBe(65534);
+    expect(decodeGene(buf, headers(h)).capped).toBeUndefined();
+  });
+
   it('reads dense float32 replies as they are', () => {
     const buf = new Float32Array([0.5, 0, 2]).buffer;
     const g = decodeGene(buf, headers({ 'x-canopy-encoding': 'dense', 'x-canopy-n': '3', 'x-canopy-nnz': '2', 'x-canopy-dtype': 'float32' }));

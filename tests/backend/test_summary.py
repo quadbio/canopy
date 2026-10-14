@@ -43,6 +43,7 @@ def test_violin_of_a_gene_per_cluster(cfg: Config) -> None:
         assert np.isclose(grp["median"], np.median(vals))
         assert np.isclose(grp["q3"], np.quantile(vals, 0.75))
         assert np.isclose(grp["frac_above_zero"], (vals > 0).mean())
+        assert grp["n_zero"] == int((vals == 0).sum())  # drawn apart (review full-2 B-H2)
     # cached: the second answer is the same and an ETag works
     again = c.get(
         f"/api/datasets/{id}/summary", params={"kind": "violin", "x": "obs:cluster", "y": "gene:3"}
