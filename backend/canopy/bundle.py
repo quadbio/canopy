@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from canopy.config import Config
-from canopy.logs import NAME_FIELDS, default_log_dir
+from canopy.logs import default_log_dir, is_name_field
 from canopy.privacy import code_location, installation_salt, token
 from canopy.telemetry import LIBRARY_MESSAGES, plain_value
 
@@ -55,7 +55,7 @@ def _strictify(value: Any, salt: str, key: str = "") -> Any:
         return value  # as the server keeps them at strict (telemetry.py)
     if key in TEXT_FIELDS:
         return "(dropped)"
-    if key in NAME_FIELDS:
+    if is_name_field(key):
         return _tokens(value, salt)
     if isinstance(value, dict):
         return {k: _strictify(v, salt, k) for k, v in value.items()}
@@ -397,7 +397,13 @@ def _values(value: Any, out: list[str], key: str = "") -> None:
     if key == "event" and isinstance(value, str) and not _CODE.fullmatch(value):
         out.append(value)
         return
-    if key in _ENV_FIELDS or key == "packages":  # `packages` holds versions
+    if key == "packages":  # versions
+        return
+    if key in _ENV_FIELDS:
+        # the browser's and GPU's wording is searched only for names of 8 or more characters (its
+        # words, such as "Chrome", "Firefox" or "Metal", are shorter; review full-2 A-L3)
+        if isinstance(value, str):
+            out.append(_LONG_ONLY + value)
         return
     if isinstance(value, str) and (
         (key in ("c_where", "c_caller") and _FRAMES.fullmatch(value))
@@ -468,16 +474,22 @@ def _searchable(fname: str, data: bytes) -> str:
     return "\n".join(vals)
 
 
+_LONG_ONLY = "\x00long:"  # marks text searched only for names of 8 or more characters
+
+
 def self_check(files: dict[str, bytes], names: set[str]) -> list[tuple[str, str]]:
     """(file in the bundle, name) for every known name found in it: in plain files anywhere, in
     JSON only in values that are not the program's own vocabulary."""
     hits = []
     pats = [n for n in names if n.lower() not in GENERIC]
     for fname, data in files.items():
-        text = _searchable(fname, data)
+        lines = _searchable(fname, data).split("\n")
+        text = "\n".join(ln for ln in lines if not ln.startswith(_LONG_ONLY))
+        both = "\n".join(ln.removeprefix(_LONG_ONLY) for ln in lines)
         for n in pats:
             # case-insensitive: tools and file systems lower-case names (review H3 A-L4)
-            if re.search(rf"(?<![A-Za-z0-9]){re.escape(n)}(?![A-Za-z0-9])", text, re.IGNORECASE):
+            where = both if len(n) >= 8 else text
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(n)}(?![A-Za-z0-9])", where, re.IGNORECASE):
                 hits.append((fname, n))
     return hits
 

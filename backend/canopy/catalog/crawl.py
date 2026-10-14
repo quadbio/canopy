@@ -171,6 +171,10 @@ def _reason(e: BaseException) -> tuple[str, str]:
         return "unsupported", "not_supported"
     if isinstance(e, ValueError) and msg == "not_anndata":
         return "unsupported", "not_anndata"
+    if isinstance(e, ValueError) and msg == "links_outside":
+        # it points at data outside itself (HDF5 external storage or links, symlinks out of a
+        # zarr store): never read (review full-2 A-H1)
+        return "unsupported", "links_outside"
     if isinstance(e, OSError) and msg.startswith("hdf5_lock"):
         return "failed", "hdf5_lock"
     if isinstance(e, OSError) and msg.startswith("hdf5_truncated"):
@@ -359,6 +363,7 @@ def scan(
     full: bool = False,
     trigger: str = "manual",
     cache_dir: Path | None = None,
+    state_dir: Path | None = None,
 ) -> ScanCounts:
     """Scan every root, update the index and return the counts (also stored with the scan).
     With `cache_dir`, a dataset whose id changed while its content did not (an index from an
@@ -374,7 +379,9 @@ def scan(
             counts.removed += db.remove_roots_except(r.name for r in roots)
             with ThreadPoolExecutor(cfg.inspect_workers, thread_name_prefix="inspect") as pool:
                 for root in roots:
-                    _scan_root(db, root, cfg, pool, scan_id, full, counts, progress, cache_dir)
+                    _scan_root(
+                        db, root, cfg, pool, scan_id, full, counts, progress, cache_dir, state_dir
+                    )
             extra.update(counts.as_dict())
         elapsed = time.perf_counter() - t0
         if cfg.rescan_minutes and elapsed > cfg.rescan_minutes * 30:
@@ -391,7 +398,13 @@ def scan(
     return counts
 
 
-def adopt_store(cache_dir: Path, old: str, new: str) -> bool:
+def adopt_store(
+    cache_dir: Path,
+    old: str,
+    new: str,
+    state_dir: Path | None = None,
+    fingerprint: str | None = None,
+) -> bool:
     """Give the converted copy of version `old` to version `new` (the same content under a new
     id): its folder is renamed and its manifest updated. Not while a conversion writes into it,
     nor over an existing copy."""
@@ -404,6 +417,20 @@ def adopt_store(cache_dir: Path, old: str, new: str) -> bool:
         src.rename(dst)
     except OSError:
         return False
+    if state_dir is not None:
+        # a conversion queued for the old version (e.g. requeued across the upgrade) publishes
+        # under the new one (review full-2 A-L6)
+        import sqlite3
+
+        jobs = state_dir / "jobs.sqlite"
+        if jobs.exists():
+            with contextlib.suppress(sqlite3.Error), sqlite3.connect(jobs, timeout=30) as con:
+                # the job's own fingerprint too: the converter publishes under its version
+                con.execute(
+                    "UPDATE jobs SET version=?, fingerprint=COALESCE(?, fingerprint) "
+                    "WHERE version=? AND state='queued'",
+                    (new, fingerprint, old),
+                )
     for manifest in dst.glob(f"c*/{MANIFEST}"):
         with contextlib.suppress(OSError, ValueError):
             m = json.loads(manifest.read_text())
@@ -425,6 +452,7 @@ def _scan_root(
     counts: ScanCounts,
     progress: Progress | None = None,
     cache_dir: Path | None = None,
+    state_dir: Path | None = None,
 ) -> None:
     log = get_logger("canopy.catalog")
     counts.roots += 1
@@ -469,7 +497,9 @@ def _scan_root(
             if (
                 previous
                 and cache_dir is not None
-                and adopt_store(cache_dir, previous, row["version"])
+                and adopt_store(
+                    cache_dir, previous, row["version"], state_dir, row.get("fingerprint")
+                )
             ):
                 counts.adopted += 1
             if row.pop("_new"):

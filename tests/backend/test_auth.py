@@ -105,7 +105,7 @@ def test_the_link_never_redirects_to_another_site() -> None:
         "headers": [],
         "query_string": b"token=tok&a=1",
     }
-    r = _remember_token(Request(scope), Response(), "tok")
+    r = _remember_token(Request(scope), Response(), "canopy_token_x", "tok")
     assert r.headers["location"] == "/evil.example/x?a=1"
 
 

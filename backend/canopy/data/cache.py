@@ -39,6 +39,7 @@ from canopy.data.reader import (
     estimate_memory_bytes,
 )
 from canopy.inspect.core import open_h5
+from canopy.inspect.guard import open_zarr
 from canopy.inspect.models import AnnDataInfo, Fingerprint
 from canopy.logs import get_logger, memory_headroom, timed
 
@@ -168,7 +169,7 @@ def open_source(
     if fp.kind == "h5ad":
         f = open_h5(path)
         return LazySource(info, f, f)
-    root: Any = zarr.open_group(path, mode="r")
+    root: Any = open_zarr(path)
     return LazySource(info, root if name is None else root["tables"][name])
 
 

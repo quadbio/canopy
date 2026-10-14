@@ -150,8 +150,11 @@ def run(job_id: int, config_file: Path) -> int:
     except Stop as s:
         code = s.code
         if code == "signalled":
+            # a cancel records its reason before signalling: a signal without one came from
+            # outside (systemd stopping the service, a reboot, kill), so the job runs again at
+            # the next start rather than counting as cancelled (review full-2 A-M3)
             j = db.get(job_id)
-            code = (j.stop_reason if j else None) or "cancelled"
+            code = (j.stop_reason if j else None) or "server_stopped"
         state = (
             "cancelled"
             if code == "cancelled"

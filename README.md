@@ -212,6 +212,7 @@ timings, memory, conversions and the index, and the change from an earlier bundl
 - requests running longer than `server.slow_request_s` (20 s) are logged as `slow_request` every
   30 s while they run, with route and dataset id; scans log `scan_progress` every 30 s, naming the
   file being inspected for longest;
-- `kill -USR1 $(cat <state_dir>/server.lock)` (the server's pid is in its lock file) writes the stack of every
+- `canopy stacks --config …` (it signals the server named in its lock file, after checking it is
+  one) writes the stack of every
   thread to `stacks-<pid>.txt` in the log folder: code locations only, no data. A hard crash
   writes its stack there too. Copy that file with the logs.

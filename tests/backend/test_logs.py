@@ -376,3 +376,24 @@ def test_a_refusal_logs_its_code_as_the_server_answers_it(cfg: Config) -> None:
         raise NeedsConversionError("legacy_layout")
     refused = next(e for e in log_events() if e["event"] == "stage_refused")
     assert refused["code"] == "needs_conversion:legacy_layout"
+
+
+def test_strict_tokenises_every_field_named_like_a_name(cfg: Config) -> None:
+    """`scan_progress.oldest_path` and the job options' `feature_key` were logged in clear at
+    strict, so every bundle after a long scan was refused (review full-2 A-H2)."""
+    cfg.logging.privacy = "strict"
+    setup_logging(cfg.logging, role="test", salt="s", to_console=False)
+    log = get_logger("canopy.test")
+    log.info("scan_progress", oldest_path="patient07_secret/biopsy.h5ad", inspecting=1)
+    log.info("job_queued", options={"x_source": "X", "feature_key": "patient07_gene"})
+    text = "".join(p.read_text() for p in cfg.logging.dir.glob("*.jsonl"))
+    assert "patient07" not in text and "biopsy" not in text
+    assert '"inspecting": 1' in text or '"inspecting":1' in text
+
+
+def test_byte_literals_in_messages_are_redacted() -> None:
+    """A read error quoted file bytes as b'…' at standard (review full-2 A-L2)."""
+    from canopy.privacy import redact_text
+
+    out = redact_text("Stored: b'SECRETBYTES' and 'name'", "standard", "s")
+    assert "SECRETBYTES" not in out and "name'" not in out

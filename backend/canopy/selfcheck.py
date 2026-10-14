@@ -259,6 +259,40 @@ def _roots(cfg: Config, read_mb: int) -> list[Check]:
     return out
 
 
+def _exposure(cfg: Config) -> list[Check]:
+    """Who else could reach the server or read its files (review full-2 A-L7)."""
+    notes = []
+    if cfg.server.host not in ("127.0.0.1", "::1", "localhost"):
+        notes.append(
+            f"server.host is {cfg.server.host}: reachable from other machines, not only "
+            "through the SSH tunnel"
+        )
+    if cfg.server.auth == "none":
+        notes.append('server.auth is "none": anyone who reaches the port sees every dataset')
+    if "*" in cfg.server.allowed_hosts:
+        notes.append('allowed_hosts holds "*": pages of other sites may reach it (DNS rebinding)')
+    if cfg.server.file_access == "group" and cfg.logging.privacy != "strict":
+        notes.append(
+            f'file_access = "group" with {cfg.logging.privacy} logs: the group reads names in '
+            "the logs"
+        )
+    facts = {
+        "loopback": cfg.server.host in ("127.0.0.1", "::1", "localhost"),
+        "auth": cfg.server.auth,
+        "any_host": "*" in cfg.server.allowed_hosts,
+    }
+    if notes:
+        return [Check("warn", "exposure", "; ".join(notes), facts)]
+    return [
+        Check(
+            "ok",
+            "exposure",
+            "only through this machine, with access links; files private to you",
+            facts,
+        )
+    ]
+
+
 def _port(cfg: Config) -> Check:
     err = port_free(cfg.server.host, cfg.server.port)
     if err is None:
@@ -336,6 +370,7 @@ def run(cfg: Config, config: Path, read_mb: int = 256) -> list[Check]:
         lambda: [_folder("job tmp", cfg.jobs.tmp_dir)] if cfg.jobs.tmp_dir else [],
         lambda: _memory(cfg),
         lambda: _roots(cfg, read_mb),
+        lambda: _exposure(cfg),
         lambda: [_port(cfg)],
         lambda: _index_and_cache(cfg),
     ]

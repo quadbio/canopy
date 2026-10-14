@@ -91,6 +91,10 @@ def get_job(request: Request, job: int) -> dict[str, Any]:
 
 @router.post("/api/jobs/{job}/cancel")
 def cancel_job(request: Request, job: int) -> dict[str, Any]:
+    # only with the admin link (owner, full review 2): everyone sees a running conversion, and
+    # one of a dataset runs at a time, so members may start them but not stop them
+    if getattr(request.state, "access", "admin") != "admin":
+        raise ApiError(403, "admin_only", "Only the admin link can cancel a conversion.")
     j = _jobs(request).cancel(job)
     if j is None:
         raise ApiError(404, "unknown_job", "No such job.")

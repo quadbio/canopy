@@ -428,3 +428,30 @@ def test_scan_progress_heartbeat(cfg: Config, data: Path, monkeypatch: pytest.Mo
     _scan(cfg)
     beats = [e for e in log_events() if e["event"] == "scan_progress"]
     assert beats and any(b.get("oldest_path") == "a.h5ad" for b in beats)
+
+
+def test_a_conversion_queued_under_the_old_id_follows_its_dataset(cfg: Config, data: Path) -> None:
+    """A conversion requeued across the upgrade (earlier id) publishes under the new one
+    (review full-2 A-L6)."""
+    from canopy.inspect.core import dataset_id, version_stamp
+    from canopy.jobs.db import DB_FILE as JOBS
+    from canopy.jobs.db import JobsDB
+
+    tiny_h5ad(data / "a.h5ad")
+    _scan(cfg)
+    new = _versions(cfg)["a.h5ad"]
+    old = dataset_id(data / "a.h5ad", version_stamp(data / "a.h5ad"))
+    with _db(cfg).connect() as con:
+        con.execute("UPDATE datasets SET version=?", (old,))
+    (cfg.cache_dir / old / "c0").mkdir(parents=True)
+    (cfg.cache_dir / old / "c0" / "manifest.json").write_text("{}")
+    jobs = JobsDB(cfg.cache_dir / JOBS)
+    jid = jobs.add("convert", "d", old, {}, str(data / "a.h5ad"), json.dumps({"dataset_id": old}))
+    counts = scan(
+        _db(cfg), cfg.data_roots, cfg.catalog, cache_dir=cfg.cache_dir, state_dir=cfg.cache_dir
+    )
+    assert counts.adopted == 1, counts
+    job = jobs.get(jid)
+    assert (
+        job is not None and job.version == new and json.loads(job.fingerprint)["dataset_id"] == new
+    )

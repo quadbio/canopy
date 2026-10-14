@@ -53,8 +53,36 @@ def hdf5_version() -> str | None:
         return None
 
 
+_FS_TIMEOUT_S = 2.0
+_fs_pool: Any = None
+
+
+def within(fn: Any, default: Any, timeout: float = _FS_TIMEOUT_S) -> Any:
+    """`fn()`, or `default` if it takes longer than `timeout`: a stalled network share must not
+    hold up its caller (logging holds its lock while rotating; review full-2 A-M4). A stuck call
+    keeps one of a few worker threads until the share answers."""
+    global _fs_pool
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as Timeout
+
+    if _fs_pool is None:
+        _fs_pool = ThreadPoolExecutor(4, thread_name_prefix="fs-probe")
+    try:
+        return _fs_pool.submit(fn).result(timeout=timeout)
+    except Timeout:
+        return default
+
+
 def filesystem(path: Path) -> dict[str, Any]:
-    """Type and free space of the file system holding `path` (no path in the result)."""
+    """Type and free space of the file system holding `path` (no path in the result), or
+    `{"fstype": None, "free_gb": None, "timeout": True}` when it does not answer in time."""
+    out: dict[str, Any] = within(
+        lambda: _filesystem(path), {"fstype": None, "free_gb": None, "timeout": True}
+    )
+    return out
+
+
+def _filesystem(path: Path) -> dict[str, Any]:
     real = os.path.realpath(path)
     best: Any = None
     try:

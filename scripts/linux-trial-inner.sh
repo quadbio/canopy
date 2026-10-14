@@ -108,6 +108,18 @@ check "an embedding (X_umap)" test "$(api "${auth[@]}" "http://127.0.0.1:8765/ap
 check "a gene (index 0)" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/gene?i=0")" = 200
 check "violin summary ($col × gene 0)" test "$(api "${auth[@]}" "http://127.0.0.1:8765/api/datasets/$id/summary?kind=violin&x=obs:$col&y=gene:0")" = 200
 
+# --- a conversion in a worker process: it finishes; its store and files are private (umask)
+job=$(curl -s "${auth[@]}" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:8765/api/datasets/$id/convert" | pixi run --frozen python -c 'import json,sys; print(json.load(sys.stdin)["id"])' 2>/dev/null)
+state=""
+for _ in $(seq 1 180); do
+  state=$(curl -s "${auth[@]}" "http://127.0.0.1:8765/api/jobs/$job" | pixi run --frozen python -c 'import json,sys; print(json.load(sys.stdin)["state"])' 2>/dev/null)
+  case "$state" in done | failed | cancelled) break ;; esac
+  sleep 1
+done
+check "a conversion finishes (job $job: $state)" test "$state" = done
+check "the converted store is private (700/600)" bash -c "d=\$(ls -d $run/cache/*/c0 | head -1) && test \$(stat -c %a \$d) = 700 && test \$(stat -c %a \$d/manifest.json) = 600"
+check "the member link may not cancel it" test "$(api -X POST -H 'content-type: application/json' -d '{}' -H "authorization: Bearer $(cat "$run/state/member_token" 2>/dev/null || pixi run --frozen canopy link --member --config config.toml | sed 's/.*token=//')" "http://127.0.0.1:8765/api/jobs/$job/cancel")" = 403
+
 # --- 8: diagnostics: a bundle that passes its own check, and a hang dump
 kill -USR1 "$pid"
 sleep 2

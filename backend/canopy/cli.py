@@ -156,10 +156,15 @@ def serve(config: ConfigOpt = None) -> None:
         config=cfg.model_dump(mode="json"),
         build=build_info(),
     )
-    from canopy.jobs.manager import CacheInUseError, LockUnsupportedError
+    from canopy.jobs.manager import CacheInUseError, CacheOwnedError, LockUnsupportedError
 
     try:
         server = create_app(cfg)
+    except CacheOwnedError as e:
+        typer.echo(str(e), err=True)
+        get_logger("canopy.app").error("startup_failed", code="cache_owned")
+        _startup_failure("cache_owned", config, cfg)
+        raise typer.Exit(1) from e
     except CacheInUseError as e:
         typer.echo(str(e), err=True)
         get_logger("canopy.app").error("startup_failed", code="cache_locked")
@@ -175,7 +180,8 @@ def serve(config: ConfigOpt = None) -> None:
         url = link(cfg.server.host, cfg.server.port, access_token(cfg.state))
         if sys.stderr.isatty():  # a terminal (also tmux, screen): only its user sees it
             typer.echo(
-                f"\nCanopy: open {url}\n(Keep this link private: it opens every dataset.)\n",
+                f"\nCanopy: open {url}\n(Keep this admin link private: it opens every dataset. "
+                "For lab members: canopy link --member --config <config>)\n",
                 err=True,
             )
         else:  # output going to a file or journal others may read: no token in it
@@ -382,14 +388,73 @@ def analyse(
         typer.echo(f"wrote {out}")
 
 
+def _server_pid(cfg: Config) -> int:
+    """The running server's process id, from its lock file, only if that process really is a
+    Canopy server (after a crash or a prune the file may name another process; full-2 A-L9)."""
+    import psutil
+
+    try:
+        pid = int((cfg.state / "server.lock").read_text().strip())
+        proc = psutil.Process(pid)
+        cmd = " ".join(proc.cmdline())
+    except (OSError, ValueError, psutil.Error):
+        pid, cmd = 0, ""
+    if not pid or "canopy" not in cmd or " serve" not in cmd:
+        typer.echo("no Canopy server is running for this config", err=True)
+        raise typer.Exit(1)
+    return pid
+
+
+@app.command()
+def stop(config: ConfigOpt = None) -> None:
+    """Stop the server of this config (running conversions run again at its next start)."""
+    import signal
+
+    pid = _server_pid(_load(_required(config)))
+    os.kill(pid, signal.SIGTERM)
+    typer.echo(f"asked the server (pid {pid}) to stop")
+
+
+@app.command()
+def stacks(config: ConfigOpt = None) -> None:
+    """Have the server write the stacks of all its threads to stacks-<pid>.txt in its log folder
+    (code locations only), for a page that hangs."""
+    import signal
+
+    pid = _server_pid(_load(_required(config)))
+    os.kill(pid, signal.SIGUSR1)
+    typer.echo(f"asked the server (pid {pid}) for its stacks: stacks-{pid}.txt in the log folder")
+
+
 @app.command("link")
-def link_cmd(config: ConfigOpt = None) -> None:
-    """Print the access link of this installation (with its token) again."""
+def link_cmd(
+    config: ConfigOpt = None,
+    member: Annotated[
+        bool,
+        typer.Option("--member", help="The member link (everything but cancelling conversions)"),
+    ] = False,
+    new: Annotated[
+        bool,
+        typer.Option(
+            "--new",
+            help="Replace this link's token first: the old link stops working (within seconds)",
+        ),
+    ] = False,
+) -> None:
+    """Print an access link of this installation: the admin link (everything), or with --member
+    the link for lab members. --new revokes the old one (e.g. when someone leaves the lab)."""
+    from canopy.auth import member_token, rotate
+
     cfg = _load(_required(config))
     if cfg.server.auth != "token":
         typer.echo('server.auth is "none": no token needed.')
         return
-    typer.echo(link(cfg.server.host, cfg.server.port, access_token(cfg.state)))
+    which = "member" if member else "admin"
+    if new:
+        rotate(cfg.state, which)
+        typer.echo(f"new {which} link (the old one no longer opens Canopy):", err=True)
+    token = member_token(cfg.state) if member else access_token(cfg.state)
+    typer.echo(link(cfg.server.host, cfg.server.port, token))
 
 
 @app.command()
@@ -419,6 +484,25 @@ def _required(config: Path | None) -> Path:
         )
         raise typer.Exit(2)
     return config
+
+
+def _own_cache(cfg: Config) -> None:
+    """The server's lock (none may run: review full-2 A-M2) and the cache's owner (it must be
+    this installation's: A-M1), or exit with the reason."""
+    from canopy.jobs.manager import (
+        CacheInUseError,
+        CacheOwnedError,
+        LockUnsupportedError,
+        claim_cache,
+        lock_cache,
+    )
+
+    try:
+        lock_cache(cfg.state)
+        claim_cache(cfg.cache_dir, cfg.state)
+    except (CacheInUseError, CacheOwnedError, LockUnsupportedError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
 
 
 def _salt(cfg: Config | None) -> str:
@@ -579,15 +663,24 @@ def catalog_scan(
     full: Annotated[bool, typer.Option(help="Inspect every dataset again")] = False,
     config: ConfigOpt = None,
 ) -> None:
-    """Index the configured data roots once (what the server does in the background)."""
+    """Index the configured data roots once (what the server does in the background). Refuses
+    while a server runs: two scans of one index can delete each other's rows (press Refresh in
+    the browser instead)."""
     from canopy.catalog import CatalogDB, scan
     from canopy.catalog.db import DB_FILE
 
     cfg = _cli_logging(_required(config))
     assert cfg is not None
+    _own_cache(cfg)
     db = CatalogDB(cfg.state / DB_FILE)
     counts = scan(
-        db, cfg.data_roots, cfg.catalog, full=full, trigger="cli", cache_dir=cfg.cache_dir
+        db,
+        cfg.data_roots,
+        cfg.catalog,
+        full=full,
+        trigger="cli",
+        cache_dir=cfg.cache_dir,
+        state_dir=cfg.state,
     )
     typer.echo(json.dumps(counts.as_dict(), indent=2))
 
@@ -615,7 +708,7 @@ def cache_prune(
 
     from canopy.catalog import Catalog
     from canopy.catalog.db import DB_FILE
-    from canopy.jobs.manager import CacheInUseError, LockUnsupportedError, lock_cache, tmp_dirs
+    from canopy.jobs.manager import tmp_dirs
 
     # checked before logging starts: that writes the installation's salt into the state folder
     # (by default the cache folder), which would make the folder this checks for
@@ -635,11 +728,7 @@ def cache_prune(
         raise typer.Exit(1)
     cfg = _cli_logging(config)
     assert cfg is not None
-    try:
-        lock_cache(cfg.state)
-    except (CacheInUseError, LockUnsupportedError) as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1) from e
+    _own_cache(cfg)
     db = Catalog(cfg).db
     with db.connect() as con:
         scanned = con.execute("SELECT COUNT(*) FROM scans WHERE status='done'").fetchone()[0]

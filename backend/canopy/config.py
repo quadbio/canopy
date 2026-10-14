@@ -45,7 +45,7 @@ class ServerConfig(_Strict):
     # rights of the user running the server.
     auth: Literal["token", "none"] = "token"
     # Files the server writes (converted copies, index, logs): "private" (only this user) or
-    # "group" (also readable by the user's group, e.g. a lab sharing one cache).
+    # "group" (also readable by the user's group). A cache belongs to one installation.
     file_access: Literal["private", "group"] = "private"
 
 

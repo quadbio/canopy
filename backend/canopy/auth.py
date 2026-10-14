@@ -1,4 +1,11 @@
-"""Access control: one access token per installation (as in Jupyter).
+"""Access control: two access tokens per installation (as in Jupyter, plus a member link).
+
+The **admin** token (`access_token`) allows everything; the **member** token (`member_token`)
+allows everything but cancelling a conversion (owner, full review 2: one conversion of a dataset
+runs at a time and everyone sees it, so members may start them). Each request is logged with
+which kind of link it came with (`access`), never the token. `canopy token rotate --member` (or
+`--admin`) replaces a token, which revokes its old link; the server reads the token files again
+within `RELOAD_S` seconds.
 
 The server keeps a random token in `<state_dir>/access_token` (only the owner can read it) and
 prints a link with it at start. Opening the link stores the token in a cookie (HttpOnly,
@@ -18,23 +25,41 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
 from starlette.requests import Request
 
 TOKEN_FILE = "access_token"  # noqa: S105 (a file name, not a secret)
+MEMBER_FILE = "member_token"  # noqa: S105
+RELOAD_S = 5.0
 COOKIE = "canopy_token"  # prefix of the cookie's name
 OPEN_PATHS = frozenset({"/api/health"})
 
 
 def access_token(state_dir: Path) -> str:
-    """The installation's token: from `CANOPY_TOKEN`, else the token file (created once)."""
-    env = os.environ.get("CANOPY_TOKEN", "").strip()
+    """The admin token: from `CANOPY_TOKEN`, else the token file (created once)."""
+    return _token(state_dir / TOKEN_FILE, "CANOPY_TOKEN")
+
+
+def member_token(state_dir: Path) -> str:
+    """The member token: from `CANOPY_MEMBER_TOKEN`, else its file (created once)."""
+    return _token(state_dir / MEMBER_FILE, "CANOPY_MEMBER_TOKEN")
+
+
+def rotate(state_dir: Path, which: str) -> str:
+    """A new token for `which` ("admin" or "member"): the old link stops working."""
+    path = state_dir / (TOKEN_FILE if which == "admin" else MEMBER_FILE)
+    path.unlink(missing_ok=True)
+    return _token(path, "")
+
+
+def _token(path: Path, env_name: str) -> str:
+    env = os.environ.get(env_name, "").strip() if env_name else ""
     if env:
         return env
-    state_dir.mkdir(parents=True, exist_ok=True)
-    path = state_dir / TOKEN_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
         token = path.read_text().strip()
         if token:
@@ -47,6 +72,33 @@ def access_token(state_dir: Path) -> str:
         f.write(token + "\n")
     os.chmod(path, 0o600)
     return token
+
+
+class Tokens:
+    """The installation's two tokens, read again every `RELOAD_S` (so a rotation needs no
+    restart)."""
+
+    def __init__(self, state_dir: Path) -> None:
+        self.state_dir = state_dir
+        self._at = -RELOAD_S
+        self._pair = ("", "")
+
+    def get(self) -> tuple[str, str]:
+        now = time.monotonic()
+        if now - self._at >= RELOAD_S:
+            self._pair = (access_token(self.state_dir), member_token(self.state_dir))
+            self._at = now
+        return self._pair
+
+
+def access_of(request: Request, admin: str, member: str) -> str | None:
+    """ "admin" or "member" for the token the request carries (cookie, bearer or query), else
+    None. The cookie is named after the admin token (`cookie_name`), whichever it holds."""
+    got = carried(request, admin).values()
+    for kind, want in (("admin", admin), ("member", member)):
+        if any(secrets.compare_digest(g.encode(), want.encode()) for g in got):
+            return kind
+    return None
 
 
 def link(host: str, port: int, token: str) -> str:
@@ -76,6 +128,10 @@ def valid(request: Request, token: str) -> bool:
     """Whether any token the request carries is the right one."""
     want = token.encode()
     return any(secrets.compare_digest(g.encode(), want) for g in carried(request, token).values())
+
+
+def query_token(request: Request) -> str | None:
+    return request.query_params.get("token")
 
 
 LOGIN_PAGE = """<!doctype html>

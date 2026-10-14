@@ -83,6 +83,15 @@ NAME_FIELDS = frozenset(
         "ignore",
     }
 )
+# ... and any field named like one, so a new field cannot slip through (review full-2 A-H2:
+# `oldest_path`, `feature_key` were logged in clear at strict)
+_NAME_SUFFIXES = ("_path", "_paths", "_name", "_names", "_key", "_file", "_dir", "_column", "_root")
+
+
+def is_name_field(key: str) -> bool:
+    return key in NAME_FIELDS or key.endswith(_NAME_SUFFIXES)
+
+
 _MAX_FRAMES = 30
 _MAX_CHAIN = 3
 _WARNING = re.compile(r"^(?P<file>.*?):(?P<line>\d+): (?P<category>\w+): (?P<message>.*)", re.S)
@@ -190,7 +199,7 @@ def _tokenise(value: Any, salt: str) -> Any:
 def _names(value: Any, salt: str) -> Any:
     if isinstance(value, dict):
         return {
-            k: _tokenise(v, salt) if k in NAME_FIELDS else _names(v, salt) for k, v in value.items()
+            k: _tokenise(v, salt) if is_name_field(k) else _names(v, salt) for k, v in value.items()
         }
     if isinstance(value, list):
         return [_names(v, salt) for v in value]
@@ -263,7 +272,7 @@ def _privacy_processor(privacy: str, salt: str) -> Any:
             ed["event"] = redact_text(str(ed.get("event", "")), level, salt) or "<redacted>"
         if privacy == "strict":
             for k in list(ed):
-                if k in NAME_FIELDS:
+                if is_name_field(k):
                     ed[k] = _tokenise(ed[k], salt)
                 elif isinstance(ed[k], dict | list):
                     ed[k] = _names(ed[k], salt)
@@ -499,9 +508,13 @@ def memory_snapshot(cache_dir: Path | None = None) -> dict[str, Any]:
     cgroup = _cgroup_memory()
     if cgroup:
         snap.update(cgroup)
-    if cache_dir is not None and cache_dir.exists():
-        du = psutil.disk_usage(str(cache_dir))
-        snap["cache_disk_free_gb"] = round(du.free / 2**30, 1)
+    if cache_dir is not None:
+        from canopy.environment import within
+
+        # with a time limit: a stalled share must not stall the sampler or logging (A-M4)
+        du = within(lambda: psutil.disk_usage(str(cache_dir)) if cache_dir.exists() else None, None)
+        if du is not None:
+            snap["cache_disk_free_gb"] = round(du.free / 2**30, 1)
     return snap
 
 

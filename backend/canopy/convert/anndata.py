@@ -7,6 +7,7 @@ var are read whole (they are small next to X), embeddings and X in blocks.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -44,6 +45,7 @@ from canopy.convert.matrix import ConversionError, CscWriter, GeneStats
 from canopy.data.genes import gene_list
 from canopy.data.reader import embedding_dims, parse_colors
 from canopy.inspect.core import dataset_id, open_h5, version_stamp
+from canopy.inspect.guard import open_zarr
 from canopy.inspect.models import AnnDataInfo, Fingerprint, MatrixInfo
 from canopy.logs import get_logger, timed
 
@@ -131,7 +133,7 @@ def _open(path: Path, kind: str) -> tuple[Any, Any]:
     if kind == "h5ad":
         f = open_h5(path)  # lock and truncation errors with recognisable codes
         return f, f
-    return zarr.open_group(path, mode="r"), None
+    return open_zarr(path), None
 
 
 def _matrix_node(root: Any, info: AnnDataInfo, x_source: str) -> tuple[Any, str, list[int], bool]:
@@ -330,14 +332,41 @@ def write_table(
     )
 
 
+def store_size(store: Path) -> int:
+    """Bytes of a converted store: from `<store>.size`, written when it was published (walking
+    every file of every store is slow on network storage; review full-2 A-L5), else measured
+    once and written."""
+    side = store.with_name(store.name + ".size")
+    try:
+        return int(side.read_text())
+    except (OSError, ValueError):
+        pass
+    n = _walk_size(store)
+    with contextlib.suppress(OSError):
+        side.write_text(str(n))
+    return n
+
+
+def _walk_size(path: Path) -> int:
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            with contextlib.suppress(OSError):
+                total += os.stat(os.path.join(root, f)).st_size
+    return total
+
+
 def _publish(tmp: Path, final: Path) -> None:
     """Move the new store in place; an existing one is renamed aside first and removed after,
-    so readers never see a half-replaced store."""
+    so readers never see a half-replaced store. Its size is kept beside it (`store_size`)."""
+    size = _walk_size(tmp)
     old = None
     if final.exists():
         old = final.parent / f"{final.name}.old-{uuid.uuid4().hex[:8]}"
         final.rename(old)
     tmp.rename(final)
+    with contextlib.suppress(OSError):
+        final.with_name(final.name + ".size").write_text(str(size))
     if old is not None:
         shutil.rmtree(old, ignore_errors=True)
 

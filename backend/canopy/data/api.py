@@ -48,6 +48,7 @@ from canopy.data.reader import (
 )
 from canopy.errors import ApiError
 from canopy.inspect.core import version_stamp
+from canopy.inspect.guard import OutsideDataError
 from canopy.inspect.models import AnnDataInfo, Fingerprint, MatrixInfo
 from canopy.logs import get_logger, timed
 
@@ -194,7 +195,24 @@ def _with_source[T](
             )
             cache.drop_version(version)
             catalog.refresh()
+        except Exception as e:
+            if _outside(e):  # also when zarr wraps it (review full-2 A-H1)
+                raise ApiError(
+                    409, "links_outside", "This dataset points at files outside itself."
+                ) from e
+            raise
     raise AssertionError("unreachable")
+
+
+def _outside(e: BaseException | None) -> bool:
+    """Whether a refusal to read outside the dataset is behind `e` (zarr wraps it)."""
+    seen = 0
+    while e is not None and seen < 10:
+        if isinstance(e, OutsideDataError):
+            return True
+        e = e.__cause__ or e.__context__
+        seen += 1
+    return False
 
 
 def _etag(parts: list[str]) -> str:

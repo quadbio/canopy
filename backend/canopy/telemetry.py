@@ -96,6 +96,14 @@ FIELD_SHAPES = {
     "view": re.compile(r"v[a-z0-9]{1,12}"),
     "dataset": re.compile(r"[0-9a-f]{16}"),
     "layer": re.compile(r"[A-Za-z0-9]*Layer|none"),
+    # the rest of the program's own words (review full-2 A-L3)
+    "build": re.compile(r"[0-9a-f]{6,40}|unknown|dev"),
+    "type": re.compile(r"[A-Za-z][A-Za-z0-9_]{0,40}"),  # a view type or an error class
+    "mode": re.compile(r"[a-z][a-z_ ]{0,20}"),
+    "status": re.compile(r"[a-z0-9_]{1,20}"),
+    "fit": re.compile(r"[a-z_]{1,20}"),
+    "x_source": re.compile(r"X|layer"),
+    "browser": re.compile(r"[A-Za-z]{1,20} \d{1,4}|unknown"),
 }
 RATE_PER_MINUTE = 600
 ADDRESS_PER_MINUTE = 1_500

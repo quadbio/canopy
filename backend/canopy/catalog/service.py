@@ -57,6 +57,7 @@ class Catalog:
                 full=full,
                 trigger=trigger,
                 cache_dir=self.cfg.cache_dir,
+                state_dir=self.cfg.state,
             )
         except Exception as e:  # logged in full by scan(); the scheduler must survive
             self.log.warning("catalog_scan_aborted", error=type(e).__name__)

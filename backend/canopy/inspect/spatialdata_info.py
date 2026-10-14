@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from canopy.inspect.anndata_info import anndata_info
+from canopy.inspect.guard import OutsideDataError
 from canopy.inspect.models import (
     CoordinateTransform,
     ElementError,
@@ -30,6 +32,8 @@ def _guarded[T](
     """Describe one element; a failure is recorded and the inspection continues."""
     try:
         return fn()
+    except OutsideDataError:
+        raise  # the whole dataset is refused, not one element
     except Exception as e:
         errors.append(
             ElementError(
@@ -81,10 +85,18 @@ def _image(node: Node) -> ImageInfo | None:
 def _parquet_files(element_dir: Path, name: str) -> list[Path]:
     p = element_dir / name
     if p.is_file():
-        return [p]
-    if p.is_dir():
-        return sorted(f for f in p.rglob("*.parquet") if f.is_file())
-    return []
+        files = [p]
+    elif p.is_dir():
+        files = sorted(f for f in p.rglob("*.parquet") if f.is_file())
+    else:
+        return []
+    # the store is <store>/<kind>/<element>: none of its files may lead out of it (full-2 A-H1)
+    store = os.path.realpath(element_dir.parent.parent)
+    for f in files:
+        real = os.path.realpath(f)
+        if not real.startswith(store + os.sep):
+            raise OutsideDataError
+    return files
 
 
 def _parquet(element_dir: Path, filename: str, attrs: dict[str, Any]) -> ParquetInfo:

@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import fcntl
+import json
 import os
 import shutil
 import signal
@@ -91,6 +92,40 @@ def lock_cache(cache_dir: Path) -> None:
     _LOCKS[key] = f
 
 
+OWNER_FILE = "canopy-owner.json"
+
+
+class CacheOwnedError(RuntimeError):
+    """The cache folder belongs to another installation (its own state folder)."""
+
+
+def claim_cache(cache_dir: Path, state: Path) -> None:
+    """One installation per cache: the cache names its owner (the real path of its state folder
+    and the host). Another installation's start-up, prune or scan would delete or rename its
+    work (review full-2 A-M1). A file, not a lock: locks often fail on network storage, where
+    the cache usually is."""
+    import socket
+
+    me = {"state": os.path.realpath(state), "host": socket.gethostname()}
+    f = cache_dir / OWNER_FILE
+    try:
+        owner = json.loads(f.read_text())
+    except FileNotFoundError:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        part = f.with_name(f.name + f".{os.getpid()}")
+        part.write_text(json.dumps(me))
+        part.replace(f)
+        return
+    except (OSError, ValueError):
+        return  # unreadable: not ours to judge (the lock in the state folder still applies)
+    if owner.get("state") != me["state"] or owner.get("host") != me["host"]:
+        raise CacheOwnedError(
+            f"the cache folder {cache_dir} belongs to another Canopy installation (state folder "
+            f"{owner.get('state')} on {owner.get('host')}): give this one its own cache_dir, or "
+            f"delete {f} if that installation is gone"
+        )
+
+
 def tmp_dirs(cache_dir: Path, tmp_dir: Path | None) -> list[Path]:
     """Every temporary store, spill folder and replaced store in the cache."""
     out = list(cache_dir.glob("*/c*.tmp-*")) + list(cache_dir.glob("*/c*.old-*"))
@@ -118,6 +153,7 @@ class JobManager:
     ) -> None:
         self.cfg = cfg
         lock_cache(cfg.state)
+        claim_cache(cfg.cache_dir, cfg.state)
         self.db = JobsDB(cfg.state / DB_FILE, wal=wal)
         self.on_done = on_done
         self.log = get_logger("canopy.jobs")
@@ -372,10 +408,10 @@ class JobManager:
         cap = self.cfg.jobs.stores_max_gb
         if cap is None:
             return False
-        from canopy.convert.anndata import store_disk_estimate
+        from canopy.convert.anndata import store_disk_estimate, store_size
 
         used = sum(
-            _size(d)
+            store_size(d)
             for d in self.cfg.cache_dir.glob("*/c[0-9]*")
             if d.is_dir() and "." not in d.name
         )

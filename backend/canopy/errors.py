@@ -57,6 +57,9 @@ REFUSAL_CODES = frozenset(
         "host_not_allowed",
         "json_required",
         "internal_error",
+        "links_outside",
+        "admin_only",
+        "dataset_busy",
         "error",  # the browser's code for a failure without one
     }
 )

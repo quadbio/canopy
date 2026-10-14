@@ -136,17 +136,18 @@ The server prints the link only to a terminal. Started any other way (output int
 service's journal), it prints no token, because others may read those; print the link with
 `pixi run --frozen canopy link --config config.toml` instead.
 
-Optionally, as a user service, which also stops conversion workers with the server
-(`KillMode=control-group`):
+Optionally, as a user service. `KillMode=mixed` lets the server stop its conversion workers
+itself (they then run again at the next start); anything left is stopped after it:
 
 ```bash
-systemd-run --user --unit canopy --property KillMode=control-group \
+systemd-run --user --unit canopy --property KillMode=mixed \
   --working-directory "$PWD" "$PWD/.pixi/envs/default/bin/canopy" serve --config "$PWD/config.toml"
 systemctl --user stop canopy                      # stop
 ```
 
-A server started without a terminal stops with `kill $(cat <state_dir>/server.lock)` (the
-server's process id is in that file).
+A server started without a terminal stops with `pixi run --frozen canopy stop --config
+config.toml` (it checks that the process in the lock file is this Canopy server). Conversions
+running at that moment are not lost: they start again with the server.
 
 ## 7. Open it from your laptop
 
@@ -161,6 +162,27 @@ Then open the link from step 6 in Chrome, Firefox or Safari on the laptop (it st
 Two Canopy servers on the same laptop address (e.g. ports 8765 and 8766) each keep their own
 cookie; an old link's cookie never blocks a new link.
 `canopy link --config config.toml` prints the link again at any time.
+
+### Links for lab members
+
+The link printed at start is the **admin** link: it can do everything, including cancelling a
+conversion. Give lab members the **member** link instead; it can do everything else (also start
+conversions: a dataset converts once at a time, and everyone sees it running):
+
+```bash
+pixi run --frozen canopy link --member --config config.toml
+```
+
+The log records which kind of link each request came with, never the link itself. When someone
+should no longer have access (e.g. leaves the lab), replace the member link; the old one stops
+working within seconds, and the others need the new one:
+
+```bash
+pixi run --frozen canopy link --member --new --config config.toml
+```
+
+(`--new` without `--member` replaces the admin link the same way.) Whoever has either link sees
+every dataset in the data roots: data that only some people may see needs its own installation.
 
 ## 8. When something goes wrong
 
@@ -186,7 +208,7 @@ cookie; an old link's cookie never blocks a new link.
    the bundle uses), you may let it through after reading where it appears:
    `--accept-name NAME` (repeatable); `MANIFEST.md` then says how many names were let through,
    never which.
-3. A page that hangs: `kill -USR1 $(cat <state_dir>/server.lock)` writes the server's stacks to
+3. A page that hangs: `pixi run --frozen canopy stacks --config config.toml` writes the server's stacks to
    the log folder; then make the bundle.
 4. The developer may name tokens like `h_fb26d42600`. On the host,
    `canopy token find h_fb26d42600 --config config.toml` tells you which file or column it is;
@@ -286,7 +308,8 @@ what you do, then make the bundle (section 8) and send it with this list.
 
 A converted copy belongs to one version of a dataset: its data root's name, its path inside the
 root, and its file times. Moving or remounting the **whole data folder** (the root's path in
-`config.toml` changes, its name stays) keeps every version and every copy. When a dataset
+`config.toml` changes, its name stays) keeps every version and every copy. Renaming a root
+(its `name` in `config.toml`) gives all its datasets new versions: they are converted again. When a dataset
 changes, or is **moved or renamed inside the root**, the next scan indexes it as a new version,
 and it is converted again when you ask; the copy of the old version stays in the cache folder,
 unused.

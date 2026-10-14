@@ -88,6 +88,7 @@ from canopy.convert.anndata import (
 )
 from canopy.convert.matrix import ConversionError
 from canopy.inspect.core import dataset_id, version_stamp
+from canopy.inspect.guard import links_outside, open_zarr
 from canopy.inspect.models import Fingerprint
 from canopy.logs import get_logger, timed
 
@@ -898,6 +899,10 @@ def convert_spatialdata(
     t0 = time.monotonic()
     version = fp.dataset_id
     stamp = version_stamp(src)
+    # spatialdata opens its files itself (images, labels, parquet): a symlink out of the store
+    # would be read and copied into the cache (review full-2 A-H1)
+    if links_outside(src):
+        raise ConversionError("links_outside", "the store links to files outside itself")
     if dataset_id(src, stamp, fp.identity) != version:
         raise ConversionError("source_changed", "the store changed since it was inspected")
     final = store_dir(cache_dir, version)
@@ -949,7 +954,7 @@ def _convert(
             points=len(sdata.points),
             tables=len(sdi.tables),
         )
-    src_root: Any = zarr.open_group(src, mode="r")
+    src_root: Any = open_zarr(src)
     systems_of: dict[str, set[str]] = {
         n: set(_affines(e)) for kind in (sdata.shapes, sdata.labels) for n, e in kind.items()
     }

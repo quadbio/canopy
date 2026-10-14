@@ -23,8 +23,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import canopy
-from canopy.auth import LOGIN_PAGE, OPEN_PATHS, access_token, carried, cookie_name
-from canopy.auth import valid as auth_valid
+from canopy.auth import LOGIN_PAGE, OPEN_PATHS, Tokens, access_of, carried, cookie_name
 from canopy.build import build_id
 from canopy.catalog import Catalog
 from canopy.catalog.api import router as catalog_router
@@ -95,6 +94,13 @@ class SpaStaticFiles(StaticFiles):
         return response
 
 
+# Requests for one dataset (or one converted store) waiting at once: beyond this the next is
+# refused (503 dataset_busy), so a stalled read on one dataset cannot take every worker thread
+# from all the others (review full-2 A-M6).
+PER_DATASET = 24
+_DATASET_PATH = re.compile(r"^/api/(?:datasets|stores)/([^/]+)/")
+
+
 class InFlight:
     """Requests being served, so a hang shows up in the log while it lasts."""
 
@@ -102,15 +108,31 @@ class InFlight:
         self._lock = threading.Lock()
         self._items: dict[str, tuple[float, Scope]] = {}
         self._reported: dict[str, float] = {}
+        self._per: dict[str, int] = {}
+        self._key: dict[str, str] = {}
 
-    def start(self, request_id: str, scope: Scope) -> None:
+    def start(self, request_id: str, scope: Scope) -> bool:
+        """False when the request's dataset already has PER_DATASET requests waiting."""
+        m = _DATASET_PATH.match(str(scope.get("path", "")))
         with self._lock:
+            if m:
+                key = m.group(1)
+                if self._per.get(key, 0) >= PER_DATASET:
+                    return False
+                self._per[key] = self._per.get(key, 0) + 1
+                self._key[request_id] = key
             self._items[request_id] = (time.monotonic(), scope)
+        return True
 
     def end(self, request_id: str) -> None:
         with self._lock:
             self._items.pop(request_id, None)
             self._reported.pop(request_id, None)
+            key = self._key.pop(request_id, None)
+            if key is not None:
+                self._per[key] -= 1
+                if not self._per[key]:
+                    del self._per[key]
 
     def report_slow(self, threshold_s: float, every_s: float = 30.0) -> None:
         now = time.monotonic()
@@ -171,13 +193,43 @@ def _route(request: Request) -> str:
     return str(getattr(route, "path", None) or "<static>")
 
 
-def _authorised(request: Request, token: str) -> bool:
-    return request.url.path in OPEN_PATHS or auth_valid(request, token)
+class _RefusalLog:
+    """Requests without a valid link are logged up to PER_MINUTE a minute, then summed (anyone on
+    the host can reach the port: unlimited lines would rotate the log history away; A-L1)."""
+
+    PER_MINUTE = 20
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._minute = 0
+        self._n = 0
+        self._dropped = 0
+
+    def allow(self) -> bool:
+        minute = int(time.time() // 60)
+        with self._lock:
+            if minute != self._minute:
+                if self._dropped:
+                    get_logger("canopy.app").warning(
+                        "auth_refused_summary", dropped=self._dropped, minute_of=self._minute
+                    )
+                self._minute, self._n, self._dropped = minute, 0, 0
+            self._n += 1
+            if self._n > self.PER_MINUTE:
+                self._dropped += 1
+                return False
+            return True
+
+
+_refusals = _RefusalLog()
 
 
 def _auth_required(request: Request, token: str) -> Response:
     # which kinds of token came (never their values): a stale cookie, a wrong link or none
     got = carried(request, token)
+    request.state.quiet = not _refusals.allow()
+    if request.state.quiet:
+        return _auth_reply(request)
     get_logger("canopy.app").info(
         "auth_refused",
         path_kind="api" if request.url.path.startswith("/api/") else "page",
@@ -185,6 +237,10 @@ def _auth_required(request: Request, token: str) -> Response:
         had_bearer="bearer" in got,
         had_query="query" in got,
     )
+    return _auth_reply(request)
+
+
+def _auth_reply(request: Request) -> Response:
     if request.url.path.startswith("/api/"):
         return error_response(
             request,
@@ -195,7 +251,7 @@ def _auth_required(request: Request, token: str) -> Response:
     return HTMLResponse(LOGIN_PAGE, status_code=401)
 
 
-def _remember_token(request: Request, response: Response, token: str) -> Response:
+def _remember_token(request: Request, response: Response, name: str, token: str) -> Response:
     """The link's token becomes a cookie; a page request is redirected to the address without
     it, so the token does not stay in the address bar or the browser history."""
     if not request.url.path.startswith("/api/") and request.method == "GET":
@@ -204,7 +260,7 @@ def _remember_token(request: Request, response: Response, token: str) -> Respons
         url = "/" + str(request.scope["path"]).lstrip("/") + (f"?{urlencode(rest)}" if rest else "")
         response = RedirectResponse(url, status_code=303)
     response.set_cookie(
-        cookie_name(token),
+        name,
         token,
         httponly=True,
         samesite="strict",
@@ -234,12 +290,19 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
     inflight = InFlight()
     housekeeper = Housekeeper(inflight, datasets, cfg.server.slow_request_s)
     allowed = {h.lower() for h in cfg.server.allowed_hosts}
-    token = access_token(cfg.state) if cfg.server.auth == "token" else None
+    tokens = Tokens(cfg.state) if cfg.server.auth == "token" else None
+
+    started_env: dict[str, Any] = {}
 
     def log_environment(event: str = "startup") -> None:
+        # on log rotation the start-up facts are logged again as they were: rotation holds the
+        # logging lock, and looking at the shares again could hang on a stalled one (A-M4)
+        if event == "startup" or not started_env:
+            started_env.clear()
+            started_env.update(environment_snapshot(cfg))
         log.info(
             event,
-            **environment_snapshot(cfg),
+            **started_env,
             data_roots=[r.name for r in cfg.data_roots],
             allowed_hosts=sorted(allowed),
             auth=cfg.server.auth,
@@ -274,6 +337,11 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # worker threads for the synchronous routes (anyio's default is 40); with PER_DATASET
+        # one slow dataset leaves most of them to the others (review full-2 A-M6)
+        import anyio.to_thread
+
+        anyio.to_thread.current_default_thread_limiter().total_tokens = 64
         log_environment()
         # Every new log file starts with the environment, so a rotated log is self-contained.
         set_rollover_hook(lambda: log_environment("environment"))
@@ -323,20 +391,32 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         t0 = time.perf_counter()
-        inflight.start(request_id, request.scope)
+        admitted = inflight.start(request_id, request.scope)
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
+        access: str | None = None
         try:
-            if "*" not in allowed and host not in allowed:
+            if not admitted:
+                response: Response = error_response(
+                    request,
+                    503,
+                    "dataset_busy",
+                    "This dataset has many requests waiting (slow storage?); try again shortly.",
+                )
+            elif "*" not in allowed and host not in allowed:
                 # A page on another site that resolves its own name to this machine (DNS
                 # rebinding) arrives with a foreign Host header.
-                response: Response = error_response(
+                response = error_response(
                     request,
                     400,
                     "host_not_allowed",
                     "This host name is not allowed; add it to server.allowed_hosts.",
                 )
-            elif token is not None and not _authorised(request, token):
-                response = _auth_required(request, token)
+            elif (
+                tokens is not None
+                and (access := access_of(request, *tokens.get())) is None
+                and request.url.path not in OPEN_PATHS
+            ):
+                response = _auth_required(request, tokens.get()[0])
             elif request.method in ("POST", "PUT", "DELETE") and (
                 request.headers.get("content-type", "").split(";")[0].strip().lower()
                 != "application/json"
@@ -347,9 +427,15 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                     request, 415, "json_required", "Send this request as application/json."
                 )
             else:
+                # who may do what: "admin" (everything), "member" (not cancelling others'
+                # conversions); without access tokens (auth = "none") everyone is admin
+                request.state.access = access if tokens is not None else "admin"
                 response = await call_next(request)
-                if token is not None and request.query_params.get("token"):
-                    response = _remember_token(request, response, token)
+                link_token = request.query_params.get("token")
+                if tokens is not None and link_token and request.state.access:
+                    response = _remember_token(
+                        request, response, cookie_name(tokens.get()[0]), link_token
+                    )
         except Exception:
             # Every failure still gets a status, a duration and the request id in the reply,
             # so a user's screenshot of the error can be matched to the log.
@@ -383,7 +469,7 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                     ms_req,
                     log,
                 )
-            else:
+            elif not getattr(request.state, "quiet", False):
                 log.info(
                     "request",
                     method=request.method,
@@ -392,6 +478,7 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
                     dataset_id=(request.scope.get("path_params") or {}).get("id"),
                     status=response.status_code,
                     code=getattr(request.state, "error_code", None),
+                    access=getattr(request.state, "access", None),
                     bytes=response.headers.get("content-length"),
                     ms=round((time.perf_counter() - t0) * 1000, 2),
                 )
@@ -403,9 +490,16 @@ def create_app(cfg: Config, *, background: bool = True) -> FastAPI:
         response.headers["server-timing"] = f"total;dur={ms}"
         return response
 
+    # async: answered on the event loop, even while every worker thread waits on a stalled
+    # share (review full-2 A-M6)
     @app.get("/api/health")
-    def health() -> dict[str, object]:
+    async def health() -> dict[str, object]:
         return {"status": "ok", "version": canopy.__version__}
+
+    @app.get("/api/me")
+    async def me(request: Request) -> dict[str, object]:
+        """Which link this browser came with: "admin" or "member" (what it may do)."""
+        return {"access": getattr(request.state, "access", None)}
 
     @app.get("/api/version")
     def version_info() -> dict[str, object]:

@@ -8,9 +8,9 @@ import os
 from pathlib import Path
 
 import h5py
-import zarr
 
 from canopy.inspect.anndata_info import anndata_info
+from canopy.inspect.guard import check_h5, open_zarr
 from canopy.inspect.models import AnnDataInfo, DatasetKind, Fingerprint, Notice
 from canopy.inspect.nodes import Node
 from canopy.inspect.spatialdata_info import spatialdata_info
@@ -134,7 +134,7 @@ def open_h5(path: Path) -> h5py.File:
     try:
         # no locking flag here: HDF5_USE_FILE_LOCKING=FALSE (canopy/__init__.py) applies to
         # this and to libraries' own opens (anndata) alike
-        return h5py.File(path, "r")
+        f = h5py.File(path, "r")
     except OSError as e:
         msg = str(e).lower()
         if "truncated file" in msg:
@@ -142,6 +142,12 @@ def open_h5(path: Path) -> h5py.File:
         if any(m in msg for m in _LOCK_ERRORS):
             raise OSError("hdf5_lock: the file cannot be opened because of a file lock") from e
         raise
+    try:
+        check_h5(f)  # nothing outside the file is read through it (review full-2 A-H1)
+    except BaseException:
+        f.close()
+        raise
+    return f
 
 
 def inspect_path(
@@ -180,11 +186,9 @@ def inspect_path(
                     raise ValueError("not_anndata")  # an HDF5 file, but not AnnData
                 fp.anndata = anndata_info(Node(f))
         elif kind == "anndata_zarr":
-            fp.anndata = anndata_info(Node(zarr.open_group(path, mode="r")))
+            fp.anndata = anndata_info(Node(open_zarr(path)))
         else:
-            fp.spatialdata = spatialdata_info(
-                Node(zarr.open_group(path, mode="r")), path, fp.errors
-            )
+            fp.spatialdata = spatialdata_info(Node(open_zarr(path)), path, fp.errors)
         fp.warnings = _warnings(fp)
         extra["version"] = fp.dataset_id  # the content version (the catalog id is `dataset_id`)
         extra["size_bytes"] = size
