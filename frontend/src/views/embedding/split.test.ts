@@ -5,12 +5,13 @@ import { boundsOf, splitGroups, yDown } from '.';
 describe('splitGroups', () => {
   const pos = Float32Array.from([0, 0, 1, 1, 2, 2, 3, 3, 4, 4]);
 
-  it('groups cells per category in natural label order, NA last, empty categories left out', () => {
+  it("groups cells per category in the column's own order, NA last, empty categories left out", () => {
+    // the order of .cat.categories (e.g. stages), not by name (owner, 2026-10-15)
     const g = splitGroups([1, 0, 1, -1, 1], ['s10', 's2', 'empty'], null, pos);
-    expect(g.map((x) => x.label)).toEqual(['s2', 's10', 'NA']);
-    expect(Array.from(g[0].cells)).toEqual([0, 2, 4]); // code 1 = s2
-    expect(Array.from(g[1].cells)).toEqual([1]);
-    expect(g[0].bounds).toEqual([0, 0, 4, 4]);
+    expect(g.map((x) => x.label)).toEqual(['s10', 's2', 'NA']);
+    expect(Array.from(g[0].cells)).toEqual([1]); // code 0 = s10
+    expect(Array.from(g[1].cells)).toEqual([0, 2, 4]); // code 1 = s2
+    expect(g[1].bounds).toEqual([0, 0, 4, 4]);
     expect(g[2].id).toBe('na');
   });
 

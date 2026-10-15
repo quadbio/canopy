@@ -74,7 +74,6 @@ export const useLinked = create<LinkedStore>()((set) => ({
   },
 }));
 
-export const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** The categories of all views (natural order) and their preset colours, if those agree. */
 export function groupCategories(entries: LinkedEntry[]): {
@@ -101,7 +100,8 @@ export function groupCategories(entries: LinkedEntry[]): {
       byColour.set(hex, l);
     });
   }
-  const labels = [...seen].sort((a, b) => NATURAL.compare(a, b));
+  // the first dataset's order, then categories only later datasets have, in theirs
+  const labels = [...seen];
   return { labels, given: anyGiven && !conflict ? byLabel : null, conflict };
 }
 
@@ -196,7 +196,7 @@ export function mergeLegends(
     labels,
     colours,
     counts,
-    order: labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b])),
+    order: labels.map((_, i) => i), // the order the members' categories come in (as one legend)
     extended: cats.some((l) => l.extended),
     custom,
     ...(cats.some((l) => l.regenerated) ? { regenerated: true } : {}),

@@ -662,3 +662,24 @@ def test_a_new_store_is_described_once_by_requests_arriving_together(
     for t in threads:
         t.join()
     assert out == ["described"] * 4 and len(calls) == 1
+
+
+def test_categories_keep_their_own_order(cfg: Config) -> None:
+    """`.cat.categories` is often meaningful (stages, time points): meta keeps the file's order,
+    whatever it is (owner, 2026-10-15). (anndata stores text columns as categories itself.)"""
+    import pandas as pd
+
+    a = ad.AnnData(X=np.zeros((4, 2), np.float32))
+    a.obs["stage"] = pd.Categorical(
+        ["mid", "late", "early", "mid"], categories=["early", "mid", "late"]
+    )
+    a.obs["sample"] = ["s10", "s2", "s10", "s1"]
+    a.write_h5ad(cfg.data_roots[0].path / "o.h5ad")
+    c = client_for(cfg)
+    id = entry_id("data", "o.h5ad")
+    m = c.get(f"/api/datasets/{id}/meta").json()
+    stage = next(col for col in m["obs"] if col["name"] == "stage")
+    assert stage["categories"] == ["early", "mid", "late"]
+    sample = next(col for col in m["obs"] if col["name"] == "sample")
+    stored = list(ad.read_h5ad(cfg.data_roots[0].path / "o.h5ad").obs["sample"].cat.categories)
+    assert sample["categories"] == stored

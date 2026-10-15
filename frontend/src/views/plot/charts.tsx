@@ -30,7 +30,6 @@ export function useBox<T extends HTMLElement>() {
 export const MARGIN = { left: 56, right: 16, top: 16, bottom: 72 };
 const ABOVE_ROW = 30; // the row of "above 0" dots and numbers above violins
 const LABEL_CHARS = 22;
-const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** A long label shortened in the middle, so labels that differ at the end stay apart. */
 export function shortLabel(c: string, max = LABEL_CHARS): string {
@@ -46,8 +45,9 @@ export function categoryAxisHeight(labels: string[], slot: number): number {
   return Math.min(Math.max(48, Math.round(chars * 6.5 * Math.sin((40 * Math.PI) / 180)) + 36), 140);
 }
 
-/** Indices of labels in natural order (as the legends sort: 2 before 10). */
-const naturalOrder = (labels: string[]) => labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b]));
+/** Indices of labels in their column's own order, as the legend lists them (a category
+ * column's categories; text columns come sorted). */
+const columnOrder = (labels: string[]) => labels.map((_, i) => i);
 
 /** Ticks of a value axis in its own units: plain, or for log1p-transformed values. */
 function valueTicks(lo: number, hi: number, log1p: boolean): { at: number; label: string }[] {
@@ -136,7 +136,7 @@ export function Violins({
   zeroSpike: boolean;
 }) {
   const [ref, box] = useBox<HTMLDivElement>();
-  const shown = naturalOrder(summary.categories)
+  const shown = columnOrder(summary.categories)
     .map((i) => ({ c: summary.categories[i], g: summary.groups[i] }))
     .filter((x) => !hidden.has(x.c) && x.g.n > 0);
   const plotW = Math.max(box.width - MARGIN.left - MARGIN.right, 50);
@@ -264,10 +264,10 @@ export function StackedBars({
   proportions: boolean;
 }) {
   const [ref, box] = useBox<HTMLDivElement>();
-  const cols = naturalOrder(summary.columns)
+  const cols = columnOrder(summary.columns)
     .map((j) => ({ c: summary.columns[j], j }))
     .filter((x) => !hidden.has(x.c));
-  const rows = naturalOrder(summary.rows)
+  const rows = columnOrder(summary.rows)
     .map((i) => ({ r: summary.rows[i], total: cols.reduce((s, { j }) => s + summary.counts[i][j], 0), i }))
     .filter((x) => x.total > 0 && !hiddenRows.has(x.r));
   const plotW = Math.max(box.width - MARGIN.left - MARGIN.right, 50);

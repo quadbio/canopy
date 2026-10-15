@@ -74,7 +74,6 @@ export type ColourSettings = Pick<
 
 export const BASE_RGB: RGB = [80, 110, 160];
 // Legend order: 2 before 10, "cluster 9" before "cluster 10" (codes keep the stored order).
-export const NATURAL = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 // Columns with more categories than this are listed but not chosen by default.
 const DEFAULT_MAX_CATEGORIES = 60;
 // Columns with more categories are neither coloured by nor plotted (the owner's limit: real
@@ -334,10 +333,10 @@ export function useColouring(
     if (column.kind === 'string') return labelsQ.data?.categories ?? null;
     return column.categories;
   }, [column, values, labelsQ.data, tooMany]);
-  const order = useMemo(
-    () => (labels ? labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b])) : null),
-    [labels],
-  );
+  // the column's own order: a category column's `.cat.categories` (often meaningful: stages,
+  // time points), a text column's sorted values (as the server sends them, as scanpy orders
+  // them), false before true (owner, 2026-10-15: legends were re-sorted by name)
+  const order = useMemo(() => (labels ? labels.map((_, i) => i) : null), [labels]);
 
   // Category colours: by name (a stable hash of the label, see colour/slots.ts), or the
   // dataset's own (uns['<col>_colors'], the default whenever it has them; for a text column

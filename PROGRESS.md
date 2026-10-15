@@ -461,3 +461,8 @@ Resume rule: read this file, then continue with the first unchecked step.
   space). Embeddings are now ranked: UMAP, t-SNE, other visualisation methods (draw_graph/FA2,
   PHATE, MDE, TriMap, PaCMAP, densMAP, SPRING), other 2-column embeddings, then the rest; within a
   rank the usual name (X_umap, X_tsne), 2 columns, shorter names first (`embedding_rank`).
+- 2026-10-15 Owner: legends listed categories by name. Legends, Split-by panels, violins and
+  composition bars now keep the column's own order: a category column's `.cat.categories`
+  (stages, time points), text columns sorted as the server sends them (as scanpy orders them),
+  false before true; a linked group's legend keeps the first dataset's order, then categories
+  only later datasets have.

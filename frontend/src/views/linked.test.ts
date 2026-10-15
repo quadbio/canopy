@@ -172,10 +172,11 @@ describe('colours of a linked group', () => {
     const m = mergeLegends([leg(['T', 'B'], [5, 1]), undefined, leg(['NK', 'T'], [2, 3])])!;
     expect(m.kind).toBe('categories');
     if (m.kind !== 'categories') return;
+    // the first legend's order, then what only later ones have (owner, 2026-10-15)
     expect(m.order.map((i) => [m.labels[i], m.counts[i]])).toEqual([
+      ['T', 8],
       ['B', 1],
       ['NK', 2],
-      ['T', 8],
     ]);
   });
 });

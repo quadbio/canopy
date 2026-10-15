@@ -25,8 +25,11 @@ test('plot against a second feature: follows the embedding colour, closes with i
 
   // cell type (the embedding's colour) against total_counts: violins in the embedding's colours
   await expect(cell.getByTestId('violin')).toHaveCount(12);
-  // in the legends' natural order (B cell first); the T cell violin has the legend's colour
-  await expect(cell.getByTestId('violin').first()).toContainText('B cell:');
+  // in the column's own order, as the legend lists it (owner, 2026-10-15: not by name); the T
+  // cell violin has the legend's colour
+  const firstRow = (await page.getByTestId('legend').locator('.legend-row').first().textContent()) ?? '';
+  const firstName = firstRow.replace(/[\d,]+\s*$/, '').trim();
+  await expect(cell.getByTestId('violin').first()).toContainText(`${firstName}:`);
   const fill = await cell.getByTestId('violin').filter({ hasText: 'T cell:' }).locator('polygon').getAttribute('fill');
   const legend = page.getByTestId('legend');
   await expect(legend).toHaveCount(1); // the embedding's legend controls the plot's categories

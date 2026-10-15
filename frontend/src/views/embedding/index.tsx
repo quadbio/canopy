@@ -22,7 +22,6 @@ import {
   type ColourParams,
   defaultColourParams,
   effectiveColouring,
-  NATURAL,
   normaliseColourParams,
   useColouring,
 } from '../colouring';
@@ -454,9 +453,9 @@ export function splitGroups(
     const c = code(i);
     cells[c][fill[c]++] = i;
   }
-  const byName = labels.map((_, i) => i).sort((a, b) => NATURAL.compare(labels[a], labels[b]));
+  // panels in the column's own order (its categories, as the legend lists them)
   const out: Group[] = [];
-  for (const c of [...byName, k]) {
+  for (const c of [...labels.map((_, i) => i), k]) {
     if (!counts[c]) continue;
     out.push({ id: c === k ? 'na' : `c${c}`, label: c === k ? 'NA' : labels[c], cells: cells[c], bounds: boundsOf(positions, cells[c]) });
   }
