@@ -457,3 +457,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   (group settings were one member's; two tabs overwrite; unbounded split in groups). Owner:
   admin and member links; capped integer genes; groundwork after Checkpoint A; the share above
   0 more visible. Batch R11 DONE (../reviews/code_review_full_2/R11-fixes.md).
+- 2026-10-15 Owner: a new view opened the first embedding in the file (often a PCA or a latent
+  space). Embeddings are now ranked: UMAP, t-SNE, other visualisation methods (draw_graph/FA2,
+  PHATE, MDE, TriMap, PaCMAP, densMAP, SPRING), other 2-column embeddings, then the rest; within a
+  rank the usual name (X_umap, X_tsne), 2 columns, shorter names first (`embedding_rank`).

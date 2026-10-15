@@ -196,14 +196,48 @@ def valid_colors(raw: Any, n: int, column: str = "") -> list[str] | None:
     return cols
 
 
+# Embeddings made for looking at, by name (case-insensitive), in order of preference: a new view
+# opens the first (owner, 2026-10-15: the first in the file was often a PCA or a latent space).
+_VISUAL_NAMES = (
+    ("umap",),
+    ("tsne", "t-sne", "t_sne"),
+    (
+        "draw_graph",
+        "forceatlas",
+        "fa2",
+        "fle",
+        "phate",
+        "mde",
+        "trimap",
+        "pacmap",
+        "densmap",
+        "spring",
+    ),
+)
+_CANONICAL = ("x_umap", "x_tsne")
+
+
+def embedding_rank(key: str, dims: int) -> tuple[int, int, int, int, str]:
+    """Sort key of an embedding: UMAP, then t-SNE, then other visualisation methods, then any
+    other 2-column embedding, then the rest (PCA, latent spaces). Within a group: the usual name
+    (X_umap, X_tsne) first, then 2 columns before more, then shorter names."""
+    name = key.lower()
+    tier = next(
+        (i for i, words in enumerate(_VISUAL_NAMES) if any(w in name for w in words)),
+        len(_VISUAL_NAMES) if dims == 2 else len(_VISUAL_NAMES) + 1,
+    )
+    return (tier, name not in _CANONICAL, dims != 2, len(name), name)
+
+
 def embedding_dims(info: AnnDataInfo) -> dict[str, int]:
-    """obsm keys usable as embeddings (one row per cell, at least 2 columns), X_umap first."""
+    """obsm keys usable as embeddings (one row per cell, at least 2 columns), the ones made for
+    viewing first (`embedding_rank`)."""
     out = {
         k: a.shape[1]
         for k, a in info.obsm.items()
         if len(a.shape) == 2 and a.shape[0] == info.n_obs and a.shape[1] >= 2
     }
-    order = sorted(out, key=lambda k: (k != "X_umap", k.lower()))
+    order = sorted(out, key=lambda k: embedding_rank(k, out[k]))
     return {k: out[k] for k in order}
 
 
