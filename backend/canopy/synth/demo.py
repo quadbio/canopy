@@ -72,6 +72,8 @@ def write_demo(out: Path, n_obs: int = 8_000, n_vars: int = 600, seed: int = 0) 
                 categories=[f"donor{i // 4 + 1:02d}_s{i % 4 + 1}" for i in range(N_SAMPLES)],
             ),
             "total_counts": total[:, 0].astype(np.float32),
+            # time points as numbers (Split by offers numbers with few values)
+            "day": np.array([0.0, 3.5, 7.0, 14.0])[np.arange(n_obs) % 4],
             "is_doublet": rng.random(n_obs) < 0.04,
         },
         index=pd.Index([f"cell{i:06d}" for i in range(n_obs)], name="barcode"),

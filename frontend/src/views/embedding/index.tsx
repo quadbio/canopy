@@ -5,10 +5,11 @@
 // a colour change uploads only colours, and point size and opacity (uniforms) upload nothing.
 
 import { ScatterplotLayer, type ScatterplotLayerProps } from '@deck.gl/layers';
+import { useQueries } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { useEmbedding, useGenes, useMeta, useObs, useSubset } from '../../api/queries';
-import type { ColumnMeta, DatasetMeta, GeneList } from '../../api/types';
+import { levelsQuery, useEmbedding, useGenes, useMeta, useObs, useObsLevels, useSubset } from '../../api/queries';
+import type { ColumnMeta, DatasetMeta, GeneList, ObsLevels } from '../../api/types';
 import { constantColouring, hiddenBy } from '../../colour/colouring';
 import { type ValueColour, ValueColourExtension } from '../../colour/gpu';
 import { event } from '../../telemetry/telemetry';
@@ -26,7 +27,7 @@ import {
   useColouring,
 } from '../colouring';
 import { drawCount, REORDER_ABOVE, representativeOrder, SUBSET_SIZE, useLod } from '../lod';
-import { GROUP_PANEL_CAP, unionColumns, useGroupMetas } from '../groupMeta';
+import { GROUP_PANEL_CAP, unionColumns, useGroupMetas, useMembers } from '../groupMeta';
 import { PlotCompanionField } from '../plot';
 import { type Bounds, MAIN_PANEL, type PanelOutput, panelLayerId, registerView, type ViewOutput } from '../registry';
 import { lassoInto, type Polygon } from '../selection';
@@ -41,7 +42,7 @@ export interface EmbeddingParams extends ColourParams {
   pointSize: number;
   opacity: number;
   allCells: boolean; // large datasets: always draw every cell (else a subset when zoomed out)
-  splitBy: string | null; // a category column: one panel per category (small multiples)
+  splitBy: string | null; // a category column (or numbers with few values): one panel per value
   panelFit: PanelFit | null; // split: how panels are fitted; null: by the embedding
 }
 
@@ -58,9 +59,11 @@ const VALUE_COLOUR = new ValueColourExtension();
 // At most this many panels when splitting by a column.
 export const MAX_PANELS = 64;
 
-/** Columns a view can be split by: categories (with at most MAX_PANELS) and booleans. */
-export function splittable(c: ColumnMeta): boolean {
+/** Columns a view can be split by: categories (with at most MAX_PANELS), booleans, and numbers
+ * with 2 to MAX_PANELS distinct values (time points, replicates: the server's `levels`). */
+export function splittable(c: ColumnMeta, levels?: ObsLevels): boolean {
   if (c.kind === 'boolean') return true;
+  if (c.kind === 'numeric') return !!levels?.columns[c.name];
   return c.kind === 'categorical' && !!c.categories && c.categories.length > 1 && c.categories.length <= MAX_PANELS;
 }
 
@@ -121,6 +124,7 @@ export function effectiveParams(
   meta: DatasetMeta | undefined,
   genes?: GeneList,
   linked = false,
+  levels?: ObsLevels,
 ): { p: EmbeddingParams; notice?: string } {
   if (!meta) return { p };
   const notes: string[] = [];
@@ -137,9 +141,12 @@ export function effectiveParams(
   notes.push(...colouring.notes);
   if (p.splitBy) {
     const c = meta.obs.find((x) => x.name === p.splitBy);
-    if (!c || !splittable(c)) {
+    // numbers: kept until their levels are known (asked for when such a column is chosen)
+    const waiting = c?.kind === 'numeric' && !levels;
+    if (!c || (!waiting && !splittable(c, levels))) {
       // in a linked group the split is the group's: a dataset without the column is not split
-      if (!linked) notes.push(c ? `“${p.splitBy}” has too many categories to split by` : `column “${p.splitBy}” not found`);
+      const many = c?.kind === 'numeric' ? 'too many different values' : 'too many categories';
+      if (!linked) notes.push(c ? `“${p.splitBy}” has ${many} to split by` : `column “${p.splitBy}” not found`);
       out = { ...out, splitBy: null };
     }
   }
@@ -153,9 +160,11 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   const wantsGene = spec.params.colorBy?.kind === 'gene';
   const genes = useGenes(spec.datasetId, spec.table, version, wantsGene);
   const linked = !!spec.group;
+  const numericSplit = !!spec.params.splitBy && meta.data?.obs.find((c) => c.name === spec.params.splitBy)?.kind === 'numeric';
+  const levels = useObsLevels(spec.datasetId, spec.table, version, numericSplit);
   const { p, notice } = useMemo(
-    () => effectiveParams(spec.params, meta.data, genes.data, linked),
-    [spec.params, meta.data, genes.data, linked],
+    () => effectiveParams(spec.params, meta.data, genes.data, linked, levels.data),
+    [spec.params, meta.data, genes.data, linked, levels.data],
   );
   const link = useMemo(() => (spec.group ? { group: spec.group, view: spec.id } : undefined), [spec.group, spec.id]);
   const emb = useEmbedding(spec.datasetId, spec.table, p.embedding, p.dims, version);
@@ -191,7 +200,7 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   // What is drawn: the current colouring when ready; while a new one loads (or if it failed),
   // the last one shown, else the points in the base colour. The plot never goes blank.
   const fatal = meta.error ?? emb.error;
-  const colourError = colouring.error ?? splitQ.error;
+  const colourError = colouring.error ?? splitQ.error ?? (numericSplit ? levels.error : null);
   const ready = !!data && !!valueColour && (!coloured || !!valueAttr);
   const current = useMemo<Shown | null>(
     () => (ready ? { data: data!, valueColour: valueColour!, legend, tooltip, n: n! } : null),
@@ -230,15 +239,28 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
   // Panels: one per category of the split column (its cells in the draw order, so a prefix is
   // still a fair sample), or one with every cell.
   const splitValues = splitQ.data && splitQ.data.data.length === total ? splitQ.data : undefined;
+  const splitLevels = splitCol?.kind === 'numeric' ? levels.data?.columns[splitCol.name] : undefined;
   const splitLabels = useMemo(
-    () => (splitCol ? (splitCol.kind === 'boolean' ? ['false', 'true'] : splitCol.categories) : null),
-    [splitCol],
+    () =>
+      splitCol
+        ? splitCol.kind === 'boolean'
+          ? ['false', 'true']
+          : splitCol.kind === 'numeric'
+            ? (splitLevels?.labels ?? null)
+            : splitCol.categories
+        : null,
+    [splitCol, splitLevels],
+  );
+  // numbers become codes: the index of their level (the levels are the values as sent)
+  const splitCodes = useMemo(
+    () => (splitValues && splitLevels ? levelCodes(splitValues.data, splitLevels.values) : splitValues?.data),
+    [splitValues, splitLevels],
   );
   const groups = useMemo(
-    () => (splitValues && splitLabels && positions ? splitGroups(splitValues.data, splitLabels, drawOrder, positions) : null),
-    [splitValues, splitLabels, drawOrder, positions],
+    () => (splitCodes && splitLabels && positions ? splitGroups(splitCodes, splitLabels, drawOrder, positions) : null),
+    [splitCodes, splitLabels, drawOrder, positions],
   );
-  const waitingForSplit = !!splitCol && !groups && !splitQ.error;
+  const waitingForSplit = !!splitCol && !groups && !splitQ.error && !levels.error;
   const notHidden = 1 - hiddenShare;
   const count = drawOrder ? drawCount(total, share, allowance, notHidden) : total;
   const shownData = shown?.data;
@@ -290,6 +312,8 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       .join(',') ?? null;
   const panelCounts = useMemo(() => (countsKey === null ? null : countsKey.split(',').map(Number)), [countsKey]);
   const shownTooltip = shown?.tooltip;
+  // a bare number says little: number panels are titled with the column ("day 3.5")
+  const titlePrefix = splitCol?.kind === 'numeric' ? `${splitCol.name} ` : '';
   const panels = useMemo<PanelOutput[] | undefined>(() => {
     if (!groups || !panelCounts || !shownData || !shownTooltip) return undefined;
     return groups.map((g, j) => {
@@ -297,13 +321,13 @@ function useEmbeddingView(spec: ViewSpec<EmbeddingParams>): ViewOutput {
       const boost = c < g.cells.length ? Math.min(1.5, (g.cells.length / c) ** 0.25) : 1;
       return {
         id: g.id,
-        title: `${g.label} · ${compactCount(g.cells.length)}`,
+        title: `${g.id === 'na' ? '' : titlePrefix}${g.label} · ${compactCount(g.cells.length)}`,
         layers: [pointsLayer(g.id, prefixOf(shownData as PointData, g.cells, c), boost)],
         bounds: g.bounds,
         tooltip: (i: number) => shownTooltip(g.cells[i]),
       };
     });
-  }, [groups, panelCounts, shownData, shownTooltip, pointsLayer]);
+  }, [groups, panelCounts, shownData, shownTooltip, pointsLayer, titlePrefix]);
   const drawnSplit = panelCounts?.reduce((a, b) => a + b, 0) ?? 0;
 
   // Until the order of a large dataset is known nothing is drawn (drawing all of it first would
@@ -432,6 +456,32 @@ interface Group {
 
 /** Cells per category of `codes` (in `order` when given), in the labels' natural order; missing
  * codes form an "NA" group. Empty categories get no panel. */
+/** The members' levels as one: per column, every member's labels once (in a group a column's
+ * panels are the values any member has). */
+export function mergeLevels(all: (ObsLevels | undefined)[]): ObsLevels {
+  const columns: ObsLevels['columns'] = {};
+  for (const l of all) {
+    for (const [name, c] of Object.entries(l?.columns ?? {})) {
+      const had = columns[name];
+      if (!had) columns[name] = c;
+      else {
+        const labels = new Set(had.labels);
+        const extra = c.labels.filter((x) => !labels.has(x));
+        if (extra.length) columns[name] = { values: [], labels: [...had.labels, ...extra] };
+      }
+    }
+  }
+  return { columns };
+}
+
+/** Each value's level (its index in `levels`), -1 for a value that is none (missing). */
+export function levelCodes(values: ArrayLike<number>, levels: number[]): Int32Array {
+  const index = new Map(levels.map((v, i) => [v, i]));
+  const out = new Int32Array(values.length);
+  for (let i = 0; i < values.length; i += 1) out[i] = index.get(values[i]) ?? -1;
+  return out;
+}
+
 export function splitGroups(
   codes: ArrayLike<number>,
   labels: string[],
@@ -500,6 +550,15 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
   const update = useWorkspace((s) => s.updateParams);
   const budget = useLod((s) => s.budget);
   const metas = useGroupMetas(spec as unknown as ViewSpec);
+  // numbers with few values, for Split by (each member's, asked for while the settings are open)
+  const memberIds = useMembers(spec as unknown as ViewSpec);
+  const levels = mergeLevels(
+    useQueries({
+      queries: memberIds.map((x, i) =>
+        levelsQuery(x.datasetId, x.table, metas[i]?.version, metas[i]?.obs.some((c) => c.kind === 'numeric') ?? false),
+      ),
+    }).map((q) => q.data),
+  );
   const p = spec.params;
   if (!meta.data) return <p className="muted">{meta.error ? String(meta.error.message) : 'Loading…'}</p>;
   const m = meta.data;
@@ -550,14 +609,15 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
       )}
       <ColourFields spec={spec} />
       <PlotCompanionField spec={spec} />
-      {splitColumns.some(({ column }) => splittable(column)) && (
+      {splitColumns.some(({ column }) => splittable(column, levels)) && (
         <Field
           label="Split by"
           help={
             <>
               <p>
                 One panel per category of a column, e.g. per sample, section or condition (columns with up to{' '}
-                {MAX_PANELS} categories). The panels share the colours and the legend, and pan and zoom together at the
+                {MAX_PANELS} categories). Number columns with up to {MAX_PANELS} different values (time points,
+                replicates) are offered too, one panel per value. The panels share the colours and the legend, and pan and zoom together at the
                 same scale, so sizes and densities compare.
               </p>
               <p>The cells drawn are shared among the panels, as for several views.</p>
@@ -575,16 +635,21 @@ function EmbeddingPanel({ spec }: { spec: ViewSpec<EmbeddingParams> }) {
                 label: 'Columns',
                 options: [
                   ...splitColumns
-                    .filter(({ column }) => splittable(column))
+                    .filter(({ column }) => splittable(column, levels))
                     .map(({ column: c, k }) => {
-                      const n = c.kind === 'boolean' ? 2 : c.categories!.length;
+                      const n =
+                        c.kind === 'boolean'
+                          ? 2
+                          : c.kind === 'numeric'
+                            ? levels.columns[c.name].labels.length
+                            : c.categories!.length;
                       // in a group: members × categories panels, capped (review full-2 C-H3)
                       const over = !!spec.group && members * n > GROUP_PANEL_CAP;
                       return {
                         value: c.name,
                         label: c.name,
                         hint:
-                          (c.kind === 'boolean' ? 'yes/no' : `${n}`) +
+                          (c.kind === 'boolean' ? 'yes/no' : c.kind === 'numeric' ? `${n} values` : `${n}`) +
                           (over ? `: ${members} × ${n} panels, more than ${GROUP_PANEL_CAP}` : '') +
                           (spec.group && k < members ? ` · in ${k} of ${members}` : ''),
                         disabled: over,

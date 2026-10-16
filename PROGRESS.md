@@ -466,3 +466,10 @@ Resume rule: read this file, then continue with the first unchecked step.
   (stages, time points), text columns sorted as the server sends them (as scanpy orders them),
   false before true; a linked group's legend keeps the first dataset's order, then categories
   only later datasets have.
+- 2026-10-16 Internal testing (via the owner): Split by offered only category columns. Number
+  columns with 2 to 64 different values (time points, replicate numbers) are offered too, one
+  panel per value, titled with the column ("day 3.5"). The server lists them on request
+  (`/obs/levels`: every number column read once per dataset version, asked for by the selected
+  view's settings and by a view split by numbers); the browser matches values exactly to the
+  levels. Groups: the values of any member. The demo dataset gained a `day` column; unit and e2e
+  tests.

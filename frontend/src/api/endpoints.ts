@@ -9,6 +9,7 @@ import type {
   FolderListing,
   GeneList,
   Job,
+  ObsLevels,
   PlotSummary,
   RootEntry,
   SummaryQuery,
@@ -41,6 +42,9 @@ export const datasets = {
     getJson<{ kind: string; categories: string[] | null; colors?: string[] | null }>(
       url(`/api/datasets/${encodeURIComponent(id)}/obs/labels`, { column, table }),
     ),
+  /** Numeric columns with few distinct values (Split by), read once per dataset version. */
+  levels: (id: string, table: string | null) =>
+    getJson<ObsLevels>(url(`/api/datasets/${encodeURIComponent(id)}/obs/levels`, { table })),
   /** Embedding coordinates, sent as uint16 per column (`q=16`): half the bytes over a slow
    * link, still finer than a screen pixel. */
   obsm: (id: string, table: string | null, key: string, dims: number[], signal?: AbortSignal) =>

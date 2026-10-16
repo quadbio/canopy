@@ -19,7 +19,8 @@ data (October 2026) and reviewed in two full cold reviews and ten fix batches. N
 - **Embeddings.** Any `obsm` embedding (and any two of its dimensions), coloured by a column or a
   gene; palettes (the dataset's own colours, a 54-colour default, colour-blind safe, 256 colours),
   colour maps for numbers, colours picked by hand, categories hidden from the legend, values on
-  hover, and *Split by* a column into panels.
+  hover, and *Split by* a column into panels (categories, yes/no, or numbers with up to 64
+  different values, such as time points).
 - **Genes.** Search by symbol or id; values from `X` or any layer; whole-number counts exact.
 - **Spatial sections.** OME-Zarr images by channel (tile by tile), cell outlines filled or
   outlined, transcripts per gene; coordinate systems and affine transforms from SpatialData.

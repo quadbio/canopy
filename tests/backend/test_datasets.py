@@ -683,3 +683,25 @@ def test_categories_keep_their_own_order(cfg: Config) -> None:
     sample = next(col for col in m["obs"] if col["name"] == "sample")
     stored = list(ad.read_h5ad(cfg.data_roots[0].path / "o.h5ad").obs["sample"].cat.categories)
     assert sample["categories"] == stored
+
+
+def test_numeric_columns_with_few_values_are_levels(cfg: Config) -> None:
+    """Split by numbers: time points, replicate numbers (columns with 2 to 64 values)."""
+    p = cfg.data_roots[0].path / "levels.h5ad"
+    a = tiny(p)
+    a.obs["time"] = np.tile([0.1, 2.5, 0.5], 100)
+    a.obs.loc[a.obs.index[4], "time"] = np.nan  # missing: not a level
+    a.obs["replicate"] = np.arange(a.n_obs) % 4 + 1
+    a.obs["constant"] = 7.0
+    a.obs["many"] = np.arange(a.n_obs) % 65
+    a.write_h5ad(p)
+    c = client_for(cfg)
+    id = entry_id("data", "levels.h5ad")
+    cols = c.get(f"/api/datasets/{id}/obs/levels").json()["columns"]
+    assert set(cols) == {"time", "replicate", "nullable"}  # not score, count, constant, many
+    assert cols["time"]["labels"] == ["0.1", "0.5", "2.5"]
+    assert cols["replicate"] == {"values": [1, 2, 3, 4], "labels": ["1", "2", "3", "4"]}
+    assert cols["nullable"]["labels"] == ["1", "3"]
+    # the values are exactly what /obs serves, so the browser matches them by equality
+    served = decode(c.get(f"/api/datasets/{id}/obs", params={"column": "time"}))
+    assert set(served[~np.isnan(served)].tolist()) == set(cols["time"]["values"])

@@ -72,6 +72,19 @@ export const useObsLabels = (id: string, table: string | null, column: string | 
     retry: false,
   });
 
+/** Numeric columns a view may be split by; asked for only when `enabled` (settings open, or a
+ * numeric column chosen), as every numeric column is read for it. */
+export const levelsQuery = (id: string, table: string | null, version: string | undefined, enabled = true) => ({
+  queryKey: ['obs-levels', id, version, table],
+  queryFn: () => datasets.levels(id, table),
+  enabled: enabled && !!version,
+  staleTime: Infinity,
+  retry: false,
+});
+
+export const useObsLevels = (id: string, table: string | null, version: string | undefined, enabled = true) =>
+  useQuery(levelsQuery(id, table, version, enabled));
+
 export const useEmbedding = (
   id: string,
   table: string | null,

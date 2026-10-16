@@ -79,6 +79,12 @@ export interface ColumnMeta {
   colors: string[] | null;
 }
 
+/** Numeric columns with 2 to 64 distinct values: the values (ascending, exactly as /obs sends
+ * them) and their labels (`0.1`, `3`). */
+export interface ObsLevels {
+  columns: Record<string, { values: number[]; labels: string[] }>;
+}
+
 export interface MatrixInfo {
   name: string; // "X" or a layer name
   encoding: string; // csr | csc | dense

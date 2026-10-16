@@ -44,6 +44,7 @@ from canopy.data.reader import (
     UnknownElementError,
     block_bytes,
     embedding_dims,
+    numeric_levels,
     valid_colors,
 )
 from canopy.errors import ApiError
@@ -359,6 +360,62 @@ def obs_labels(request: Request, id: str, column: NameQ, table: TableQ = None) -
         if raw is not None:
             colors = valid_colors(raw, len(values.categories), column)
     return Labels(kind=values.kind, categories=values.categories, colors=colors)
+
+
+class Levels(BaseModel):
+    values: list[float]  # ascending, exactly as /obs serves them (float32 or float64)
+    labels: list[str]  # shortest form of each (`0.1`, `3`)
+
+
+class LevelsReply(BaseModel):
+    # numeric columns with 2 to MAX_LEVELS distinct values (a view may be split by them)
+    columns: dict[str, Levels]
+
+
+# Numeric columns with at most this many distinct values may split a view (the frontend's
+# MAX_PANELS); at most MAX_LEVEL_COLUMNS numeric columns are looked at.
+MAX_LEVELS = 64
+MAX_LEVEL_COLUMNS = 200
+_levels: dict[tuple[str, str], dict[str, Levels]] = {}
+_levels_lock = threading.Lock()
+
+
+@router.get("/{id}/obs/levels")
+def obs_levels(request: Request, id: str, table: TableQ = None) -> LevelsReply:
+    """Numeric columns with few distinct values (time points, replicate numbers, ploidy), for
+    Split by. Asked for by the selected view's settings (and a view split by numbers); every
+    numeric column is read once per dataset version (not kept in the array cache), the answer is
+    remembered."""
+    row, fp, path = _dataset(request, id)
+    table, info = _table(fp, table)
+    key = (str(row.version), str(table))
+    with _levels_lock:
+        known = _levels.get(key)
+    if known is not None:
+        return LevelsReply(columns=known)
+    found: dict[str, Levels] = {}
+    names = [c.name for c in info.obs.columns if c.kind == "numeric"][:MAX_LEVEL_COLUMNS]
+    for name in names:
+
+        def read(src: Source, name: str = name) -> ObsValues:
+            return src.obs(name)
+
+        try:
+            values = _with_source(request, row, fp, path, table, read)
+        except ApiError as e:
+            if e.code.startswith("needs_conversion:"):
+                continue
+            raise
+        if values.kind != "numeric":
+            continue
+        levels = numeric_levels(values.values, MAX_LEVELS)
+        if levels is not None:
+            found[name] = Levels(values=levels[0], labels=levels[1])
+    with _levels_lock:
+        if len(_levels) >= 256:
+            _levels.pop(next(iter(_levels)))
+        _levels[key] = found
+    return LevelsReply(columns=found)
 
 
 @router.get("/{id}/obsm")

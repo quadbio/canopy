@@ -103,6 +103,21 @@ def _categorical(cat: pd.Categorical) -> ObsValues:
     return ObsValues("categorical", codes, cats)
 
 
+def numeric_levels(values: np.ndarray, cap: int) -> tuple[list[float], list[str]] | None:
+    """The distinct values of a numeric column (as served: float32 or float64), ascending, with
+    their shortest labels (`0.1`, `3`), when there are 2 to `cap` of them; else None. Missing
+    values (NaN) are not a level. A sample is counted first, so a column with many values is
+    passed over without counting it all."""
+    head = pd.unique(values[:TEXT_SAMPLE])
+    if np.count_nonzero(~np.isnan(head)) > cap:
+        return None
+    found = pd.unique(values)
+    found = np.sort(found[~np.isnan(found)])
+    if not 2 <= len(found) <= cap:
+        return None
+    return [float(v) for v in found], [np.format_float_positional(v, trim="-") for v in found]
+
+
 def to_obs_values(raw: Any) -> ObsValues:
     """An obs column as read by anndata (Categorical, ndarray, masked array) to served values."""
     if isinstance(raw, pd.Series):

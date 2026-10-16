@@ -566,6 +566,28 @@ test('split by a column: one panel per category, linked zoom, one legend', async
   expect(errors).toEqual([]);
 });
 
+test('split by numbers with few values: one panel per value', async ({ page }) => {
+  // the request from internal testing: time points stored as numbers (2026-10-16)
+  const errors = collectErrors(page);
+  await freshPage(page);
+  await openDataset(page, 'example_with_layers.h5ad');
+  const cell = page.getByTestId('view-cell').first();
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  await page.getByTestId('split-select').click();
+  // day (4 values) is offered; total_counts (thousands of values) is not
+  await expect(page.getByRole('option', { name: /^day/ })).toContainText('4 values');
+  await expect(page.getByRole('option', { name: /^total_counts/ })).toHaveCount(0);
+  await page.getByRole('option', { name: /^day/ }).click();
+  await expect(cell.getByTestId('panel')).toHaveCount(4);
+  const titles = await cell.getByTestId('panel').allTextContents();
+  expect(titles.map((t) => t.split('·')[0].trim())).toEqual(['day 0', 'day 3.5', 'day 7', 'day 14']);
+  await expect(cell).toHaveAttribute('data-status', 'ready');
+  await page.waitForTimeout(300);
+  for (const k of [0, 1, 2, 3]) expect(await drawnFraction(page, cell.getByTestId('panel').nth(k))).toBeGreaterThan(0.01);
+  await page.screenshot({ path: 'test-results/screens/split-by-number.png' });
+  expect(errors).toEqual([]);
+});
+
 test('spatial view: convert a SpatialData store, see image, coloured cells and transcripts', async ({ page }) => {
   test.setTimeout(180_000);
   const errors = collectErrors(page);
