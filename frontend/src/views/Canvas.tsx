@@ -17,8 +17,9 @@ import { type Layer, OrthographicView, type PickingInfo } from '@deck.gl/core';
 import { PathLayer } from '@deck.gl/layers';
 import DeckGL from '@deck.gl/react';
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { create } from 'zustand';
 
-import { useWorkspace, type ViewSpec } from '../state/workspace';
+import { movable, placeOf, useWorkspace, type ViewSpec } from '../state/workspace';
 import { deckErrorFields, event, reportEnvironment } from '../telemetry/telemetry';
 import { Conversion } from '../ui/Conversion';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
@@ -260,6 +261,7 @@ const ViewCell = memo(function ViewCell({
         </div>
       )}
       <div className="view-header">
+        {typeof spec.params.follows !== 'string' && <MoveGrip id={spec.id} />}
         <button className="view-title" onClick={() => select(spec.id)} title={spec.title} aria-label={spec.title}>
           {spec.group ? memberTitle(spec.title, groupPrefix) : spec.title}
         </button>
@@ -348,6 +350,92 @@ const ViewCell = memo(function ViewCell({
 });
 
 /** A lasso: a loop of rope with its tail (owner: the usual lasso icon). */
+/** The view being dragged to another place in the grid (issue #1). */
+const useMoveDrag = create<{ id: string | null; start: (id: string | null) => void }>()((set) => ({
+  id: null,
+  start: (id) => set({ id }),
+}));
+
+/** A handle to move a view in the grid: drag it onto another view (it takes that place, the
+ * others shift), or Alt+← / Alt+→. Shown when there is somewhere to move to. */
+function MoveGrip({ id }: { id: string }) {
+  const start = useMoveDrag((s) => s.start);
+  const moveView = useWorkspace((s) => s.moveView);
+  const many = useWorkspace((s) => movable(s.views, id).length > 1);
+  if (!many) return null;
+  return (
+    <span
+      className="view-grip"
+      role="button"
+      tabIndex={0}
+      draggable
+      aria-label="Move view: drag onto another view, or Alt and the arrow keys"
+      title="Drag onto another view to put it there (keyboard: Alt+← / Alt+→)"
+      data-testid="view-grip"
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', id);
+        e.dataTransfer.effectAllowed = 'move';
+        start(id);
+      }}
+      onDragEnd={() => start(null)}
+      onKeyDown={(e) => {
+        if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+        e.preventDefault();
+        const before = placeOf(useWorkspace.getState().views, id, e.key === 'ArrowLeft' ? -1 : 1);
+        if (before !== undefined) moveView(id, before);
+      }}
+    >
+      ⠿
+    </span>
+  );
+}
+
+/** While a view is dragged: the places it can go (each view it can trade places with, with the
+ * plot below it), highlighted under the pointer. */
+function DropTargets({ views, cells }: { views: ViewSpec[]; cells: (Cell | undefined)[] }) {
+  const id = useMoveDrag((s) => s.id);
+  const start = useMoveDrag((s) => s.start);
+  const moveView = useWorkspace((s) => s.moveView);
+  const [over, setOver] = useState<string | null>(null);
+  if (!id) return null;
+  return (
+    <>
+      {movable(views, id).map((t) => {
+        // the tile: the view and the plot below it
+        const parts = views.flatMap((v, i) => ((v.id === t || v.params.follows === t) && cells[i] ? [cells[i]!] : []));
+        if (!parts.length) return null;
+        const x0 = Math.min(...parts.map((c) => c.x));
+        const y0 = Math.min(...parts.map((c) => c.y));
+        const x1 = Math.max(...parts.map((c) => c.x + c.width));
+        const y1 = Math.max(...parts.map((c) => c.y + c.height));
+        return (
+          <div
+            key={t}
+            className={`drop-target${t === id ? ' self' : ''}${over === t ? ' over' : ''}`}
+            data-testid="drop-target"
+            data-view-id={t}
+            style={{ left: x0, top: y0, width: x1 - x0, height: y1 - y0 }}
+            onDragOver={(e) => {
+              if (t === id) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              setOver(t);
+            }}
+            onDragLeave={() => setOver((o) => (o === t ? null : o))}
+            onDrop={(e) => {
+              e.preventDefault();
+              const before = placeOf(views, id, t);
+              if (before !== undefined) moveView(id, before);
+              setOver(null);
+              start(null);
+            }}
+          />
+        );
+      })}
+    </>
+  );
+}
+
 /** What is left of a view cell whose drawing failed: its title and its close button. */
 function CellFailed({ spec, cell }: { spec: ViewSpec; cell: Cell }) {
   const remove = useWorkspace((s) => s.removeView);
@@ -698,6 +786,7 @@ function overlaysFor(out: ViewOutput | undefined, l: Layout | null, states: Reco
 
 export function Canvas() {
   const views = useWorkspace((s) => s.views);
+  const columns = useWorkspace((s) => s.columns);
   const selected = useWorkspace((s) => s.selected);
   const select = useWorkspace((s) => s.select);
   const outputs = useViewOutputs((s) => s.outputs);
@@ -741,6 +830,7 @@ export function Canvas() {
       2,
       TITLE_ROW,
       right,
+      columns,
     );
     // a narrow group tile starts with its legend folded (as a view's)
     for (const g of Object.keys(first.groups)) {
@@ -753,8 +843,9 @@ export function Canvas() {
       2,
       TITLE_ROW,
       right,
+      columns,
     );
-  }, [followKey, size, legendOpenKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [followKey, size, legendOpenKey, columns]); // eslint-disable-line react-hooks/exhaustive-deps
   const cells = tiles.cells;
   const [viewStates, setViewStates] = useState<Record<string, OrthoState>>({});
   const [lassoing, setLassoing] = useState<string | null>(null);
@@ -1354,6 +1445,7 @@ export function Canvas() {
           </ErrorBoundary>
         ) : null,
       )}
+      <DropTargets views={views} cells={cells} />
       {lassoing && cells[views.findIndex((v) => v.id === lassoing)] && (
         <LassoOverlay
           cell={cells[views.findIndex((v) => v.id === lassoing)]}

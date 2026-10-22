@@ -268,6 +268,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 }
 .legend-title { display: flex; justify-content: space-between; gap: var(--space-2); font-weight: 600; margin-bottom: var(--space-1); }
 .legend-list { list-style: none; margin: 0; padding: 0; overflow: auto; }
+.legend-search { margin-bottom: var(--space-1); }
+.legend-search input { width: 100%; box-sizing: border-box; font-size: var(--text-xs); padding: 2px 6px; }
+.legend-search-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; margin-top: 2px; font-size: var(--text-xs); }
 .legend.collapsed { min-width: 0; }
 .legend-note { margin: 0 0 var(--space-1); color: var(--warning); font-size: var(--text-xs); }
 .view-legend.compact .legend { max-width: 180px; }
@@ -434,7 +437,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: none;
 }
 
 /* file details: open buttons */
-.open-row { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.open-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.open-several { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-sm); }
+.open-several input[type='number'] { width: 3.5em; }
 
 /* spatial view settings: image channels and transcript genes */
 .channels { display: flex; flex-direction: column; gap: var(--space-1); margin: 0 0 var(--space-2); }
@@ -497,3 +502,11 @@ button.ghost.danger { color: var(--danger); border-color: var(--danger); }
   padding: var(--space-1) var(--space-3); font-size: 13px; max-width: min(640px, 90%);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
+
+/* Moving views in the grid (issue #1) */
+.view-grip { cursor: grab; color: var(--text-muted); padding: 0 2px; user-select: none; font-size: var(--text-sm); }
+.view-grip:hover, .view-grip:focus-visible { color: var(--text); }
+.drop-target { position: absolute; z-index: 3; pointer-events: auto; border: 2px dashed transparent; border-radius: var(--radius-sm); }
+.drop-target.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.drop-target.self { background: color-mix(in srgb, var(--surface) 50%, transparent); }
+.columns-choice { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }

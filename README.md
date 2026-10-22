@@ -18,7 +18,8 @@ data (October 2026) and reviewed in two full cold reviews and ten fix batches. N
   unusual in the file. Rescans pick up new and changed files.
 - **Embeddings.** Any `obsm` embedding (and any two of its dimensions), coloured by a column or a
   gene; palettes (the dataset's own colours, a 54-colour default, colour-blind safe, 256 colours),
-  colour maps for numbers, colours picked by hand, categories hidden from the legend, values on
+  colour maps for numbers, colours picked by hand, categories hidden from the legend (with a
+  search to show or hide the matching ones), values on
   hover, and *Split by* a column into panels (categories, yes/no, or numbers with up to 64
   different values, such as time points).
 - **Genes.** Search by symbol or id; values from `X` or any layer; whole-number counts exact.
@@ -28,6 +29,9 @@ data (October 2026) and reviewed in two full cold reviews and ten fix batches. N
   of cells above 0), composition bars, scatter or density maps.
 - **Lasso.** Select cells in an embedding or a section and compare them with the others in the
   plot.
+- **Arranging views.** Up to 9 views; a dataset can be opened several times at once; views are
+  moved by dragging their grip (⠿) onto another view (or Alt+arrow keys), and *Columns* fixes
+  the grid, e.g. one dataset per row.
 - **Linked views.** Up to 24 datasets side by side as one tile: shared settings, one legend with
   conflict-checked colours, NA where a dataset lacks a column, and zoom and pan together (or
   each on its own with the lock).

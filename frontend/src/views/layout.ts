@@ -8,9 +8,11 @@ export interface Cell {
   height: number;
 }
 
-export function gridCells(n: number, width: number, height: number, gap = 1): Cell[] {
+/** `columns`: a fixed number of columns (issue #1: rows stay rows as views open and close);
+ * otherwise as square as possible. */
+export function gridCells(n: number, width: number, height: number, gap = 1, columns: number | null = null): Cell[] {
   if (n <= 0) return [];
-  const cols = Math.ceil(Math.sqrt(n));
+  const cols = columns ?? Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
   const w = (width - gap * (cols - 1)) / cols;
   const h = (height - gap * (rows - 1)) / rows;
@@ -28,13 +30,20 @@ export const COMPANION_SHARE = 1 / 3;
 /** Tiles for views: the grid holds one tile per view, except that a view following another
  * (a plot belonging to an embedding: `follows[i]` is that view's id) takes the bottom third of
  * the followed view's tile instead of a tile of its own. In the order of `ids`. */
-export function viewCells(ids: string[], follows: (string | null)[], width: number, height: number, gap = 1): Cell[] {
+export function viewCells(
+  ids: string[],
+  follows: (string | null)[],
+  width: number,
+  height: number,
+  gap = 1,
+  columns: number | null = null,
+): Cell[] {
   const attached = ids.map((_, i) => {
     const f = follows[i];
     return f !== null && f !== ids[i] && ids.includes(f) && follows[ids.indexOf(f)] === null ? f : null;
   });
   const own = ids.filter((_, i) => attached[i] === null);
-  const tiles = gridCells(own.length, width, height, gap);
+  const tiles = gridCells(own.length, width, height, gap, columns);
   const tileOf = new Map(own.map((id, k) => [id, tiles[k]]));
   const out: Cell[] = [];
   ids.forEach((id, i) => {
@@ -109,6 +118,7 @@ export function tileCells(
   gap: number,
   top: number,
   right: Record<string, number> = {},
+  columns: number | null = null,
 ): { cells: Cell[]; groups: Record<string, Cell> } {
   const firstOf = new Map<string, string>();
   for (const v of views) if (v.group && !firstOf.has(v.group)) firstOf.set(v.group, v.id);
@@ -120,6 +130,7 @@ export function tileCells(
     width,
     height,
     gap,
+    columns,
   );
   const cellOf = new Map(units.map((v, i) => [v.id, unitCells[i]]));
   const groups: Record<string, Cell> = {};
@@ -132,7 +143,7 @@ export function tileCells(
     groups[g] = tile;
     const w = Math.max(tile.width - (right[g] ?? 0), 20);
     const h = Math.max(tile.height - top, 20);
-    gridCells(ids.length, w, h, 4).forEach((r, k) =>
+    gridCells(ids.length, w, h, 4, columns).forEach((r, k) =>
       inner.set(ids[k], { x: tile.x + r.x, y: tile.y + top + r.y, width: r.width, height: r.height }),
     );
   }

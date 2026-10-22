@@ -52,6 +52,12 @@ export interface Workspace {
   /** Closes a view; a group left with one view becomes an independent view. */
   removeView: (id: string) => void;
   removeGroup: (group: string) => void;
+  /** Moves a view (with the plot below it) to just before view `before` (issue #1); `before`
+   * null: to the end. Within a linked group only among its members. */
+  moveView: (id: string, before: string | null) => void;
+  /** Columns of the grid of views (and of a linked group's views); null: as square as possible. */
+  columns: number | null;
+  setColumns: (n: number | null) => void;
   /** Changes some parameters; in a group, all its views take the change, except the view
    * type's own keys, which change in this view only. */
   updateParams: (id: string, patch: Record<string, unknown>) => void;
@@ -93,6 +99,52 @@ export function tilesTaken(views: Pick<ViewSpec, 'id' | 'group' | 'params'>[]): 
     }
   }
   return n;
+}
+
+/** Columns offered for the grid of views. */
+export const MAX_COLUMNS = 6;
+
+/** `views` with view `id` (and the plots following it) moved just before `before` (or to the
+ * end of its group / of all views when `before` is null). Unchanged for a move between a group
+ * and outside it, or onto itself. */
+export function movedViews<T extends Pick<ViewSpec, 'id' | 'group' | 'params'>>(views: T[], id: string, before: string | null): T[] {
+  const v = views.find((x) => x.id === id);
+  const target = before === null ? null : views.find((x) => x.id === before);
+  if (!v || before === id || (before !== null && !target)) return views;
+  if (target && (target.group ?? null) !== (v.group ?? null)) return views;
+  if (target && target.params.follows === id) return views;
+  const block = views.filter((x) => x.id === id || x.params.follows === id);
+  const rest = views.filter((x) => !block.includes(x));
+  // dropping on a plot below a view: before that view
+  const host = target && typeof target.params.follows === 'string' ? rest.find((x) => x.id === target.params.follows) : undefined;
+  let at = (host ?? target) ? rest.indexOf((host ?? target)!) : -1;
+  if (at < 0) {
+    // the end: after the last view of the same group (or of all)
+    const same = rest.map((x, i) => ((x.group ?? null) === (v.group ?? null) ? i : -1)).filter((i) => i >= 0);
+    at = same.length ? same[same.length - 1] + 1 : rest.length;
+  }
+  return [...rest.slice(0, at), ...block, ...rest.slice(at)];
+}
+
+/** The views `id` can trade places with: those of its own group (or all outside groups),
+ * without the plots below views, in order. */
+export function movable(views: Pick<ViewSpec, 'id' | 'group' | 'params'>[], id: string): string[] {
+  const v = views.find((x) => x.id === id);
+  if (!v) return [];
+  const ids = new Set(views.map((x) => x.id));
+  return views
+    .filter((x) => (x.group ?? null) === (v.group ?? null) && !(typeof x.params.follows === 'string' && ids.has(x.params.follows)))
+    .map((x) => x.id);
+}
+
+/** Where `id` goes when dropped on `target` (it takes the target's place, the others shift),
+ * as the `before` of `moveView`; or one step left (-1) / right (+1) for the keyboard. */
+export function placeOf(views: Pick<ViewSpec, 'id' | 'group' | 'params'>[], id: string, target: string | -1 | 1): string | null | undefined {
+  const units = movable(views, id);
+  const i = units.indexOf(id);
+  const j = target === -1 ? i - 1 : target === 1 ? i + 1 : units.indexOf(target);
+  if (i < 0 || j < 0 || j >= units.length || i === j) return undefined;
+  return i < j ? (units[j + 1] ?? null) : units[j];
 }
 
 /** The views of `v`'s group (just `v` when it has none). */
@@ -308,6 +360,9 @@ export const useWorkspace = create<Workspace>()(
           const kept = views.some((v) => v.id === s.selected);
           return { views, selected: kept ? s.selected : (views.at(-1)?.id ?? null) };
         }),
+      moveView: (id, before) => set((s) => ({ views: movedViews(s.views, id, before) })),
+      columns: null,
+      setColumns: (n) => set({ columns: n === null ? null : Math.min(MAX_COLUMNS, Math.max(1, Math.round(n))) }),
       updateParams: (id, patch) => {
         const v = get().views.find((x) => x.id === id);
         if (v) get().setParams(id, { ...v.params, ...patch });
@@ -345,7 +400,7 @@ export const useWorkspace = create<Workspace>()(
       version: VERSION,
       storage,
       skipHydration: true,
-      partialize: (s) => ({ views: s.views, selected: s.selected, remembered: s.remembered }),
+      partialize: (s) => ({ views: s.views, selected: s.selected, remembered: s.remembered, columns: s.columns }),
       // Older saved versions: keep what can be kept; `merge` validates every view anyway.
       // No migration step is needed: `merge` validates and normalises every saved view (per view
       // type), which is where a format change between versions is handled.
@@ -359,6 +414,8 @@ export const useWorkspace = create<Workspace>()(
           views,
           selected,
           remembered: restoreRemembered(p.remembered),
+          columns:
+            typeof p.columns === 'number' && Number.isInteger(p.columns) && p.columns >= 1 && p.columns <= MAX_COLUMNS ? p.columns : null,
         };
       },
     },

@@ -10,7 +10,7 @@ import { ApiError } from '../api/client';
 import { catalog } from '../api/endpoints';
 import { metaQuery, useDatasetDetail, useFolder, useRoots, useSearch } from '../api/queries';
 import type { DatasetEntry, DatasetMeta } from '../api/types';
-import { MAX_GROUP, MAX_VIEWS, rememberKey, type ViewSpec, useWorkspace } from '../state/workspace';
+import { MAX_GROUP, MAX_VIEWS, rememberKey, tilesTaken, type ViewSpec, useWorkspace } from '../state/workspace';
 import { defaultColumn } from '../views/colouring';
 import { event } from '../telemetry/telemetry';
 import { viewTypes } from '../views/registry';
@@ -125,6 +125,10 @@ function Details({ id }: { id: string }) {
   const [table, setTable] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // open the dataset several times (owner, with issue #1): side by side views to set differently
+  const [several, setSeveral] = useState(false);
+  const [times, setTimes] = useState(1);
+  const free = useWorkspace((s) => MAX_VIEWS - tilesTaken(s.views));
   const groupOpen = useWorkspace((s) => s.views.some((v) => v.group));
   if (!q.data) return <div className="details muted">{q.error ? String(q.error.message) : 'Loading…'}</div>;
   const d = q.data;
@@ -154,18 +158,30 @@ function Details({ id }: { id: string }) {
         if (defaults) {
           // Continue with the settings this dataset had last time, if any.
           const saved = recall(rememberKey({ type: t.type, datasetId: d.id, table: chosenTable }));
-          const added = addView({
-            type: t.type,
-            datasetId: d.id,
-            table: chosenTable,
-            title: chosenTable ? `${d.name} · ${chosenTable}` : d.name,
-            params: saved ?? defaults,
-          });
-          if (added === null) {
-            setProblem(`At most ${MAX_VIEWS} views fit in the canvas: close one first.`);
+          const n = several ? Math.max(1, Math.min(times, MAX_VIEWS)) : 1;
+          if (n > free) {
+            setProblem(
+              free > 0
+                ? `Only ${free} more view${free === 1 ? '' : 's'} fit in the canvas (at most ${MAX_VIEWS}): open fewer, or close some first.`
+                : `At most ${MAX_VIEWS} views fit in the canvas: close one first.`,
+            );
             return;
           }
-          event('view_opened', null, { type: t.type, kind: d.kind ?? '', dataset: d.id, n_obs: meta.n_obs, remembered: saved ? 1 : 0 });
+          const title = chosenTable ? `${d.name} · ${chosenTable}` : d.name;
+          for (let k = 0; k < n; k += 1) {
+            const added = addView({
+              type: t.type,
+              datasetId: d.id,
+              table: chosenTable,
+              title: n > 1 ? `${title} (${k + 1})` : title,
+              params: saved ?? defaults,
+            });
+            if (added === null) {
+              setProblem(`At most ${MAX_VIEWS} views fit in the canvas: close one first.`);
+              return;
+            }
+          }
+          event('view_opened', null, { type: t.type, kind: d.kind ?? '', dataset: d.id, n_obs: meta.n_obs, remembered: saved ? 1 : 0, copies: n });
           return;
         }
       }
@@ -258,6 +274,24 @@ function Details({ id }: { id: string }) {
             <button className="primary" onClick={() => void open()} disabled={busy} data-testid="open-dataset">
               {busy ? 'Opening…' : 'Open'}
             </button>
+          )}
+          <label className="open-several" title="Open this dataset as several views, e.g. to show different colourings side by side">
+            <input type="checkbox" checked={several} onChange={(e) => setSeveral(e.target.checked)} data-testid="open-several" />
+            Open several times
+          </label>
+          {several && (
+            <label className="open-several">
+              <input
+                type="number"
+                min={1}
+                max={MAX_VIEWS}
+                value={times}
+                onChange={(e) => setTimes(Math.max(1, Math.min(MAX_VIEWS, Math.round(Number(e.target.value) || 1))))}
+                aria-label="How many times"
+                data-testid="open-times"
+              />
+              times <span className="muted small">({free} more fit)</span>
+            </label>
           )}
         </div>
       )}

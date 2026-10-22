@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AUTH_REQUIRED_EVENT } from '../api/client';
 import { catalog } from '../api/endpoints';
 import { metaQuery, useCatalogStatus } from '../api/queries';
-import { useWorkspace, type ViewSpec } from '../state/workspace';
+import { MAX_COLUMNS, useWorkspace, type ViewSpec } from '../state/workspace';
 import { event } from '../telemetry/telemetry';
 import { FileBrowser, sharedDefaults } from '../ui/FileBrowser';
 import { CloseAll } from '../ui/CloseAll';
@@ -211,6 +211,32 @@ function useAuthRequired() {
   return needed;
 }
 
+/** The number of columns of the grid of views (issue #1): rows stay rows as views open and
+ * close (e.g. one dataset per row). */
+function ColumnsChoice() {
+  const n = useWorkspace((s) => s.views.length);
+  const columns = useWorkspace((s) => s.columns);
+  const setColumns = useWorkspace((s) => s.setColumns);
+  if (n < 2) return null;
+  return (
+    <label className="columns-choice" title="Columns of the grid of views; Auto: as square as possible">
+      Columns
+      <select
+        value={columns ?? 'auto'}
+        onChange={(e) => setColumns(e.target.value === 'auto' ? null : Number(e.target.value))}
+        data-testid="columns-select"
+      >
+        <option value="auto">Auto</option>
+        {Array.from({ length: MAX_COLUMNS }, (_, i) => (
+          <option key={i + 1} value={i + 1}>
+            {i + 1}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function App() {
   const [theme, cycleTheme] = useTheme();
   const [panels, togglePanel] = useSidePanels();
@@ -253,6 +279,7 @@ export function App() {
           Settings
         </button>
         <CatalogStatus />
+        <ColumnsChoice />
         <ResetWorkspace />
         <button className="ghost" onClick={cycleTheme} title="Theme: system, light or dark">
           Theme: {theme === 'system' ? 'auto' : theme}

@@ -473,3 +473,12 @@ Resume rule: read this file, then continue with the first unchecked step.
   view's settings and by a view split by numbers); the browser matches values exactly to the
   levels. Groups: the values of any member. The demo dataset gained a `day` column; unit and e2e
   tests.
+- 2026-10-22 GitHub issues from internal testing (quadbio/canopy #1, #2) and the owner:
+  #2 legend search: legends with more than 10 categories have a search box (any part of the
+  name, ignoring case, all categories, not only the first 200), with "show only these" and
+  "hide these". #1, option A (owner; free-floating windows not done: one WebGL canvas, overlap
+  would cost the drawing speed): views move by dragging their grip onto another view (it takes
+  that place) or Alt+←/→; within a linked group among its members; a plot below a view moves
+  with it. *Columns* (Auto, 1–6; saved with the workspace) fixes the grid, also inside a linked
+  group. Owner: "Open several times" with a count (default 1; refused, with the number that
+  fits, beyond the 9 views); copies titled (1), (2), … Unit and e2e tests (arrange.spec.ts).

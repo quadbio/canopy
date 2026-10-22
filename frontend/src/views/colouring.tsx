@@ -711,6 +711,7 @@ export function ColourLegend({
   const update = useWorkspace((s) => s.updateParams);
   const roving = useRoving();
   const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState('');
   const p = spec.params;
   const data = output.legend as ColourLegendData | undefined;
   if (!data) return null;
@@ -739,6 +740,17 @@ export function ColourLegend({
   const picked = p.customColours[data.name] ?? {};
   const pick = (c: string, hex: string) =>
     update(spec.id, { customColours: { ...p.customColours, [data.name]: { ...picked, [c]: hex } } });
+  // search (issue #2): rows narrowed to the matching categories, which can then be shown alone
+  const searchable = present(data).length > SEARCH_ABOVE;
+  const q = searchable ? query.trim() : '';
+  const matches = q ? legendMatches(data, q) : null;
+  const matchLabels = matches?.map((i) => data.labels[i]) ?? [];
+  const onlyMatches = () => {
+    const keep = new Set(matchLabels);
+    update(spec.id, { hidden: data.labels.filter((l) => !keep.has(l)) });
+  };
+  const hideMatches = () => update(spec.id, { hidden: [...new Set([...p.hidden, ...matchLabels])] });
+  const rows = matches ?? shownRows(data, showAll);
   const resetColours = () => {
     const rest = { ...p.customColours };
     delete rest[data.name];
@@ -759,12 +771,40 @@ export function ColourLegend({
           </button>
         )}
       </div>
+      {!collapsed && searchable && (
+        <div className="legend-search">
+          <input
+            type="search"
+            placeholder="Search categories…"
+            aria-label={`Search the categories of ${data.name}`}
+            data-testid="legend-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+          />
+          {matches && (
+            <div className="legend-search-actions">
+              <span className="muted">{matches.length.toLocaleString()} found</span>
+              {matches.length > 0 && (
+                <>
+                  <button className="link" onClick={onlyMatches} data-testid="legend-only" title="Show these, hide all others">
+                    show only these
+                  </button>
+                  <button className="link" onClick={hideMatches} data-testid="legend-hide-found" title="Hide these">
+                    hide these
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {!collapsed && data.extended && (
         <p className="legend-note">More categories than the palette has colours: in-between colours added (extended palette).</p>
       )}
       {!collapsed && (
         <ul className="legend-list" onKeyDown={(e) => roving.onKeyDown(e)} ref={roving.ref}>
-          {shownRows(data, showAll)
+          {rows
             .map((i, row) => {
               const c = data.labels[i];
               return (
@@ -797,7 +837,7 @@ export function ColourLegend({
           NA: {data.na.cells.toLocaleString()} cells ({data.na.datasets} dataset{data.na.datasets === 1 ? '' : 's'} without “{data.name}”)
         </p>
       )}
-      {!collapsed && !showAll && present(data).length > LEGEND_ROWS && (
+      {!collapsed && !matches && !showAll && present(data).length > LEGEND_ROWS && (
         <button className="link small" onClick={() => setShowAll(true)} data-testid="legend-more">
           {present(data).length - LEGEND_ROWS} more categories…
         </button>
@@ -808,6 +848,16 @@ export function ColourLegend({
 
 // A long legend (e.g. thousands of clusters) shows its first rows, then "N more" on request.
 const LEGEND_ROWS = 200;
+// Legends with more categories than this get a search box.
+export const SEARCH_ABOVE = 10;
+
+/** The legend rows (category indices, legend order, present ones only) whose name contains
+ * `query`, ignoring case; all matches, not only the first LEGEND_ROWS. */
+export function legendMatches(data: { order: number[]; counts: ArrayLike<number>; labels: string[] }, query: string): number[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return present(data);
+  return present(data).filter((i) => data.labels[i].toLowerCase().includes(q));
+}
 const present = (data: { order: number[]; counts: ArrayLike<number> }) => data.order.filter((i) => data.counts[i] > 0);
 const shownRows = (data: { order: number[]; counts: ArrayLike<number> }, all: boolean) =>
   all ? present(data) : present(data).slice(0, LEGEND_ROWS);
