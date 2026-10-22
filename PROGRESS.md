@@ -490,3 +490,8 @@ Resume rule: read this file, then continue with the first unchecked step.
   not free-floating windows) and ADR 0014 (reorder and columns in a group, legend search); the
   user guide artifact gained "Arranging views", the legend search, split by numbers, open
   several times, and the column order and default embedding of 2026-10-15.
+- 2026-10-22 Owner: the grip did not drag in a real browser (Alt+arrows worked; the e2e drag
+  passed with Playwright's synthetic drag). The grip used the browser's drag and drop, and the
+  drop targets appearing over the grip as the drag started let browsers cancel it. Now plain
+  pointer events (pointer capture on the grip, the target found under the pointer, a 4 px start
+  threshold, Esc cancels); also works with a pen or touch. Checked by hand in Chrome.

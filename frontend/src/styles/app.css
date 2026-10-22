@@ -504,9 +504,10 @@ button.ghost.danger { color: var(--danger); border-color: var(--danger); }
 }
 
 /* Moving views in the grid (issue #1) */
-.view-grip { cursor: grab; color: var(--text-muted); padding: 0 2px; user-select: none; font-size: var(--text-sm); }
+.view-grip { cursor: grab; color: var(--text-muted); padding: 0 2px; user-select: none; touch-action: none; font-size: var(--text-sm); }
+.view-grip:active { cursor: grabbing; }
 .view-grip:hover, .view-grip:focus-visible { color: var(--text); }
-.drop-target { position: absolute; z-index: 3; pointer-events: auto; border: 2px dashed transparent; border-radius: var(--radius-sm); }
+.drop-target { position: absolute; z-index: 3; pointer-events: auto; cursor: grabbing; border: 2px dashed transparent; border-radius: var(--radius-sm); }
 .drop-target.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .drop-target.self { background: color-mix(in srgb, var(--surface) 50%, transparent); }
 .columns-choice { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }

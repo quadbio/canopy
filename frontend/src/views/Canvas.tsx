@@ -350,35 +350,72 @@ const ViewCell = memo(function ViewCell({
 });
 
 /** A lasso: a loop of rope with its tail (owner: the usual lasso icon). */
-/** The view being dragged to another place in the grid (issue #1). */
-const useMoveDrag = create<{ id: string | null; start: (id: string | null) => void }>()((set) => ({
+/** The view being dragged to another place in the grid (issue #1), and the view under the
+ * pointer. Pointer events, not the browser's drag and drop: drop targets appearing over the
+ * grip as a drag starts made real browsers cancel the drag (owner, 2026-10-22). */
+const useMoveDrag = create<{
+  id: string | null;
+  over: string | null;
+  set: (s: { id?: string | null; over?: string | null }) => void;
+}>()((set) => ({
   id: null,
-  start: (id) => set({ id }),
+  over: null,
+  set: (s) => set(s),
 }));
+
+// pixels the pointer moves before a press on the grip becomes a drag
+const DRAG_START_PX = 4;
 
 /** A handle to move a view in the grid: drag it onto another view (it takes that place, the
  * others shift), or Alt+← / Alt+→. Shown when there is somewhere to move to. */
 function MoveGrip({ id }: { id: string }) {
-  const start = useMoveDrag((s) => s.start);
+  const setDrag = useMoveDrag((s) => s.set);
   const moveView = useWorkspace((s) => s.moveView);
   const many = useWorkspace((s) => movable(s.views, id).length > 1);
+  const press = useRef<{ x: number; y: number } | null>(null);
   if (!many) return null;
+  const end = () => {
+    press.current = null;
+    setDrag({ id: null, over: null });
+  };
   return (
     <span
       className="view-grip"
       role="button"
       tabIndex={0}
-      draggable
       aria-label="Move view: drag onto another view, or Alt and the arrow keys"
       title="Drag onto another view to put it there (keyboard: Alt+← / Alt+→)"
       data-testid="view-grip"
-      onDragStart={(e) => {
-        e.dataTransfer.setData('text/plain', id);
-        e.dataTransfer.effectAllowed = 'move';
-        start(id);
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); // no text selection
+        e.currentTarget.setPointerCapture(e.pointerId); // moves reach the grip over the canvas too
+        press.current = { x: e.clientX, y: e.clientY };
       }}
-      onDragEnd={() => start(null)}
+      onPointerMove={(e) => {
+        const p = press.current;
+        if (!p) return;
+        const dragging = useMoveDrag.getState().id === id;
+        if (!dragging && Math.hypot(e.clientX - p.x, e.clientY - p.y) < DRAG_START_PX) return;
+        // the drop target under the pointer (they are hit-testable; the grip holds the capture)
+        const el = document
+          .elementsFromPoint(e.clientX, e.clientY)
+          .find((x) => x instanceof HTMLElement && x.dataset.testid === 'drop-target') as HTMLElement | undefined;
+        const t = el?.dataset.viewId ?? null;
+        setDrag({ id, over: t && t !== id ? t : null });
+      }}
+      onPointerUp={() => {
+        const { id: moving, over } = useMoveDrag.getState();
+        if (moving === id && over) {
+          const before = placeOf(useWorkspace.getState().views, id, over);
+          if (before !== undefined) moveView(id, before);
+        }
+        end();
+      }}
+      onPointerCancel={end}
+      onLostPointerCapture={() => press.current && end()}
       onKeyDown={(e) => {
+        if (e.key === 'Escape') return end();
         if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
         e.preventDefault();
         const before = placeOf(useWorkspace.getState().views, id, e.key === 'ArrowLeft' ? -1 : 1);
@@ -391,12 +428,10 @@ function MoveGrip({ id }: { id: string }) {
 }
 
 /** While a view is dragged: the places it can go (each view it can trade places with, with the
- * plot below it), highlighted under the pointer. */
+ * plot below it), the one under the pointer highlighted. */
 function DropTargets({ views, cells }: { views: ViewSpec[]; cells: (Cell | undefined)[] }) {
   const id = useMoveDrag((s) => s.id);
-  const start = useMoveDrag((s) => s.start);
-  const moveView = useWorkspace((s) => s.moveView);
-  const [over, setOver] = useState<string | null>(null);
+  const over = useMoveDrag((s) => s.over);
   if (!id) return null;
   return (
     <>
@@ -415,20 +450,6 @@ function DropTargets({ views, cells }: { views: ViewSpec[]; cells: (Cell | undef
             data-testid="drop-target"
             data-view-id={t}
             style={{ left: x0, top: y0, width: x1 - x0, height: y1 - y0 }}
-            onDragOver={(e) => {
-              if (t === id) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              setOver(t);
-            }}
-            onDragLeave={() => setOver((o) => (o === t ? null : o))}
-            onDrop={(e) => {
-              e.preventDefault();
-              const before = placeOf(views, id, t);
-              if (before !== undefined) moveView(id, before);
-              setOver(null);
-              start(null);
-            }}
           />
         );
       })}
