@@ -77,5 +77,23 @@ test('open a dataset several times, fixed columns, move views by dragging and wi
   await page.reload();
   await expect(page.getByTestId('columns-select')).toHaveValue('3');
   expect((await titles(page))[1]).toBe('spatial.h5ad');
+
+  // closed down to one view: the choice stays while a number is set, so it can be set back
+  for (let k = 0; k < 3; k += 1) await page.getByTestId('view-cell').first().getByRole('button', { name: 'Close view' }).click();
+  await expect(page.getByTestId('view-cell')).toHaveCount(1);
+  await expect(page.getByTestId('columns-select')).toHaveValue('3');
+  await page.getByTestId('columns-select').selectOption('auto');
+  await expect(page.getByTestId('columns-select')).toHaveCount(0); // one view, Auto: nothing to choose
+
+  // all views closed: back to Auto (owner, 2026-10-22)
+  await openDataset(page, 'spatial.h5ad');
+  await page.getByTestId('columns-select').selectOption('2');
+  await page.getByTestId('view-cell').first().getByRole('button', { name: 'Close view' }).click();
+  await page.getByTestId('view-cell').first().getByRole('button', { name: 'Close view' }).click();
+  await expect(page.getByTestId('view-cell')).toHaveCount(0);
+  await openDataset(page, 'spatial.h5ad');
+  await expect(page.getByTestId('columns-select')).toHaveCount(0);
+  await openDataset(page, 'dissociated.h5ad');
+  await expect(page.getByTestId('columns-select')).toHaveValue('auto');
   expect(errors).toEqual([]);
 });

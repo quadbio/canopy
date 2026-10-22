@@ -351,14 +351,15 @@ export const useWorkspace = create<Workspace>()(
           if (left.length === 1) views = views.map((v) => (v.id === left[0].id ? { ...v, group: undefined } : v));
           const kept = views.some((v) => v.id === s.selected);
           const next = left[0]?.id ?? views.at(-1)?.id ?? null;
-          return { views, selected: kept ? s.selected : next };
+          // an empty canvas starts again with Auto columns (the choice is shown with views)
+          return { views, selected: kept ? s.selected : next, ...(views.length ? {} : { columns: null }) };
         }),
       removeGroup: (group) =>
         set((s) => {
           const ids = new Set(s.views.filter((v) => v.group === group).map((v) => v.id));
           const views = s.views.filter((v) => !ids.has(v.id) && !ids.has(v.params.follows as string));
           const kept = views.some((v) => v.id === s.selected);
-          return { views, selected: kept ? s.selected : (views.at(-1)?.id ?? null) };
+          return { views, selected: kept ? s.selected : (views.at(-1)?.id ?? null), ...(views.length ? {} : { columns: null }) };
         }),
       moveView: (id, before) => set((s) => ({ views: movedViews(s.views, id, before) })),
       columns: null,
@@ -393,7 +394,7 @@ export const useWorkspace = create<Workspace>()(
       // (ticks stay: closing the views is the way to open the ticked datasets linked)
       // the dataset clicked in the browser stays: closing the views is often the way to open it
       // (review H3 B-L4)
-      reset: () => set({ views: [], selected: null }),
+      reset: () => set({ views: [], selected: null, columns: null }),
     }),
     {
       name: STORAGE_KEY,
@@ -415,7 +416,7 @@ export const useWorkspace = create<Workspace>()(
           selected,
           remembered: restoreRemembered(p.remembered),
           columns:
-            typeof p.columns === 'number' && Number.isInteger(p.columns) && p.columns >= 1 && p.columns <= MAX_COLUMNS ? p.columns : null,
+            views.length && typeof p.columns === 'number' && Number.isInteger(p.columns) && p.columns >= 1 && p.columns <= MAX_COLUMNS ? p.columns : null,
         };
       },
     },

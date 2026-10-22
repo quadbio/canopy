@@ -482,3 +482,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   with it. *Columns* (Auto, 1–6; saved with the workspace) fixes the grid, also inside a linked
   group. Owner: "Open several times" with a count (default 1; refused, with the number that
   fits, beyond the 9 views); copies titled (1), (2), … Unit and e2e tests (arrange.spec.ts).
+- 2026-10-22 Owner: a fixed number of columns stayed after all views were closed, and with one
+  view the choice was hidden, so it could not be set back. Now the columns go back to Auto when
+  the last view closes (one by one or Close all), and the choice is shown with one view while
+  a number is set. Unit and e2e tests.

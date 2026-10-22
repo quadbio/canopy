@@ -217,7 +217,8 @@ function ColumnsChoice() {
   const n = useWorkspace((s) => s.views.length);
   const columns = useWorkspace((s) => s.columns);
   const setColumns = useWorkspace((s) => s.setColumns);
-  if (n < 2) return null;
+  // also with one view while a number is set, so it can always be set back
+  if (n < 2 && columns === null) return null;
   return (
     <label className="columns-choice" title="Columns of the grid of views; Auto: as square as possible">
       Columns

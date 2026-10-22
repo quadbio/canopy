@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { gridCells, tileCells } from '../views/layout';
-import { movable, movedViews, placeOf } from './workspace';
+import { movable, movedViews, placeOf, useWorkspace } from './workspace';
 
 // issue #1: views moved in the grid, and a fixed number of columns
 const v = (id: string, extra: { group?: string; follows?: string } = {}) => ({
@@ -54,5 +54,25 @@ describe('fixed columns', () => {
     const vs = ['a', 'b', 'c', 'd'].map((id) => ({ id, follows: null, group: 'g' }));
     const { cells } = tileCells(vs, 400, 200, 0, 0, {}, 1);
     expect(cells.map((c) => c.x)).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe('columns and an empty canvas', () => {
+  const spec = { type: 'embedding', datasetId: 'd', table: null, title: 'd', params: {} };
+
+  it('go back to Auto when the last view closes (closed one by one, or all at once)', () => {
+    const ws = useWorkspace.getState();
+    ws.reset();
+    const a = ws.addView(spec)!;
+    const b = ws.addView(spec)!;
+    useWorkspace.getState().setColumns(3);
+    useWorkspace.getState().removeView(a);
+    expect(useWorkspace.getState().columns).toBe(3); // one view left: kept (the choice stays shown)
+    useWorkspace.getState().removeView(b);
+    expect(useWorkspace.getState().columns).toBeNull();
+    useWorkspace.getState().addView(spec);
+    useWorkspace.getState().setColumns(2);
+    useWorkspace.getState().reset();
+    expect(useWorkspace.getState().columns).toBeNull();
   });
 });
