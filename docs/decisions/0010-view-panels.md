@@ -55,7 +55,14 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
   moves, cells hit, values shown) tells from the logs whether hovering finds cells.
 - **Split by** (embedding):
   - Any categorical column with 2–64 categories (or a boolean) splits the view into one panel per
-    category, in natural order; missing values form an "NA" panel.
+    category, in the column's own order (`.cat.categories`, owner 2026-10-15); missing values form
+    an "NA" panel.
+  - Number columns with 2–64 different values (time points, replicates) too (internal testing,
+    2026-10-16): one panel per value, ascending, titled with the column ("day 3.5").
+    `GET /api/datasets/{id}/obs/levels` lists them: every number column (at most 200) read once
+    per dataset version and remembered, a sample of 100,000 values counted first; asked for by
+    the selected view's settings and by a view split by numbers. The browser matches the served
+    values to the levels by equality (the levels are the values as sent, float32 or float64).
   - Each panel draws its cells in the representative order of large datasets (ADR 0007/LOD), with
     its share of the view's point budget.
   - The panels together upload about one copy of the points (e2e).
@@ -72,17 +79,29 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
 - S7's Plot view can be a view type whose panel holds chart layers (or an overlay component);
   the canvas needs no change for that.
 - The 9-view limit stays (visible: "At most 9 views…"); panels are limited per view (64).
+- **Arranging views** (GitHub #1, 2026-10-22, option A): views keep a grid (one WebGL canvas, one
+  viewport per panel; free-floating, overlapping windows were not built, as overlap would need
+  stacking and picking on top of each other and cost drawing speed). A view's grip (⠿) drags it
+  onto another view, which it replaces in the order (the others shift); Alt+←/→ from the
+  keyboard; a plot below a view moves with it; in a linked group only among its members
+  (`workspace.movedViews`, `placeOf`). *Columns* (Auto or 1–6, saved with the workspace) fixes
+  the grid (`gridCells(…, columns)`), also inside a linked group, so rows stay rows as views open
+  and close; back to Auto when the last view closes. A dataset can be opened several times at
+  once ("Open several times", copies titled (1), (2), …), within the 9 views.
 
 ## Evidence
 - Unit tests:
   - `panels.test.ts`: layout, relative linking, ids;
   - `layout.test.ts`: insets, flipped y;
-  - `split.test.ts`: groups, order, NA, spatial axis.
+  - `split.test.ts`: groups, order, NA, spatial axis, number levels;
+  - `move.test.ts`: moving views, fixed columns, Auto again on an empty canvas.
 - e2e "split by a column":
   - 3 panels with one legend, each drawing;
   - uploads ≤ 1.2 × one copy;
   - zooming one panel zooms all;
   - the fill fit, and *Same area* for the UMAP (identical view states);
-  - back to one panel.
+  - back to one panel;
+  - "split by numbers": the demo's `day` column, four panels;
+  - `arrange.spec.ts`: open three times, three columns, drag, keyboard, reload, Auto again.
 - Unit tests `panels.test.ts` (`fitLayout` in its three modes) and `split.test.ts` (robust
   bounds).

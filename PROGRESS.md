@@ -486,3 +486,7 @@ Resume rule: read this file, then continue with the first unchecked step.
   view the choice was hidden, so it could not be set back. Now the columns go back to Auto when
   the last view closes (one by one or Close all), and the choice is shown with one view while
   a number is set. Unit and e2e tests.
+- 2026-10-22 Docs: ADR 0010 (split by numbers, `/obs/levels`; arranging views and columns, why
+  not free-floating windows) and ADR 0014 (reorder and columns in a group, legend search); the
+  user guide artifact gained "Arranging views", the legend search, split by numbers, open
+  several times, and the column order and default embedding of 2026-10-15.

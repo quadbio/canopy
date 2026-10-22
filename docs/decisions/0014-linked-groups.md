@@ -26,7 +26,9 @@ colours are used only when they agree across the datasets.
 - **Layout** (`layout.tileCells`): a group takes one of the `MAX_VIEWS` (9) tiles; its views
   form a grid inside it below one title row (*Linked · N datasets*, Fit, Close) and left of one
   legend. Each view keeps a small title (its dataset) and × (remove it from the group; a group
-  left with one view becomes an independent view).
+  left with one view becomes an independent view). The views can be reordered inside the group by their grip, and
+  *Columns* fixes the inner grid (ADR 0010, 2026-10-22). The legend has a search (more than 10
+  categories) with "show only these" and "hide these" (GitHub #2).
 - **Fitting and linking:** the group's views are fitted together at one scale (sizes compare)
   and pan and zoom together like the panels of one view (`combined` layout in the canvas; same
   relative linking as ADR 0010). The point budget is shared as for any views.
