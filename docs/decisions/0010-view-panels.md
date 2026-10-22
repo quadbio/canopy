@@ -84,7 +84,11 @@ views (two-feature plots, start of S7), so the contract must not assume maps eit
   stacking and picking on top of each other and cost drawing speed). A view's grip (⠿) drags it
   onto another view, which it replaces in the order (the others shift); Alt+←/→ from the
   keyboard; a plot below a view moves with it; in a linked group only among its members
-  (`workspace.movedViews`, `placeOf`). *Columns* (Auto or 1–6, saved with the workspace) fixes
+  (`workspace.movedViews`, `placeOf`). The drag uses pointer events with pointer capture on the
+  grip, the drop target found under the pointer (`elementsFromPoint`), a 4 px start threshold and
+  Esc to cancel: the browser's own drag and drop was cancelled in real browsers as the drop
+  targets appeared over the grip (owner, 2026-10-22), which Playwright's synthetic drag did not
+  show; checked by hand in Chrome. *Columns* (Auto or 1–6, saved with the workspace) fixes
   the grid (`gridCells(…, columns)`), also inside a linked group, so rows stay rows as views open
   and close; back to Auto when the last view closes. A dataset can be opened several times at
   once ("Open several times", copies titled (1), (2), …), within the 9 views.
